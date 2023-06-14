@@ -25,6 +25,7 @@ import (
 	"github.com/mjl-/mox/autotls"
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dns"
+	"github.com/mjl-/mox/jmap"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/ratelimit"
@@ -310,6 +311,9 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 		if h.HostMatch != nil && (domErr != nil || !h.HostMatch(dom)) {
 			continue
 		}
+
+		xlog.Debug("check path match", mlog.Field("request", r.URL.Path), mlog.Field("handlerpath", h.Path))
+
 		if r.URL.Path == h.Path || strings.HasSuffix(h.Path, "/") && strings.HasPrefix(r.URL.Path, h.Path) {
 			nw.Handler = h.Name
 			h.Handler.ServeHTTP(nw, r)
@@ -451,6 +455,12 @@ func Listen() {
 			port := config.Port(l.WebserverHTTPS.Port, 443)
 			srv := ensureServe(true, port, "webserver-https")
 			srv.Webserver = true
+		}
+		if l.JMAPHTTPS.Enabled {
+			xlog.Debug("jmap https is enabled")
+			srv := ensureServe(true, config.Port(l.JMAPHTTPS.Port, 443), "jmap-https")
+			srv.Webserver = true
+			srv.Handle("jmap", nil, "/jmap/", jmap.NewJMAPHandler())
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {
