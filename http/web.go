@@ -25,7 +25,7 @@ import (
 	"github.com/mjl-/mox/autotls"
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dns"
-	"github.com/mjl-/mox/jmap"
+	"github.com/mjl-/mox/jmapserver/jmaphandler"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/ratelimit"
@@ -460,7 +460,7 @@ func Listen() {
 			xlog.Debug("jmap https is enabled")
 			srv := ensureServe(true, config.Port(l.JMAPHTTPS.Port, 443), "jmap-https")
 			srv.Webserver = true
-			srv.Handle("jmap", nil, "/jmap/", jmap.NewJMAPHandler())
+			srv.Handle("jmap", nil, "/jmap/", jmaphandler.NewHandler())
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {

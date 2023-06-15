@@ -307,6 +307,10 @@ and many more, see http://sieve.info/documents
 
 6455	The WebSocket Protocol
 
+# JMAP
+8620	The JSON Meta Application Protocol (JMAP)
+8621	The JSON Meta Application Protocol (JMAP) for Mail
+
 # More
 
 3339	Date and Time on the Internet: Timestamps
