@@ -457,10 +457,11 @@ func Listen() {
 			srv.Webserver = true
 		}
 		if l.JMAPHTTPS.Enabled {
+			const path = "/jmap/"
 			xlog.Debug("jmap https is enabled")
 			srv := ensureServe(true, config.Port(l.JMAPHTTPS.Port, 443), "jmap-https")
 			srv.Webserver = true
-			srv.Handle("jmap", nil, "/jmap/", jmaphandler.NewHandler())
+			srv.Handle("jmap", nil, path, jmaphandler.NewHandler(path))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {

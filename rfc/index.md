@@ -315,6 +315,7 @@ and many more, see http://sieve.info/documents
 
 3339	Date and Time on the Internet: Timestamps
 3986	Uniform Resource Identifier (URI): Generic Syntax
+4790	Internet Application Protocol Collation Registry
 5617	(Historic) DomainKeys Identified Mail (DKIM) Author Domain Signing Practices (ADSP)
 6186	(not used in practice) Use of SRV Records for Locating Email Submission/Access Services
 7817	Updated Transport Layer Security (TLS) Server Identity Check Procedure for Email-Related Protocols
