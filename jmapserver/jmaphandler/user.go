@@ -1,10 +1,10 @@
 package jmaphandler
 
 const (
-	contextUserKey = "_user"
+	defaultContextUserKey = "_user"
 )
 
-//User is the object with userdata that is passed through context.
+// User is the object with userdata that is passed through context.
 type User struct {
 	Username string
 }

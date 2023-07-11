@@ -3,9 +3,11 @@ package jmaphandler
 import (
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
+
+	"github.com/mjl-/mox/mlog"
 )
 
 type AccountRepoer interface {
@@ -43,10 +45,15 @@ type SessionHandler struct {
 
 	//stateHashingFunc is the hashs algo used to generate a state value
 	stateHashingFunc func([]byte) []byte
+
+	contextUserKey string
+
+	logger *mlog.Log
 }
 
-func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string) SessionHandler {
+func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger *mlog.Log) SessionHandler {
 	return SessionHandler{
+		Capabilities:   capabilities,
 		APIURL:         apiURL,
 		DownloadURL:    downloadURL,
 		UploadURL:      uploadURL,
@@ -55,42 +62,46 @@ func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interf
 			md5sum := md5.Sum(b)
 			return md5sum[:]
 		},
+		contextUserKey: defaultContextUserKey,
+		logger:         logger,
 	}
 }
 
 func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	ctUserxVal := r.Context().Value(contextUserKey)
+	ctUserxVal := r.Context().Value(sh.contextUserKey)
 	user, ok := ctUserxVal.(User)
 	if !ok || user.Username == "" {
 		//user is not authenticated so send error
-		w.WriteHeader(http.StatusForbidden)
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Username)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	/*
+		accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Username)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 
-	primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Username)
-	if err != nil {
-		//FIXME send out a body with some more information?
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+		primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Username)
+		if err != nil {
+			//FIXME send out a body with some more information?
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	*/
 
 	result := Session{
 		//set everything except for state
-		Capabilities:    sh.Capabilities,
-		Accounts:        accounts,
-		PrimaryAccounts: primaryAccounts,
-		Username:        user.Username,
-		APIURL:          sh.APIURL,
-		DownloadURL:     sh.DownloadURL,
-		UploadURL:       sh.UploadURL,
-		EventSourceURL:  sh.EventSourceURL,
+		Capabilities: sh.Capabilities,
+		//Accounts:        accounts,
+		//PrimaryAccounts: primaryAccounts,
+		Username:       user.Username,
+		APIURL:         sh.APIURL,
+		DownloadURL:    sh.DownloadURL,
+		UploadURL:      sh.UploadURL,
+		EventSourceURL: sh.EventSourceURL,
 	}
 
 	//calculate a hash of the object that is used for setting a State
@@ -100,16 +111,28 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	result.State = fmt.Sprintf("%s", sh.stateHashingFunc(sessionJSONBytest))
+
+	//take a base64 of the hashing result
+	result.State = base64.StdEncoding.EncodeToString(sh.stateHashingFunc(sessionJSONBytest))
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal server error"))
+		return
+	}
 
 	w.Header().Set(HeaderContentType, HeaderContentTypeJSON)
 	if len(sh.CacheControlHeader) == 2 {
 		w.Header().Set(sh.CacheControlHeader[0], sh.CacheControlHeader[1])
 	}
+	w.Write(resultBytes)
 
-	if err := json.NewEncoder(w).Encode(result); err != nil {
-		//FIXME will this work or will data already be out and we cannot set an heaeder anymore
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	/*
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			//FIXME will this work or will data already be out and we cannot set an heaeder anymore
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	*/
 }

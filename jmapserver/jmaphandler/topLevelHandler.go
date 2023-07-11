@@ -1,6 +1,7 @@
 package jmaphandler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -9,17 +10,30 @@ import (
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/store"
 )
 
 type JMAPServerHandler struct {
 	//Path is the absolute path of the jmap handler as set in http/web.go
-	Path       string
-	Capability []capabilitier.Capabilitier
+	Path string
+
+	//Hostname is the hostname that we are listening on. This is send in the session handler
+	Hostname string
+
+	//Port is the port that we are listening on. This is send in the session handler
+	Port int
+
+	Capability        []capabilitier.Capabilitier
+	OpenEmailAuthFunc OpenEmailAuthFunc
+	Logger            *mlog.Log
 }
 
-func NewHandler(path string) JMAPServerHandler {
+func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, logger *mlog.Log) JMAPServerHandler {
 	return JMAPServerHandler{
-		Path: path,
+		Hostname: hostname,
+		Port:     port,
+		Path:     path,
 		Capability: []capabilitier.Capabilitier{
 			core.NewCore(core.CoreCapabilitySettings{
 				// ../../rfc/8620:517
@@ -38,32 +52,75 @@ func NewHandler(path string) JMAPServerHandler {
 				},
 			}),
 		},
+		OpenEmailAuthFunc: openEmailAuthFunc,
+		Logger:            logger,
 	}
 }
 
-func authenticationMiddleware(hf http.Handler) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		//user basic authentication for now
+type OpenEmailAuthFunc func(email, password string) (*store.Account, error)
 
-		hf.ServeHTTP(rw, r)
+type AuthenticationMiddleware struct {
+	OpenEmailAuthFunc OpenEmailAuthFunc
+	Logger            *mlog.Log
+	contextUserKey    string
+}
+
+func NewAuthenticationMiddleware(openEmailAccountFunc OpenEmailAuthFunc, logger *mlog.Log) AuthenticationMiddleware {
+	return AuthenticationMiddleware{
+		OpenEmailAuthFunc: openEmailAccountFunc,
+		Logger:            logger,
+		contextUserKey:    defaultContextUserKey,
+	}
+}
+
+func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+
+		//user basic authentication for now
+		username, password, ok := r.BasicAuth()
+		if !ok {
+			//reply with the correct header
+			rw.Header().Add("WWW-Authenticate", "Basic realm=\"Authenticate in order to use JMAP\"")
+			rw.WriteHeader(http.StatusUnauthorized)
+			rw.Write(nil)
+			return
+		}
+		_, err := authM.OpenEmailAuthFunc(username, password)
+		if err != nil {
+			//there is no details in the spec what needs to send when the authentication fails
+			rw.WriteHeader(http.StatusUnauthorized)
+			rw.Write([]byte("incorrect/username password"))
+			return
+		}
+
+		authM.Logger.Debug("login successfull")
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, authM.contextUserKey, User{
+			Username: username,
+		})
+
+		hf.ServeHTTP(rw, r.WithContext(ctx))
 	}
 }
 
 func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	//instantiate subhandlers
-	var sessionCapabiltyInfo map[string]interface{}
+	sessionCapabiltyInfo := map[string]interface{}{}
 
 	for _, capability := range jh.Capability {
+		jh.Logger.Debug("adding capability", mlog.Field("urn", capability.Urn()))
 		sessionCapabiltyInfo[capability.Urn()] = capability.SessionObjectInfo()
 	}
 
 	//find out what we were called from because we need this information in the sessionHandler
-	baseURL := fmt.Sprintf("%s%s:%s%s", r.URL.Scheme, r.URL.Host, r.URL.Port(), jh.Path)
+	baseURL := fmt.Sprintf("https://%s:%d%s", jh.Hostname, jh.Port, jh.Path)
+
+	jh.Logger.Debug("log url", mlog.Field("base-url", baseURL))
 
 	// ../../rfc/8620:679
-	sessionPath := baseURL + "session"
-	apiPath := baseURL + "api"
+	sessionPath := jh.Path + "session"
+	apiPath := "api"
 	downloadPath := fmt.Sprintf("download/%s/%s/%s/%s", datatyper.UrlTemplateAccountID, datatyper.UrlTemplateBlodId, datatyper.UrlTemplateType, datatyper.UrlTemplateName)
 	uploadPath := fmt.Sprintf("upload/%s", datatyper.UrlTemplateAccountID)
 	eventSourcePath := fmt.Sprintf("eventsource/?types=%s&closeafter=%s&ping=%s", datatyper.UrlTemplateTypes, datatyper.UrlTemplateClosedAfter, datatyper.UrlTemplatePing)
@@ -75,6 +132,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		baseURL+downloadPath,
 		baseURL+uploadPath,
 		baseURL+eventSourcePath,
+		jh.Logger,
 	)
 
 	apiHandler := APIHandler{}
@@ -84,19 +142,28 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	var getRejectUnsupportedMethodsHandler = func(acceptedMethods []string, nextHandler http.Handler) func(resp http.ResponseWriter, req *http.Request) {
 		return func(resp http.ResponseWriter, req *http.Request) {
+			var methodAccepted bool
 			for _, acceptedMethod := range acceptedMethods {
 				if req.Method == acceptedMethod {
-					nextHandler.ServeHTTP(resp, req)
+					methodAccepted = true
+					break
 				}
+			}
+			if methodAccepted {
+				nextHandler.ServeHTTP(resp, req)
+				return
 			}
 			resp.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	}
 
+	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger)
+
 	//create a new mux for routing in this path
 	mux := http.NewServeMux()
-	mux.HandleFunc(sessionPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authenticationMiddleware(sessionHandler)))
-	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authenticationMiddleware(apiHandler)))
+	mux.HandleFunc(sessionPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(sessionHandler)))
+	jh.Logger.Debug("register path", mlog.Field("sessionPath", sessionPath))
+	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authMW.Authenticate(apiHandler)))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		//do dome pattern matching here
@@ -107,18 +174,19 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		switch getHandlerForPath(req.URL.Path, downloadPath, uploadPath, eventSourcePath) {
 		case handlerTypeDownload:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authenticationMiddleware(downloadHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(downloadHandler))
 			return
 		case handlerTypeUpload:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authenticationMiddleware(uploadHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authMW.Authenticate(uploadHandler))
 			return
 		case handlerTypeEventSource:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authenticationMiddleware(eventSourceHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(eventSourceHandler))
 			return
 		}
 
 		//if nothing matches, we exit here
 		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("page not found"))
 		return
 	})
 
@@ -135,7 +203,7 @@ const (
 )
 
 func getHandlerForPath(p, downloadPath, uploadPath, eventSourcePath string) handlerType {
-	//FIXME not sure if sending a 404 is fine if the path itself exist but icm paramter values does not make sense. Need to check the spec for that
+	//FIXME not sure if sending a 404 is fine if the path itself exist but icm parameter values does not make sense. Need to check the spec for that
 	//FIXME mabye this should be split up in 3 different fns but on the other side only a routing decision needs to be taken
 
 	var escapeCommon = func(s string) string {

@@ -147,7 +147,7 @@ during those commands instead of during "data".
 	golog.Print("https://admin:moxadmin@localhost:1443/admin/              - admin https")
 	golog.Print(" http://admin:moxadmin@localhost:1080/admin/              - admin http (without tls)")
 	if l, ok := mox.Conf.Static.Listeners["local"]; ok && l.JMAPHTTPS.Enabled {
-		golog.Print("https://jmap/                                             - JAMP handler to be detailed")
+		golog.Print("https://mox%40localhost:moxmoxmox@localhost:1443/jmap/    - JMAP handler to be detailed")
 	}
 	golog.Print("")
 	golog.Printf("serving from %s", dir)

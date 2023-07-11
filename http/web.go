@@ -29,6 +29,7 @@ import (
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/ratelimit"
+	"github.com/mjl-/mox/store"
 )
 
 var xlog = mlog.New("http")
@@ -459,9 +460,15 @@ func Listen() {
 		if l.JMAPHTTPS.Enabled {
 			const path = "/jmap/"
 			xlog.Debug("jmap https is enabled")
-			srv := ensureServe(true, config.Port(l.JMAPHTTPS.Port, 443), "jmap-https")
+			port := config.Port(l.JMAPHTTPS.Port, 443)
+			srv := ensureServe(true, port, "jmap-https")
 			srv.Webserver = true
-			srv.Handle("jmap", nil, path, jmaphandler.NewHandler(path))
+			hostname := l.Hostname
+			if hostname == "" {
+				//this is need for localserve
+				hostname = "localhost"
+			}
+			srv.Handle("jmap", nil, path, jmaphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, mlog.New("jmap")))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {
