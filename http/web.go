@@ -25,7 +25,7 @@ import (
 	"github.com/mjl-/mox/autotls"
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dns"
-	"github.com/mjl-/mox/jmapserver/jmaphandler"
+	"github.com/mjl-/mox/jmapserver/httphandler"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/ratelimit"
@@ -468,7 +468,7 @@ func Listen() {
 				//this is need for localserve
 				hostname = "localhost"
 			}
-			srv.Handle("jmap", nil, path, jmaphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, mlog.New("jmap")))
+			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, mlog.New("jmap")))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {

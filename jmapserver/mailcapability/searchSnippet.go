@@ -1,4 +1,4 @@
-package mail
+package mailcapability
 
 type SearchSnippet struct {
 }

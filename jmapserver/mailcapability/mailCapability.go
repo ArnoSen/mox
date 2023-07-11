@@ -1,8 +1,12 @@
-package mail
+package mailcapability
 
 import (
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+)
+
+const (
+	URN = "urn:ietf:params:jmap:mail"
 )
 
 type MailCapabilitySettings struct {
@@ -12,6 +16,16 @@ type MailCapabilitySettings struct {
 	MaxSizeAttachmentsPerEmail datatyper.Uint  `json:"maxSizeAttachmentsPerEmail"`
 	EmailQuerySortOptions      []string        `json:"emailQuerySortOptions"`
 	MayCreateTopLevelMailbox   bool            `json:"mayCreateTopLevelMailbox"`
+}
+
+// NewDefaultMailCapabilitySettings is a stub that is used in the session endpoint
+func NewDefaultMailCapabilitySettings() MailCapabilitySettings {
+	return MailCapabilitySettings{
+		MaxSizeMailboxName:         10,
+		MaxSizeAttachmentsPerEmail: 100000,
+		EmailQuerySortOptions:      []string{},
+		MayCreateTopLevelMailbox:   false,
+	}
 }
 
 type Mail struct {
@@ -31,7 +45,7 @@ func NewMail(settings MailCapabilitySettings) *Mail {
 }
 
 func (c Mail) Urn() string {
-	return "urn:ietf:params:jmap:mail"
+	return URN
 }
 
 func (c *Mail) SessionObjectInfo() interface{} {

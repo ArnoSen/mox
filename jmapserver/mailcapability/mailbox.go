@@ -1,4 +1,4 @@
-package mail
+package mailcapability
 
 import "github.com/mjl-/mox/jmapserver/datatyper"
 

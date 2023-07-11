@@ -1,4 +1,4 @@
-package jmaphandler
+package httphandler
 
 import (
 	"context"
@@ -126,7 +126,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	eventSourcePath := fmt.Sprintf("eventsource/?types=%s&closeafter=%s&ping=%s", datatyper.UrlTemplateTypes, datatyper.UrlTemplateClosedAfter, datatyper.UrlTemplatePing)
 
 	sessionHandler := NewSessionHandler(
-		nil, //FIXME need a valid object here
+		NewAccountRepo(),
 		sessionCapabiltyInfo,
 		baseURL+apiPath,
 		baseURL+downloadPath,

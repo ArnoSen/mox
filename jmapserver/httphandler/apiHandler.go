@@ -1,4 +1,4 @@
-package jmaphandler
+package httphandler
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ const (
 	HeaderContentTypeJSON = "application/json"
 )
 
-//Request is the top level request object for the api handler
+// Request is the top level request object for the api handler
 type Request struct {
 	//Using contains the set of capabilities the client wishes to use
 	Using []string `json:"using"`
@@ -30,8 +30,8 @@ type Request struct {
 	CreatedIds map[datatyper.Id]datatyper.Id `json:"createdIds"`
 }
 
-//InvocationRequest is a call to datatype's method
-//NB: there are no JSON tags here. This is handled in the custom umarshaler
+// InvocationRequest is a call to datatype's method
+// NB: there are no JSON tags here. This is handled in the custom umarshaler
 type InvocationRequest struct {
 	Name         string
 	Arguments    json.RawMessage
@@ -84,8 +84,8 @@ func (inv *InvocationRequest) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-//InvocationResponse is of type spec.Invocation but with slightly different types as InvocationRequest
-//NB: there are no JSON tags because this is marshalled into a tuple
+// InvocationResponse is of type spec.Invocation but with slightly different types as InvocationRequest
+// NB: there are no JSON tags because this is marshalled into a tuple
 type InvocationResponse struct {
 	//Name is not returned when invocation is used in the reponse and is an error
 	Name         string
@@ -93,7 +93,7 @@ type InvocationResponse struct {
 	MethodCallID string
 }
 
-//MarshalJSON is a custommarshaller because we need to return a tuple here
+// MarshalJSON is a custommarshaller because we need to return a tuple here
 func (invResp InvocationResponse) MarshalJSON() ([]byte, error) {
 	var resp []interface{}
 
@@ -106,14 +106,14 @@ func (invResp InvocationResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(resp)
 }
 
-//newInvocationResponse instantiates a new empty reponse with only the methodCallID set
+// newInvocationResponse instantiates a new empty reponse with only the methodCallID set
 func newInvocationResponse(methodCallID string) InvocationResponse {
 	return InvocationResponse{
 		MethodCallID: methodCallID,
 	}
 }
 
-//withArgError adds an error to a invocation reponse
+// withArgError adds an error to a invocation reponse
 func (inv InvocationResponse) withArgError(mErr *datatyper.MethodLevelError) InvocationResponse {
 	inv.Arguments = map[string]interface{}{
 		"error": mErr,
@@ -121,21 +121,21 @@ func (inv InvocationResponse) withArgError(mErr *datatyper.MethodLevelError) Inv
 	return inv
 }
 
-//withArgError adds a method output to a invocation reponse
+// withArgError adds a method output to a invocation reponse
 func (inv InvocationResponse) withArgOK(methodCall string, args map[string]interface{}) InvocationResponse {
 	inv.Arguments = args
 	inv.Name = methodCall
 	return inv
 }
 
-//Response is the top level reponse that is sent by the API handler
+// Response is the top level reponse that is sent by the API handler
 type Response struct {
 	MethodResponses []InvocationResponse `json:"methodResponses"`
 	CreatedIds      []datatyper.Id       `json:"createdIds,omitempty"`
 	SessionState    string               `json:"sessionState"`
 }
 
-//getResultByRef resolves the ResultReference
+// getResultByRef resolves the ResultReference
 func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, unmarshalAs any) *datatyper.MethodLevelError {
 	for _, resp := range r.MethodResponses {
 		if resp.MethodCallID == resultRef.ResultOf {
@@ -280,12 +280,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 	return resultBytes, nil
 }
 
-//addMethodResponse adds  a invocaction response. It is a builder pattern
+// addMethodResponse adds  a invocaction response. It is a builder pattern
 func (r *Response) addMethodResponse(i InvocationResponse) {
 	r.MethodResponses = append(r.MethodResponses, i)
 }
 
-//Reference a result from a previous method call. This in order to save network roundtrips
+// Reference a result from a previous method call. This in order to save network roundtrips
 type ResultReference struct {
 	//The method call id (see Section 3.1.1) of a previous method call in the current request.
 	ResultOf string `json:"resultOf"`
@@ -298,12 +298,12 @@ type ResultReference struct {
 	Path string `json:"path"`
 }
 
-//FIXME this needs an implentation
+// FIXME this needs an implentation
 type SessionStater interface {
 	SessionState() string
 }
 
-//APIHandler implements http.Handler
+// APIHandler implements http.Handler
 type APIHandler struct {
 	Capabilities           capabilitier.Capabilitiers
 	CoreCapabilitySettings core.CoreCapabilitySettings
@@ -318,7 +318,7 @@ func NewAPIHandler(capabilties capabilitier.Capabilitiers, coreSettings core.Cor
 	}
 }
 
-//ServeHTTP implements http.Handler
+// ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Header.Get(HeaderContentType) != HeaderContentTypeJSON {
@@ -851,7 +851,7 @@ loopUsing:
 	writeOutput(200, response, w)
 }
 
-//writeOutput encodes a the body into json and writes the output the the reponse writer
+// writeOutput encodes a the body into json and writes the output the the reponse writer
 func writeOutput(statusCode int, body interface{}, w http.ResponseWriter) {
 
 	if statusCode == http.StatusInternalServerError {

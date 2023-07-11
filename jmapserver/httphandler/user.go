@@ -1,4 +1,4 @@
-package jmaphandler
+package httphandler
 
 const (
 	defaultContextUserKey = "_user"

@@ -1,4 +1,4 @@
-package jmaphandler
+package httphandler
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"
 )
 
@@ -14,6 +15,35 @@ type AccountRepoer interface {
 	//GetAccountsForUser returns the accounts of an user
 	GetAccounts(ctx context.Context, userID string) (map[string]Account, error)
 	GetPrimaryAccounts(ctx context.Context, userID string) (map[string]string, error)
+}
+
+// AccountRepo implements AccountRepoer
+type AccountRepo struct{}
+
+func NewAccountRepo() AccountRepo {
+	return AccountRepo{}
+}
+
+func (ar AccountRepo) GetAccounts(ctx context.Context, userID string) (map[string]Account, error) {
+	//TODO this will end up in a DB someday
+	return map[string]Account{
+		"000": Account{
+			Name:        userID,
+			IsPersonal:  true,
+			IsReadyOnly: false,
+			AccountCapabilities: map[string]interface{}{
+				mailcapability.URN: mailcapability.NewDefaultMailCapabilitySettings(),
+			},
+		},
+	}, nil
+
+}
+
+func (ar AccountRepo) GetPrimaryAccounts(ctx context.Context, userID string) (map[string]string, error) {
+	//FIXME remove static content
+	return map[string]string{
+		mailcapability.URN: "000",
+	}, nil
 }
 
 type Session struct {
@@ -53,6 +83,7 @@ type SessionHandler struct {
 
 func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger *mlog.Log) SessionHandler {
 	return SessionHandler{
+		AccountRepo:    accountRepo,
 		Capabilities:   capabilities,
 		APIURL:         apiURL,
 		DownloadURL:    downloadURL,
@@ -77,31 +108,29 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	/*
-		accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Username)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+	accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Username)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
-		primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Username)
-		if err != nil {
-			//FIXME send out a body with some more information?
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-	*/
+	primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Username)
+	if err != nil {
+		//FIXME send out a body with some more information?
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	result := Session{
 		//set everything except for state
-		Capabilities: sh.Capabilities,
-		//Accounts:        accounts,
-		//PrimaryAccounts: primaryAccounts,
-		Username:       user.Username,
-		APIURL:         sh.APIURL,
-		DownloadURL:    sh.DownloadURL,
-		UploadURL:      sh.UploadURL,
-		EventSourceURL: sh.EventSourceURL,
+		Capabilities:    sh.Capabilities,
+		Accounts:        accounts,
+		PrimaryAccounts: primaryAccounts,
+		Username:        user.Username,
+		APIURL:          sh.APIURL,
+		DownloadURL:     sh.DownloadURL,
+		UploadURL:       sh.UploadURL,
+		EventSourceURL:  sh.EventSourceURL,
 	}
 
 	//calculate a hash of the object that is used for setting a State
