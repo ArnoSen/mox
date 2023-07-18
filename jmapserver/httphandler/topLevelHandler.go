@@ -26,10 +26,13 @@ type JMAPServerHandler struct {
 
 	Capability        []capabilitier.Capabilitier
 	OpenEmailAuthFunc OpenEmailAuthFunc
-	Logger            *mlog.Log
+
+	//CORSAllowFrom defines the hosts that can access JMAP resources from a browser
+	CORSAllowFrom []string
+	Logger        *mlog.Log
 }
 
-func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, logger *mlog.Log) JMAPServerHandler {
+func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, corsAllowFrom []string, logger *mlog.Log) JMAPServerHandler {
 	return JMAPServerHandler{
 		Hostname: hostname,
 		Port:     port,
@@ -52,6 +55,7 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 				},
 			}),
 		},
+		CORSAllowFrom:     corsAllowFrom,
 		OpenEmailAuthFunc: openEmailAuthFunc,
 		Logger:            logger,
 	}
@@ -103,6 +107,41 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 	}
 }
 
+type CORSMiddleware struct {
+	AllowFrom []string
+}
+
+func NewCORSMiddleware(allowFrom []string) CORSMiddleware {
+	return CORSMiddleware{
+		AllowFrom: allowFrom,
+	}
+}
+
+func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFunc {
+	//https://fetch.spec.whatwg.org/
+	return func(rw http.ResponseWriter, r *http.Request) {
+
+		if r.Method == http.MethodOptions {
+			finalAllowFrom := "null"
+
+			for i, allowFrom := range cm.AllowFrom {
+				if i == 0 {
+					finalAllowFrom = allowFrom
+				}
+
+				//when there are multiple allows, then we should reply with the origins host
+				if allowFrom == r.Host {
+					finalAllowFrom = r.Host
+				}
+			}
+			rw.Header().Add("Access-Control-Allow-Origin", finalAllowFrom)
+			rw.Write(nil)
+			return
+		}
+		h.ServeHTTP(rw, r)
+	}
+}
+
 func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	//instantiate subhandlers
@@ -149,21 +188,29 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			if methodAccepted {
-				nextHandler.ServeHTTP(resp, req)
+			if !methodAccepted {
+				resp.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			resp.WriteHeader(http.StatusMethodNotAllowed)
+			nextHandler.ServeHTTP(resp, req)
 		}
 	}
 
 	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger)
 
+	corsMR := NewCORSMiddleware(jh.CORSAllowFrom)
+
 	//create a new mux for routing in this path
 	mux := http.NewServeMux()
-	mux.HandleFunc(sessionPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(sessionHandler)))
+	mux.HandleFunc(sessionPath,
+		getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+			corsMR.HandleMethodOptions(
+				authMW.Authenticate(sessionHandler))))
+
 	jh.Logger.Debug("register path", mlog.Field("sessionPath", sessionPath))
-	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authMW.Authenticate(apiHandler)))
+	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
+		corsMR.HandleMethodOptions(
+			authMW.Authenticate(apiHandler))))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		//do dome pattern matching here
@@ -174,13 +221,19 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		switch getHandlerForPath(req.URL.Path, downloadPath, uploadPath, eventSourcePath) {
 		case handlerTypeDownload:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(downloadHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+				corsMR.HandleMethodOptions(
+					authMW.Authenticate(downloadHandler)))
 			return
 		case handlerTypeUpload:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodPost}, authMW.Authenticate(uploadHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
+				corsMR.HandleMethodOptions(
+					authMW.Authenticate(uploadHandler)))
 			return
 		case handlerTypeEventSource:
-			getRejectUnsupportedMethodsHandler([]string{http.MethodGet}, authMW.Authenticate(eventSourceHandler))
+			getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+				corsMR.HandleMethodOptions(
+					authMW.Authenticate(eventSourceHandler)))
 			return
 		}
 

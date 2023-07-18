@@ -169,8 +169,9 @@ type Listener struct {
 		Port    int `sconf:"optional" sconf-doc:"Port for HTTPS webserver."`
 	} `sconf:"optional" sconf-doc:"All configured WebHandlers will serve on an enabled listener. Either ACME must be configured, or for each WebHandler domain a TLS certificate must be configured."`
 	JMAPHTTPS struct {
-		Enabled bool
-		Port    int `sconf:"optional" sconf-doc:"Port for JMAP"`
+		Enabled         bool
+		Port            int      `sconf:"optional" sconf-doc:"Port for JMAP"`
+		CORSAllowOrigin []string `sconf:"optional" sconf-doc:"List of origins that are allowd to make JAMP requests from a browser"`
 	} `sconf:"optional" sconf-doc:"JMAP (EXPERIMENTAL)"`
 }
 

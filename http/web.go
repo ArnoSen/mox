@@ -472,7 +472,7 @@ func Listen() {
 			} else {
 				hostname = "localhost"
 			}
-			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, mlog.New("jmap")))
+			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, l.JMAPHTTPS.CORSAllowOrigin, mlog.New("jmap")))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {
