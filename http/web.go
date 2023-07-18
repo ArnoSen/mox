@@ -333,6 +333,8 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 // Listen binds to sockets for HTTP listeners, including those required for ACME to
 // generate TLS certificates. It stores the listeners so Serve can start serving them.
 func Listen() {
+	globalHostname := mox.Conf.Static.Hostname
+
 	for name, l := range mox.Conf.Static.Listeners {
 		portServe := map[int]*serve{}
 
@@ -463,9 +465,11 @@ func Listen() {
 			port := config.Port(l.JMAPHTTPS.Port, 443)
 			srv := ensureServe(true, port, "jmap-https")
 			srv.Webserver = true
-			hostname := l.Hostname
-			if hostname == "" {
-				//this is need for localserve
+
+			hostname := l.Hostname //hostname is needed to advertise the path to the JMAP API and other endpoints
+			if hostname == "" && globalHostname != "" {
+				hostname = globalHostname
+			} else {
 				hostname = "localhost"
 			}
 			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, mlog.New("jmap")))
