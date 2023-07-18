@@ -14,6 +14,10 @@ import (
 	"github.com/mjl-/mox/store"
 )
 
+const (
+	corsAllowOriginCtxKey = "Access-Control-Allow-Origin"
+)
+
 type JMAPServerHandler struct {
 	//Path is the absolute path of the jmap handler as set in http/web.go
 	Path string
@@ -123,20 +127,19 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 	//https://fetch.spec.whatwg.org/
 	return func(rw http.ResponseWriter, r *http.Request) {
 
-		if r.Method == http.MethodOptions {
-			var finalAllowFrom string
-
-			for i, allowFrom := range cm.AllowFrom {
-				if i == 0 {
-					finalAllowFrom = allowFrom
-				}
-
-				//when there are multiple allows, then we should reply with the origins host
-				if allowFrom == r.Host {
-					finalAllowFrom = r.Host
-				}
+		var finalAllowFrom string
+		for i, allowFrom := range cm.AllowFrom {
+			if i == 0 {
+				finalAllowFrom = allowFrom
 			}
 
+			//when there are multiple allows, then we should reply with the origins host
+			if allowFrom == r.Host {
+				finalAllowFrom = r.Host
+			}
+		}
+
+		if r.Method == http.MethodOptions {
 			if finalAllowFrom != "" {
 				rw.Header().Set("Access-Control-Allow-Origin", finalAllowFrom)
 				rw.Header().Set("Access-Control-Allow-Headers", strings.Join(cm.HeadersAllowed, ","))
@@ -144,7 +147,14 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 			rw.Write(nil)
 			return
 		}
-		h.ServeHTTP(rw, r)
+
+		ctx := r.Context()
+		if finalAllowFrom != "" {
+			//save the cors allow origin host in ctx because we need it later
+			ctx = context.WithValue(ctx, corsAllowOriginCtxKey, finalAllowFrom)
+		}
+
+		h.ServeHTTP(rw, r.WithContext(ctx))
 	}
 }
 
@@ -204,7 +214,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger)
 
-	corsMR := NewCORSMiddleware(jh.CORSAllowFrom, []string{"*"})
+	corsMR := NewCORSMiddleware(jh.CORSAllowFrom, []string{"Authorization", "*"})
 
 	//create a new mux for routing in this path
 	mux := http.NewServeMux()

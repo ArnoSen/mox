@@ -155,6 +155,12 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(sh.CacheControlHeader) == 2 {
 		w.Header().Set(sh.CacheControlHeader[0], sh.CacheControlHeader[1])
 	}
+
+	if corsAllowOriging := r.Context().Value(corsAllowOriginCtxKey); corsAllowOriging != nil {
+		if corsAllowOrigingStr, ok := corsAllowOriging.(string); ok && corsAllowOrigingStr != "" {
+			w.Header().Set("Access-Control-Allow-Origin", corsAllowOrigingStr)
+		}
+	}
 	w.Write(resultBytes)
 
 	/*
