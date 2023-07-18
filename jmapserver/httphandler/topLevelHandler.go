@@ -108,12 +108,14 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 }
 
 type CORSMiddleware struct {
-	AllowFrom []string
+	AllowFrom      []string
+	HeadersAllowed []string
 }
 
-func NewCORSMiddleware(allowFrom []string) CORSMiddleware {
+func NewCORSMiddleware(allowFrom, headersAllowed []string) CORSMiddleware {
 	return CORSMiddleware{
-		AllowFrom: allowFrom,
+		AllowFrom:      allowFrom,
+		HeadersAllowed: headersAllowed,
 	}
 }
 
@@ -122,7 +124,7 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 	return func(rw http.ResponseWriter, r *http.Request) {
 
 		if r.Method == http.MethodOptions {
-			finalAllowFrom := "null"
+			var finalAllowFrom string
 
 			for i, allowFrom := range cm.AllowFrom {
 				if i == 0 {
@@ -134,7 +136,11 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 					finalAllowFrom = r.Host
 				}
 			}
-			rw.Header().Add("Access-Control-Allow-Origin", finalAllowFrom)
+
+			if finalAllowFrom != "" {
+				rw.Header().Set("Access-Control-Allow-Origin", finalAllowFrom)
+				rw.Header().Set("Access-Control-Allow-Headers", strings.Join(cm.HeadersAllowed, ","))
+			}
 			rw.Write(nil)
 			return
 		}
@@ -198,7 +204,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger)
 
-	corsMR := NewCORSMiddleware(jh.CORSAllowFrom)
+	corsMR := NewCORSMiddleware(jh.CORSAllowFrom, []string{"*"})
 
 	//create a new mux for routing in this path
 	mux := http.NewServeMux()
