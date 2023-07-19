@@ -16,6 +16,7 @@ import (
 
 const (
 	corsAllowOriginCtxKey = "Access-Control-Allow-Origin"
+	corsAllowOriginHeader = "Access-Control-Allow-Origin"
 )
 
 type JMAPServerHandler struct {
@@ -169,16 +170,16 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	//find out what we were called from because we need this information in the sessionHandler
-	baseURL := fmt.Sprintf("https://%s:%d%s", jh.Hostname, jh.Port, jh.Path)
+	baseURL := fmt.Sprintf("https://%s:%d", jh.Hostname, jh.Port)
 
 	jh.Logger.Debug("log url", mlog.Field("base-url", baseURL))
 
 	// ../../rfc/8620:679
 	sessionPath := jh.Path + "session"
-	apiPath := "api"
-	downloadPath := fmt.Sprintf("download/%s/%s/%s/%s", datatyper.UrlTemplateAccountID, datatyper.UrlTemplateBlodId, datatyper.UrlTemplateType, datatyper.UrlTemplateName)
-	uploadPath := fmt.Sprintf("upload/%s", datatyper.UrlTemplateAccountID)
-	eventSourcePath := fmt.Sprintf("eventsource/?types=%s&closeafter=%s&ping=%s", datatyper.UrlTemplateTypes, datatyper.UrlTemplateClosedAfter, datatyper.UrlTemplatePing)
+	apiPath := jh.Path + "api"
+	downloadPath := fmt.Sprintf("%sdownload/%s/%s/%s/%s", jh.Path, datatyper.UrlTemplateAccountID, datatyper.UrlTemplateBlodId, datatyper.UrlTemplateType, datatyper.UrlTemplateName)
+	uploadPath := fmt.Sprintf("%supload/%s", jh.Path, datatyper.UrlTemplateAccountID)
+	eventSourcePath := fmt.Sprintf("%seventsource/?types=%s&closeafter=%s&ping=%s", jh.Path, datatyper.UrlTemplateTypes, datatyper.UrlTemplateClosedAfter, datatyper.UrlTemplatePing)
 
 	sessionHandler := NewSessionHandler(
 		NewAccountRepo(),
@@ -190,7 +191,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		jh.Logger,
 	)
 
-	apiHandler := APIHandler{}
+	apiHandler := NewAPIHandler(jh.Capability, StubSessionStater{})
 	downloadHandler := DownloadHandler{}
 	uploadHandler := UploadHandler{}
 	eventSourceHandler := EventSourceHandler{}
@@ -306,4 +307,13 @@ func getHandlerForPath(p, downloadPath, uploadPath, eventSourcePath string) hand
 	}
 
 	return handlerTypeUndefined
+}
+
+// addCORSAllowedOriginHeader sets a CORS header when a context value indicates we should do so
+func addCORSAllowedOriginHeader(w http.ResponseWriter, r *http.Request) {
+	if corsAllowOriging := r.Context().Value(corsAllowOriginCtxKey); corsAllowOriging != nil {
+		if corsAllowOrigingStr, ok := corsAllowOriging.(string); ok && corsAllowOrigingStr != "" {
+			w.Header().Set("Access-Control-Allow-Origin", corsAllowOrigingStr)
+		}
+	}
 }

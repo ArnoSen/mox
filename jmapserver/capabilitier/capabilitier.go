@@ -1,13 +1,14 @@
 package capabilitier
 
-type Datatyper interface {
-	Name() string
-}
+import (
+	"github.com/mjl-/mox/jmapserver/core"
+	"github.com/mjl-/mox/jmapserver/datatyper"
+)
 
 type Capabilitiers []Capabilitier
 
-//GetDatatypeByName gets a datatype by name
-func (cs Capabilitiers) GetDatatypeByName(name string) Datatyper {
+// GetDatatypeByName gets a datatype by name
+func (cs Capabilitiers) GetDatatypeByName(name string) datatyper.Datatyper {
 	for _, c := range cs {
 		for _, dt := range c.Datatypes() {
 			if dt.Name() == name {
@@ -18,7 +19,19 @@ func (cs Capabilitiers) GetDatatypeByName(name string) Datatyper {
 	return nil
 }
 
-//Capabilitier needs to be implemented by a JMAP capabality
+func (cs Capabilitiers) CoreSettings() *core.CoreCapabilitySettings {
+	for _, c := range cs {
+		if c.Urn() == core.URN {
+			if coreCapability, ok := c.(*core.Core); ok {
+				return &coreCapability.Settings
+			}
+			panic("no core settings found")
+		}
+	}
+	return nil
+}
+
+// Capabilitier needs to be implemented by a JMAP capabality
 type Capabilitier interface {
 	//Urn for the capability
 	Urn() string
@@ -27,5 +40,5 @@ type Capabilitier interface {
 	SessionObjectInfo() interface{}
 
 	//Datatypes returns the datatypes associated with the capability
-	Datatypes() []Datatyper
+	Datatypes() []datatyper.Datatyper
 }

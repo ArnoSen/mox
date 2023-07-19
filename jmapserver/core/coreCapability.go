@@ -1,18 +1,20 @@
 package core
 
 import (
-	"github.com/mjl-/mox/jmapserver/capabilitier"
+	"github.com/mjl-/mox/jmapserver/datatyper"
 )
 
+const URN = "urn:ietf:params:jmap:core"
+
 type Core struct {
-	settings  CoreCapabilitySettings
-	datatypes []capabilitier.Datatyper
+	Settings  CoreCapabilitySettings
+	datatypes []datatyper.Datatyper
 }
 
 func NewCore(settings CoreCapabilitySettings) *Core {
 	return &Core{
-		settings: settings,
-		datatypes: []capabilitier.Datatyper{
+		Settings: settings,
+		datatypes: []datatyper.Datatyper{
 			NewDatatypeCore(),
 			NewDatatypePushSubscription(),
 			NewDatatypeBlob(),
@@ -21,19 +23,19 @@ func NewCore(settings CoreCapabilitySettings) *Core {
 }
 
 func (c Core) Urn() string {
-	return "urn:ietf:params:jmap:core"
+	return URN
 }
 
 func (c *Core) SessionObjectInfo() interface{} {
-	return c.settings
+	return c.Settings
 }
 
-func (c *Core) Datatypes() []capabilitier.Datatyper {
+func (c *Core) Datatypes() []datatyper.Datatyper {
 	return c.datatypes
 }
 
-//CoreCapabilitySettings are the settings for core
-//This is passed as response to SessionObjectInfo which is sent without any checks by the session handler so we need the json tags here
+// CoreCapabilitySettings are the settings for core
+// This is passed as response to SessionObjectInfo which is sent without any checks by the session handler so we need the json tags here
 type CoreCapabilitySettings struct {
 	MaxSizeUpload         uint     `json:"maxSizeUpload"`
 	MaxConcurrentUpload   uint     `json:"maxConcurrentUpload"`

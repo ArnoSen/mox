@@ -1,7 +1,6 @@
 package mailcapability
 
 import (
-	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/datatyper"
 )
 
@@ -30,13 +29,13 @@ func NewDefaultMailCapabilitySettings() MailCapabilitySettings {
 
 type Mail struct {
 	settings  MailCapabilitySettings
-	datatypes []capabilitier.Datatyper
+	datatypes []datatyper.Datatyper
 }
 
 func NewMail(settings MailCapabilitySettings) *Mail {
 	return &Mail{
 		settings: settings,
-		datatypes: []capabilitier.Datatyper{
+		datatypes: []datatyper.Datatyper{
 			NewMailBox(),
 			NewThread(),
 			NewMailBox(),
@@ -52,6 +51,6 @@ func (c *Mail) SessionObjectInfo() interface{} {
 	return c.settings
 }
 
-func (c *Mail) Datatypes() []capabilitier.Datatyper {
+func (c *Mail) Datatypes() []datatyper.Datatyper {
 	return c.datatypes
 }

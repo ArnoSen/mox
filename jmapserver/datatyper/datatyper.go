@@ -7,6 +7,10 @@ import (
 	"reflect"
 )
 
+type Datatyper interface {
+	Name() string
+}
+
 type PatchObject map[string]interface{}
 
 type SetError struct {

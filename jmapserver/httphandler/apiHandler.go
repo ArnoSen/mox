@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/mjl-/mox/jmapserver/capabilitier"
-	"github.com/mjl-/mox/jmapserver/core"
 	"github.com/mjl-/mox/jmapserver/datatyper"
 )
 
@@ -303,31 +302,45 @@ type SessionStater interface {
 	SessionState() string
 }
 
-// APIHandler implements http.Handler
-type APIHandler struct {
-	Capabilities           capabilitier.Capabilitiers
-	CoreCapabilitySettings core.CoreCapabilitySettings
-	SessionStater          SessionStater
+type StubSessionStater struct {
 }
 
-func NewAPIHandler(capabilties capabilitier.Capabilitiers, coreSettings core.CoreCapabilitySettings, sessionStater SessionStater) *APIHandler {
+func (sss StubSessionStater) SessionState() string {
+	return "stubstate"
+}
+
+// APIHandler implements http.Handler
+type APIHandler struct {
+	Capabilities  capabilitier.Capabilitiers
+	SessionStater SessionStater
+}
+
+func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater) *APIHandler {
 	return &APIHandler{
-		Capabilities:           capabilties,
-		CoreCapabilitySettings: coreSettings,
-		SessionStater:          sessionStater,
+		Capabilities:  capabilties,
+		SessionStater: sessionStater,
 	}
 }
 
 // ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
+	coreSettings := ah.Capabilities.CoreSettings()
+	if coreSettings == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	//get the allow origin host
+	addCORSAllowedOriginHeader(w, r)
+
 	if r.Header.Get(HeaderContentType) != HeaderContentTypeJSON {
 		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSONContentType(), w)
 		return
 	}
 
-	if r.ContentLength > int64(ah.CoreCapabilitySettings.MaxSizeRequest) {
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", ah.CoreCapabilitySettings.MaxSizeRequest)), w)
+	if r.ContentLength > int64(coreSettings.MaxSizeRequest) {
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", coreSettings.MaxSizeRequest)), w)
 		return
 	}
 
@@ -502,7 +515,7 @@ loopUsing:
 				continue
 			}
 
-			if len(finalIds) > int(ah.CoreCapabilitySettings.MaxObjectsInGet) {
+			if len(finalIds) > int(coreSettings.MaxObjectsInGet) {
 				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
@@ -653,7 +666,7 @@ loopUsing:
 				continue
 			}
 
-			if len(requestArgs.Create)+len(requestArgs.Update)+len(requestArgs.Destroy) > int(ah.CoreCapabilitySettings.MaxObjectsInSet) {
+			if len(requestArgs.Create)+len(requestArgs.Update)+len(requestArgs.Destroy) > int(coreSettings.MaxObjectsInSet) {
 				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
