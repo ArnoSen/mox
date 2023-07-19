@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	HeaderContentType     = "content-type"
-	HeaderContentTypeJSON = "application/json"
+	HeaderContentType         = "content-type"
+	HeaderContentTypeJSON     = "application/json"
+	HeaderContentTypeJSONUTF8 = "application/json;charset=utf-8"
 )
 
 // Request is the top level request object for the api handler
@@ -324,6 +325,8 @@ func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater Session
 
 // ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	//populate the reponse with the CORS headers
+	addCORSAllowedOriginHeader(w, r)
 
 	coreSettings := ah.Capabilities.CoreSettings()
 	if coreSettings == nil {
@@ -331,10 +334,7 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//get the allow origin host
-	addCORSAllowedOriginHeader(w, r)
-
-	if r.Header.Get(HeaderContentType) != HeaderContentTypeJSON {
+	if !isContentTypeJSON(r.Header.Get(HeaderContentType)) {
 		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSONContentType(), w)
 		return
 	}
@@ -881,4 +881,11 @@ func writeOutput(statusCode int, body interface{}, w http.ResponseWriter) {
 	w.Header().Add(HeaderContentType, HeaderContentTypeJSON)
 	w.WriteHeader(statusCode)
 	w.Write(jsonBytes)
+}
+
+func isContentTypeJSON(ct string) bool {
+	if ct == HeaderContentTypeJSON || ct == HeaderContentTypeJSONUTF8 {
+		return true
+	}
+	return false
 }
