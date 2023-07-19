@@ -10,6 +10,7 @@ import (
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
@@ -59,6 +60,7 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 					"i;ascii-casemap",
 				},
 			}),
+			mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings()),
 		},
 		CORSAllowFrom:     corsAllowFrom,
 		OpenEmailAuthFunc: openEmailAuthFunc,

@@ -27,13 +27,13 @@ func NewDefaultMailCapabilitySettings() MailCapabilitySettings {
 	}
 }
 
-type Mail struct {
+type MailCapability struct {
 	settings  MailCapabilitySettings
 	datatypes []datatyper.Datatyper
 }
 
-func NewMail(settings MailCapabilitySettings) *Mail {
-	return &Mail{
+func NewMailCapability(settings MailCapabilitySettings) *MailCapability {
+	return &MailCapability{
 		settings: settings,
 		datatypes: []datatyper.Datatyper{
 			NewMailBox(),
@@ -43,14 +43,14 @@ func NewMail(settings MailCapabilitySettings) *Mail {
 	}
 }
 
-func (c Mail) Urn() string {
+func (c MailCapability) Urn() string {
 	return URN
 }
 
-func (c *Mail) SessionObjectInfo() interface{} {
+func (c *MailCapability) SessionObjectInfo() interface{} {
 	return c.settings
 }
 
-func (c *Mail) Datatypes() []datatyper.Datatyper {
+func (c *MailCapability) Datatypes() []datatyper.Datatyper {
 	return c.datatypes
 }
