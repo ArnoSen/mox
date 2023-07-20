@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 
+	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
 type DatatypePushSubscription struct {
@@ -18,12 +20,12 @@ func (dps DatatypePushSubscription) Name() string {
 	return "PushSubscription"
 }
 
-//https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
-func (dps DatatypePushSubscription) Get(ctx context.Context, accountId datatyper.Id, ids []datatyper.Id, properties []string) (retAccountId datatyper.Id, state string, list []interface{}, notFound []datatyper.Id, mErr *datatyper.MethodLevelError) {
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
+func (dps DatatypePushSubscription) Get(ctx context.Context, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	panic("not implemented") // TODO: Implement
 }
 
-//https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
-func (dps DatatypePushSubscription) Set(ctx context.Context, accountId datatyper.Id, ifInState *string, create map[datatyper.Id]interface{}, update map[datatyper.Id][]datatyper.PatchObject, destroy []datatyper.Id) (retAccountId datatyper.Id, oldState *string, newState string, created map[datatyper.Id]interface{}, updated map[datatyper.Id]interface{}, destroyed map[datatyper.Id]interface{}, notCreated map[datatyper.Id]datatyper.SetError, notUpdated map[datatyper.Id]datatyper.SetError, notDestroyed map[datatyper.Id]datatyper.SetError, mErr *datatyper.MethodLevelError) {
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
+func (dps DatatypePushSubscription) Set(ctx context.Context, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]datatyper.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 	panic("not implemented") // TODO: Implement
 }

@@ -33,7 +33,7 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{}, NewSessionStateStub("abc")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, core.NewCore(core.CoreCapabilitySettings{})}, NewSessionStateStub("abc")))
 
 		resp, err := srv.Client().Post(srv.URL, "text/html", nil)
 		if err != nil {
@@ -64,9 +64,11 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+		coreCapability := core.NewCore(core.CoreCapabilitySettings{
 			MaxSizeRequest: 100,
-		}, NewSessionStateStub("def")))
+		})
+
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("def")))
 
 		b := bytes.NewBuffer([]byte(strings.Repeat("a", 101)))
 
@@ -99,9 +101,11 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+		coreCapability := core.NewCore(core.CoreCapabilitySettings{
 			MaxSizeRequest: 100,
-		}, NewSessionStateStub("abc")))
+		})
+
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("abc")))
 
 		b := bytes.NewBuffer([]byte(strings.Repeat("a", 10)))
 
@@ -136,9 +140,11 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest: 100,
-			}, NewSessionStateStub("ttt")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ttt")))
 
 			b := strings.NewReader("{}")
 			resp, err := srv.Client().Post(srv.URL, "application/json", b)
@@ -172,9 +178,11 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+		coreCapability := core.NewCore(core.CoreCapabilitySettings{
 			MaxSizeRequest: 100,
-		}, NewSessionStateStub("iii")))
+		})
+
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("iii")))
 
 		b := strings.NewReader(`{ "using": ["urn:nonexisting"], "methodCalls": [ ["method", null, "c1"] ] }`)
 		resp, err := srv.Client().Post(srv.URL, "application/json", b)
@@ -206,9 +214,11 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+		coreCapability := core.NewCore(core.CoreCapabilitySettings{
 			MaxSizeRequest: 100,
-		}, NewSessionStateStub("fff")))
+		})
+
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("fff")))
 
 		b := strings.NewReader(`{ 
 "using": ["urn:test"], 
@@ -242,10 +252,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("bbb")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb")))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -280,11 +292,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("lll")))
+			})
 
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("lll")))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": 123,"ids": ["id1", "id2"]}, "c1"] ]
@@ -318,11 +331,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("zzz")))
+			})
 
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zzz")))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": "abc", "#accountId":{ "resultOf":"c1", "name":"Test/get", "path":"/ids" }, "ids": ["id1", "id2"]}, "c1"] ]
@@ -356,10 +370,13 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
-				MaxSizeRequest:  200,
-				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("qqq")))
+			coreCapability := core.NewCore(
+				core.CoreCapabilitySettings{
+					MaxSizeRequest:  200,
+					MaxObjectsInGet: 2,
+				})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("qqq")))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -394,10 +411,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("hhh")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("hhh")))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -432,10 +451,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("ppp")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ppp")))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -470,10 +491,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  400,
 				MaxObjectsInGet: 2,
-			}, NewSessionStateStub("aaa")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("aaa")))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -508,10 +531,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  500,
 				MaxObjectsInGet: 1,
-			}, NewSessionStateStub("bbb")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb")))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 
@@ -548,10 +573,12 @@ func TestAPIHandler(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability}, core.CoreCapabilitySettings{
+			coreCapability := core.NewCore(core.CoreCapabilitySettings{
 				MaxSizeRequest:  200,
 				MaxObjectsInSet: 1,
-			}, NewSessionStateStub("zyx")))
+			})
+
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zyx")))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 

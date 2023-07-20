@@ -11,6 +11,7 @@ import (
 	"github.com/mjl-/mox/jmapserver/core"
 	"github.com/mjl-/mox/jmapserver/datatyper"
 	"github.com/mjl-/mox/jmapserver/mailcapability"
+	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
@@ -18,6 +19,7 @@ import (
 const (
 	corsAllowOriginCtxKey = "Access-Control-Allow-Origin"
 	corsAllowOriginHeader = "Access-Control-Allow-Origin"
+	defaultContextUserKey = "_user"
 )
 
 type JMAPServerHandler struct {
@@ -32,13 +34,16 @@ type JMAPServerHandler struct {
 
 	Capability        []capabilitier.Capabilitier
 	OpenEmailAuthFunc OpenEmailAuthFunc
+	AccountOpener     AccountOpener
 
 	//CORSAllowFrom defines the hosts that can access JMAP resources from a browser
 	CORSAllowFrom []string
 	Logger        *mlog.Log
+
+	contextUserKey string
 }
 
-func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, corsAllowFrom []string, logger *mlog.Log) JMAPServerHandler {
+func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, accountOpener AccountOpener, corsAllowFrom []string, logger *mlog.Log) JMAPServerHandler {
 	return JMAPServerHandler{
 		Hostname: hostname,
 		Port:     port,
@@ -60,11 +65,13 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 					"i;ascii-casemap",
 				},
 			}),
-			mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings()),
+			mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey),
 		},
 		CORSAllowFrom:     corsAllowFrom,
 		OpenEmailAuthFunc: openEmailAuthFunc,
+		AccountOpener:     accountOpener,
 		Logger:            logger,
+		contextUserKey:    defaultContextUserKey,
 	}
 }
 
@@ -76,11 +83,11 @@ type AuthenticationMiddleware struct {
 	contextUserKey    string
 }
 
-func NewAuthenticationMiddleware(openEmailAccountFunc OpenEmailAuthFunc, logger *mlog.Log) AuthenticationMiddleware {
+func NewAuthenticationMiddleware(openEmailAccountFunc OpenEmailAuthFunc, logger *mlog.Log, contextUserKey string) AuthenticationMiddleware {
 	return AuthenticationMiddleware{
 		OpenEmailAuthFunc: openEmailAccountFunc,
 		Logger:            logger,
-		contextUserKey:    defaultContextUserKey,
+		contextUserKey:    contextUserKey,
 	}
 }
 
@@ -88,7 +95,7 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 	return func(rw http.ResponseWriter, r *http.Request) {
 
 		//user basic authentication for now
-		username, password, ok := r.BasicAuth()
+		email, password, ok := r.BasicAuth()
 		if !ok {
 			//reply with the correct header
 			rw.Header().Add("WWW-Authenticate", "Basic realm=\"Authenticate in order to use JMAP\"")
@@ -96,7 +103,7 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 			rw.Write(nil)
 			return
 		}
-		_, err := authM.OpenEmailAuthFunc(username, password)
+		account, err := authM.OpenEmailAuthFunc(email, password)
 		if err != nil {
 			//there is no details in the spec what needs to send when the authentication fails
 			rw.WriteHeader(http.StatusUnauthorized)
@@ -106,8 +113,9 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 
 		authM.Logger.Debug("login successfull")
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, authM.contextUserKey, User{
-			Username: username,
+		ctx = context.WithValue(ctx, authM.contextUserKey, user.User{
+			Email: email,
+			Name:  account.Name,
 		})
 
 		hf.ServeHTTP(rw, r.WithContext(ctx))
@@ -193,7 +201,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		jh.Logger,
 	)
 
-	apiHandler := NewAPIHandler(jh.Capability, StubSessionStater{})
+	apiHandler := NewAPIHandler(jh.Capability, StubSessionStater{}, jh.contextUserKey, store.OpenAccount, jh.Logger)
 	downloadHandler := DownloadHandler{}
 	uploadHandler := UploadHandler{}
 	eventSourceHandler := EventSourceHandler{}
@@ -215,7 +223,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger)
+	authMW := NewAuthenticationMiddleware(store.OpenEmailAuth, jh.Logger, jh.contextUserKey)
 
 	corsMR := NewCORSMiddleware(jh.CORSAllowFrom, []string{"Authorization", "*"})
 

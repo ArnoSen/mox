@@ -8,8 +8,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/jmapserver/user"
+	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/store"
 )
 
 const (
@@ -27,7 +33,7 @@ type Request struct {
 	MethodCalls []InvocationRequest `json:"methodCalls"`
 
 	//CreatedIds is an  (optional) map of a (client-specified) creation id to the id the server assigned when a record was successfully created.
-	CreatedIds map[datatyper.Id]datatyper.Id `json:"createdIds"`
+	CreatedIds map[basetypes.Id]basetypes.Id `json:"createdIds"`
 }
 
 // InvocationRequest is a call to datatype's method
@@ -114,7 +120,7 @@ func newInvocationResponse(methodCallID string) InvocationResponse {
 }
 
 // withArgError adds an error to a invocation reponse
-func (inv InvocationResponse) withArgError(mErr *datatyper.MethodLevelError) InvocationResponse {
+func (inv InvocationResponse) withArgError(mErr *mlevelerrors.MethodLevelError) InvocationResponse {
 	inv.Arguments = map[string]interface{}{
 		"error": mErr,
 	}
@@ -131,17 +137,17 @@ func (inv InvocationResponse) withArgOK(methodCall string, args map[string]inter
 // Response is the top level reponse that is sent by the API handler
 type Response struct {
 	MethodResponses []InvocationResponse `json:"methodResponses"`
-	CreatedIds      []datatyper.Id       `json:"createdIds,omitempty"`
+	CreatedIds      []basetypes.Id       `json:"createdIds,omitempty"`
 	SessionState    string               `json:"sessionState"`
 }
 
 // getResultByRef resolves the ResultReference
-func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, unmarshalAs any) *datatyper.MethodLevelError {
+func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, unmarshalAs any) *mlevelerrors.MethodLevelError {
 	for _, resp := range r.MethodResponses {
 		if resp.MethodCallID == resultRef.ResultOf {
 			//need to check if the name of the method matches
 			if resp.Name != resultRef.Name {
-				return datatyper.NewMethodLevelErrorInvalidResultReference("method name is not matching with method call id")
+				return mlevelerrors.NewMethodLevelErrorInvalidResultReference("method name is not matching with method call id")
 			}
 			//marshal the result of that particular call
 			jsonMessage, mlErr := resolveJSONPointer(resp.Arguments, resultRef.Path)
@@ -150,17 +156,17 @@ func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, 
 			}
 
 			if err := json.Unmarshal(jsonMessage, unmarshalAs); err != nil {
-				return datatyper.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("resolved %s is of incorrect type", anchorName))
+				return mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("resolved %s is of incorrect type", anchorName))
 			}
 			return nil
 
 		}
 	}
-	return datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no method call id %s found in result", resultRef.ResultOf))
+	return mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no method call id %s found in result", resultRef.ResultOf))
 
 }
 
-func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMessage, *datatyper.MethodLevelError) {
+func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMessage, *mlevelerrors.MethodLevelError) {
 	//implements rfc6901
 
 	//the magic needs to happen here
@@ -177,7 +183,7 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 		result = resp
 	} else {
 		if !strings.HasPrefix(pointer, "/") {
-			return nil, datatyper.NewMethodLevelErrorInvalidResultReference("pointer must start with a forward slash ('/')")
+			return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("pointer must start with a forward slash ('/')")
 		}
 
 		var pathUpTillNow string
@@ -194,7 +200,7 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 				pathUpTillNow = "/"
 				val, ok := resp[pointerElement]
 				if !ok {
-					return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no element with pointer %s found at path %s", pointerElement, pathUpTillNow))
+					return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no element with pointer %s found at path %s", pointerElement, pathUpTillNow))
 				}
 				result = val
 				pathUpTillNow = pathUpTillNow + pointerElement
@@ -204,12 +210,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 					//we have a number so we expect an array
 					arr, ok := result.([]interface{})
 					if !ok {
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("cannot use index number on a non array at %s", pathUpTillNow))
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("cannot use index number on a non array at %s", pathUpTillNow))
 					}
 
 					if pointerElementInt > len(arr)-1 {
 						//array out of bound
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference("array out of bounds")
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("array out of bounds")
 					}
 					result = arr[pointerElementInt]
 
@@ -217,12 +223,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 					//we have special char '*' with it's own logic
 					arr, ok := result.([]interface{})
 					if !ok {
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("%s/* does not reference an array", pathUpTillNow))
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("%s/* does not reference an array", pathUpTillNow))
 					}
 
 					if i != len(pointerElements)-2 {
 						//there must only one level remaining
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("can only have one extra subelement after using '*'"))
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("can only have one extra subelement after using '*'"))
 					}
 
 					//get the property that we need
@@ -232,12 +238,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 					for _, arrElement := range arr {
 						arrElementMapString, ok := arrElement.(map[string]interface{})
 						if !ok {
-							return nil, datatyper.NewMethodLevelErrorInvalidResultReference("elements in array referenced by '*' must be of type map[string]Object")
+							return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("elements in array referenced by '*' must be of type map[string]Object")
 						}
 
 						val, ok := arrElementMapString[prop]
 						if !ok {
-							return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("elements in array referenced by '*' do not have key %s", prop))
+							return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("elements in array referenced by '*' do not have key %s", prop))
 						}
 
 						if valArr, ok := val.([]interface{}); ok {
@@ -256,12 +262,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 					//we dig one level deeper
 					mapStringIface, ok := result.(map[string]interface{})
 					if !ok {
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference("invalid json")
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("invalid json")
 					}
 
 					val, ok := mapStringIface[pointerElement]
 					if !ok {
-						return nil, datatyper.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no key %s found at path %s", pointerElement, pathUpTillNow))
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("no key %s found at path %s", pointerElement, pathUpTillNow))
 					}
 					result = val
 
@@ -275,7 +281,7 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		//should not happen
-		return nil, datatyper.NewMethodLevelErrorServerFail()
+		return nil, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 	return resultBytes, nil
 }
@@ -310,16 +316,24 @@ func (sss StubSessionStater) SessionState() string {
 	return "stubstate"
 }
 
+type AccountOpener func(name string) (*store.Account, error)
+
 // APIHandler implements http.Handler
 type APIHandler struct {
-	Capabilities  capabilitier.Capabilitiers
-	SessionStater SessionStater
+	Capabilities   capabilitier.Capabilitiers
+	SessionStater  SessionStater
+	AccountOpener  AccountOpener
+	contextUserKey string
+	logger         *mlog.Log
 }
 
-func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater) *APIHandler {
+func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger *mlog.Log) *APIHandler {
 	return &APIHandler{
-		Capabilities:  capabilties,
-		SessionStater: sessionStater,
+		Capabilities:   capabilties,
+		SessionStater:  sessionStater,
+		contextUserKey: contextUserKey,
+		AccountOpener:  accountOpener,
+		logger:         logger,
 	}
 }
 
@@ -394,27 +408,29 @@ loopUsing:
 		methodCallRegexp := regexp.MustCompile("^[a-zA-Z]+/(echo|get|changes|set|copy|query|queryChanges)$")
 
 		if !methodCallRegexp.MatchString(invocation.Name) {
-			response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+			response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 			continue
 		}
 
 		nameParts := strings.Split(invocation.Name, "/")
 		if len(nameParts) != 2 {
-			response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+			response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 			continue
 		}
 
 		dt := ah.Capabilities.GetDatatypeByName(nameParts[0])
 		if dt == nil {
-			response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+			response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 			continue
 		}
+
+		ah.logger.Debug("method called", mlog.Field("method", invocation.Name))
 
 		switch nameParts[1] {
 		case "echo":
 			echoEr, ok := dt.(datatyper.Echoer)
 			if !ok {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
@@ -429,13 +445,13 @@ loopUsing:
 			dtGetter, ok := dt.(datatyper.Getter)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type getRequest struct {
-				AccountId  datatyper.Id   `json:"accountId"`
-				Ids        []datatyper.Id `json:"ids"`
+				AccountId  basetypes.Id   `json:"accountId"`
+				Ids        []basetypes.Id `json:"ids"`
 				Properties []string       `json:"properties"`
 
 				AdditionalFields map[string]json.RawMessage
@@ -449,29 +465,29 @@ loopUsing:
 			requestArgs := new(getRequest)
 
 			if err := json.Unmarshal(invocation.Arguments, requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				if typeError, ok := err.(*json.UnmarshalTypeError); ok {
 					//this is needed to catch unmarshal type errors in accountId
-					response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
+					response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
 					continue
 				}
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 
 			if !requestArgs.AccountId.IsEmpty() && requestArgs.AccountIdResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'accountId' and '#accountId' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'accountId' and '#accountId' together")))
 				continue
 			}
 			if len(requestArgs.Ids) > 0 && requestArgs.IdsResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'ids' and '#ids' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'ids' and '#ids' together")))
 				continue
 			}
 			if len(requestArgs.Properties) > 0 && requestArgs.PropertiesResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'properties' and '#properties' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'properties' and '#properties' together")))
 				continue
 			}
 
@@ -480,7 +496,7 @@ loopUsing:
 			finalProperties := requestArgs.Properties
 
 			if requestArgs.AccountIdResultRef != nil {
-				var accId datatyper.Id
+				var accId basetypes.Id
 				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#accountId", &accId)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
@@ -491,7 +507,7 @@ loopUsing:
 
 			if requestArgs.IdsResultRef != nil {
 				//so we now have the thing that we need to insert
-				var ids []datatyper.Id
+				var ids []basetypes.Id
 				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#ids", &ids)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
@@ -511,20 +527,45 @@ loopUsing:
 			}
 
 			if finalAccountId.IsEmpty() {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("accountId cannot be empty")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("accountId cannot be empty")))
 				continue
 			}
 
 			if len(finalIds) > int(coreSettings.MaxObjectsInGet) {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorRequestTooLarge()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
 
-			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), finalAccountId, finalIds, finalProperties)
+			//pass in the jaccount
+			userIface := r.Context().Value(ah.contextUserKey)
+			if userIface == nil {
+				ah.logger.Debug("no user found in context")
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			userObj, ok := userIface.(user.User)
+			if !ok {
+				ah.logger.Debug("user is not of type user.User", mlog.Field("unexpectedtype", fmt.Sprintf("%T", userIface)))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			mAccount, err := ah.AccountOpener(userObj.Name)
+			if err != nil {
+				ah.logger.Debug("error opening account", mlog.Field("err", err.Error()), mlog.Field("accountname", userObj.Email))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount), finalAccountId, finalIds, finalProperties)
+			mAccount.Close()
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
 			}
+
+			ah.logger.Debug("got mailboxes", mlog.Field("count", len(list)))
 
 			response.addMethodResponse(invocationResponse.withArgOK(invocation.Name, map[string]interface{}{
 				//FIXME maybe this should be set entirely by the object that returns the result because some fields are not so fixed as expected
@@ -538,14 +579,14 @@ loopUsing:
 			dtChanges, ok := dt.(datatyper.Changeser)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type changesRequest struct {
-				AccountId  datatyper.Id    `json:"accountId"`
+				AccountId  basetypes.Id    `json:"accountId"`
 				SinceState string          `json:"sinceState"`
-				MaxChanges *datatyper.Uint `json:"maxChanges"`
+				MaxChanges *basetypes.Uint `json:"maxChanges"`
 
 				AccountIdResultRef  *ResultReference `json:"#accountId"`
 				SinceStateResultRef *ResultReference `json:"#sinceState"`
@@ -555,29 +596,29 @@ loopUsing:
 			var requestArgs changesRequest
 
 			if err := json.Unmarshal(invocation.Arguments, &requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				if typeError, ok := err.(*json.UnmarshalTypeError); ok {
 					//this is needed to send correct unmarshal type errors in accountId
-					response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
+					response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
 					continue
 				}
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 
 			if !requestArgs.AccountId.IsEmpty() && requestArgs.AccountIdResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'accountId' and '#accountId' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'accountId' and '#accountId' together")))
 				continue
 			}
 			if requestArgs.SinceState != "" && requestArgs.SinceStateResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'sinceState' and '#sinceState' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'sinceState' and '#sinceState' together")))
 				continue
 			}
 			if requestArgs.MaxChanges != nil && requestArgs.MaxChangesResultRef != nil {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorInvalidArguments("cannot use 'maxChanges' and '#maxChanges' together")))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments("cannot use 'maxChanges' and '#maxChanges' together")))
 				continue
 			}
 
@@ -586,7 +627,7 @@ loopUsing:
 			finalMaxChanges := requestArgs.MaxChanges
 
 			if requestArgs.AccountIdResultRef != nil {
-				var accId datatyper.Id
+				var accId basetypes.Id
 				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#accountId", &accId)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
@@ -607,7 +648,7 @@ loopUsing:
 			}
 
 			if requestArgs.MaxChangesResultRef != nil {
-				var maxChanges *datatyper.Uint
+				var maxChanges *basetypes.Uint
 				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#maxChanges", &maxChanges)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
@@ -636,16 +677,16 @@ loopUsing:
 			dtSet, ok := dt.(datatyper.Setter)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type setRequest struct {
-				AccountId datatyper.Id                             `json:"accountId"`
+				AccountId basetypes.Id                             `json:"accountId"`
 				IfInState *string                                  `json:"ifInState"`
-				Create    map[datatyper.Id]interface{}             `json:"create"`
-				Update    map[datatyper.Id][]datatyper.PatchObject `json:"update"`
-				Destroy   []datatyper.Id                           `json:"destroy"`
+				Create    map[basetypes.Id]interface{}             `json:"create"`
+				Update    map[basetypes.Id][]datatyper.PatchObject `json:"update"`
+				Destroy   []basetypes.Id                           `json:"destroy"`
 
 				AccountIdResultRef *ResultReference `json:"#accountId"`
 				IfInStateResultRef *ResultReference `json:"#ifInState"`
@@ -657,17 +698,17 @@ loopUsing:
 			var requestArgs setRequest
 
 			if err := json.Unmarshal(invocation.Arguments, &requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				//FIXME handle datatype conversion errors properly
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 
 			if len(requestArgs.Create)+len(requestArgs.Update)+len(requestArgs.Destroy) > int(coreSettings.MaxObjectsInSet) {
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorRequestTooLarge()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
 
@@ -693,16 +734,16 @@ loopUsing:
 			dtCopy, ok := dt.(datatyper.Copier)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type copyRequest struct {
-				FromAccountId           datatyper.Id                 `json:"fromAccountId"`
+				FromAccountId           basetypes.Id                 `json:"fromAccountId"`
 				IfFromState             *string                      `json:"ifFromState"`
-				AccountId               datatyper.Id                 `json:"accountId"`
+				AccountId               basetypes.Id                 `json:"accountId"`
 				IfInState               *string                      `json:"ifInState"`
-				Create                  map[datatyper.Id]interface{} `json:"create"`
+				Create                  map[basetypes.Id]interface{} `json:"create"`
 				OnSuccesDestroyOriginal bool                         `json:"onSuccesDestroyOriginal"`
 				DestroyFromIfInState    *string                      `json:"destroyFromIfInState"`
 
@@ -718,12 +759,12 @@ loopUsing:
 			var requestArgs copyRequest
 
 			if err := json.Unmarshal(invocation.Arguments, &requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				//FIXME handle datatype conversion errors properly
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 			retFromAccountId, retAccountId, oldState, newState, created, notCreated, mErr := dtCopy.Copy(r.Context(), requestArgs.FromAccountId, requestArgs.IfFromState, requestArgs.AccountId, requestArgs.IfInState, requestArgs.Create, requestArgs.OnSuccesDestroyOriginal, requestArgs.DestroyFromIfInState)
@@ -747,18 +788,18 @@ loopUsing:
 			dtQuery, ok := dt.(datatyper.Querier)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type queryRequest struct {
-				AccountId            datatyper.Id           `json:"accountId"`
+				AccountId            basetypes.Id           `json:"accountId"`
 				Filter               *datatyper.Filter      `json:"filter"`
 				Sort                 []datatyper.Comparator `json:"sort"`
-				Position             datatyper.Int          `json:"position"`
-				Anchor               *datatyper.Id          `json:"anchor"`
-				AnchorOffset         datatyper.Int          `json:"anchorOffset"`
-				Limit                *datatyper.Uint        `json:"limit"`
+				Position             basetypes.Int          `json:"position"`
+				Anchor               *basetypes.Id          `json:"anchor"`
+				AnchorOffset         basetypes.Int          `json:"anchorOffset"`
+				Limit                *basetypes.Uint        `json:"limit"`
 				CalculateTotal       bool                   `json:"calculateTotal"`
 				DestroyFromIfInState *string                `json:"destroyFromIfInState"`
 
@@ -776,12 +817,12 @@ loopUsing:
 			var requestArgs queryRequest
 
 			if err := json.Unmarshal(invocation.Arguments, &requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				//FIXME handle datatype conversion errors properly
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
@@ -805,17 +846,17 @@ loopUsing:
 			dtQueryChanges, ok := dt.(datatyper.QueryChangeser)
 			if !ok {
 				//datatype does not have this method
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorUnknownMethod()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
 			}
 
 			type queryChangesRequest struct {
-				AccountId       datatyper.Id           `json:"accountId"`
+				AccountId       basetypes.Id           `json:"accountId"`
 				Filter          *datatyper.Filter      `json:"filter"`
 				Sort            []datatyper.Comparator `json:"sort"`
 				SinceQueryState string                 `json:"sinceQueryState"`
-				MaxChanges      *datatyper.Uint        `json:"maxChanges"`
-				UpToId          *datatyper.Id          `json:"upToId"`
+				MaxChanges      *basetypes.Uint        `json:"maxChanges"`
+				UpToId          *basetypes.Id          `json:"upToId"`
 				CalculateTotal  bool                   `json:"calculateTotal"`
 
 				AccountIdResultRef       *ResultReference `json:"#accountId"`
@@ -830,12 +871,12 @@ loopUsing:
 			var requestArgs queryChangesRequest
 
 			if err := json.Unmarshal(invocation.Arguments, &requestArgs); err != nil {
-				if mle, ok := err.(*datatyper.MethodLevelError); ok {
+				if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
 				//FIXME handle datatype conversion errors properly
-				response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
 			retAccountId, oldQueryState, newQueryState, total, removed, added, mErr := dtQueryChanges.QueryChanges(r.Context(), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.SinceQueryState, requestArgs.MaxChanges, requestArgs.UpToId, requestArgs.CalculateTotal)
@@ -856,7 +897,7 @@ loopUsing:
 
 		default:
 			//should not get here ever
-			response.addMethodResponse(invocationResponse.withArgError(datatyper.NewMethodLevelErrorServerFail()))
+			response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 		}
 	}
 

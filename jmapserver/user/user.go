@@ -1,10 +1,7 @@
-package httphandler
-
-const (
-	defaultContextUserKey = "_user"
-)
+package user
 
 // User is the object with userdata that is passed through context.
 type User struct {
-	Username string
+	Email string
+	Name  string
 }

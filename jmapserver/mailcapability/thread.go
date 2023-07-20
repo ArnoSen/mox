@@ -1,6 +1,6 @@
 package mailcapability
 
-import "github.com/mjl-/mox/jmapserver/datatyper"
+import "github.com/mjl-/mox/jmapserver/basetypes"
 
 type ThreadDT struct {
 }
@@ -14,6 +14,6 @@ func (t ThreadDT) Name() string {
 }
 
 type Thread struct {
-	Id       datatyper.Id   `json:"id"`
-	EmailIds []datatyper.Id `json:"emailIds"`
+	Id       basetypes.Id   `json:"id"`
+	EmailIds []basetypes.Id `json:"emailIds"`
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"os/user"
 
 	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"
@@ -101,7 +102,7 @@ func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interf
 func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctUserxVal := r.Context().Value(sh.contextUserKey)
-	user, ok := ctUserxVal.(User)
+	user, ok := ctUserxVal.(user.User)
 	if !ok || user.Username == "" {
 		//user is not authenticated so send error
 		w.WriteHeader(http.StatusUnauthorized)

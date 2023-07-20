@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
 type DatatypeCore struct {
@@ -19,6 +19,6 @@ func (dc DatatypeCore) Name() string {
 	return "Core"
 }
 
-func (dc DatatypeCore) Echo(ctx context.Context, content json.RawMessage) (resp map[string]interface{}, mErr *datatyper.MethodLevelError) {
+func (dc DatatypeCore) Echo(ctx context.Context, content json.RawMessage) (resp map[string]interface{}, mErr *mlevelerrors.MethodLevelError) {
 	panic("not implemented") // TODO: Implement
 }

@@ -1,7 +1,5 @@
 package datatyper
 
-type ErrorType string
-
 /*
 
 var (

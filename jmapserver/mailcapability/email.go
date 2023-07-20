@@ -1,6 +1,8 @@
 package mailcapability
 
-import "github.com/mjl-/mox/jmapserver/datatyper"
+import (
+	"github.com/mjl-/mox/jmapserver/basetypes"
+)
 
 type EmailDT struct {
 }
@@ -34,7 +36,7 @@ type HeaderFieldsProperties struct {
 	BCC           []EmailAddress            `json:"bcc"`
 	ReplyTo       []EmailAddress            `json:"replyTo"`
 	Subject       *string                   `json:"subject"`
-	SentAt        *datatyper.Date           `json:"sentAt"`
+	SentAt        *basetypes.Date           `json:"sentAt"`
 	BodyStructure EmailBodyPart             `json:"bodyStructure"`
 	BodyValues    map[string]EmailBodyValue `json:"bodyValues"`
 	TextBody      []EmailBodyPart           `json:"textBody"`
@@ -51,13 +53,13 @@ type EmailBodyValue struct {
 }
 
 type EmailMetadata struct {
-	Id         datatyper.Id          `json:"id"`
-	BlobId     datatyper.Id          `json:"blobId"`
-	ThreadId   datatyper.Id          `json:"threadId"`
-	MailboxIds map[datatyper.Id]bool `json:"mailboxIds"`
+	Id         basetypes.Id          `json:"id"`
+	BlobId     basetypes.Id          `json:"blobId"`
+	ThreadId   basetypes.Id          `json:"threadId"`
+	MailboxIds map[basetypes.Id]bool `json:"mailboxIds"`
 	Keywords   map[string]bool       `json:"keywords"`
-	Size       datatyper.Uint        `json:"size"`
-	ReceivedAt datatyper.UTCDate     `json:"receivedAt"`
+	Size       basetypes.Uint        `json:"size"`
+	ReceivedAt basetypes.UTCDate     `json:"receivedAt"`
 }
 
 type HeaderFieldParsedForms struct {
@@ -66,7 +68,7 @@ type HeaderFieldParsedForms struct {
 	Addresses      []EmailAddress      `json:"addresses"`
 	GroupAddresses []EmailAddressGroup `json:"groupAddresses"`
 	MessageIds     []string            `json:"messageIds"`
-	Date           *datatyper.Date     `json:"date"`
+	Date           *basetypes.Date     `json:"date"`
 	URLs           []string            `json:"urls"`
 }
 
@@ -87,8 +89,8 @@ type EmailHeader struct {
 
 type EmailBodyPart struct {
 	PartId      *string         `json:"partId"`
-	BlobId      *datatyper.Id   `json:"blobId"`
-	Size        datatyper.Uint  `json:"size"`
+	BlobId      *basetypes.Id   `json:"blobId"`
+	Size        basetypes.Uint  `json:"size"`
 	Headers     []EmailHeader   `json:"headers"`
 	Name        *string         `json:"name"`
 	Type        *string         `json:"type"`

@@ -1,18 +1,22 @@
 package mailcapability
 
 import (
+	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/datatyper"
 )
+
+// verify Mailbox fulfills getter
+var _ datatyper.Getter = NewMailBox()
 
 const (
 	URN = "urn:ietf:params:jmap:mail"
 )
 
 type MailCapabilitySettings struct {
-	MaxMailboxesPerEmail       *datatyper.Uint `json:"maxMailboxesPerEmail"`
-	MaxMailboxDepth            *datatyper.Uint `json:"maxMailboxDepth"`
-	MaxSizeMailboxName         datatyper.Uint  `json:"maxSizeMailboxName"`
-	MaxSizeAttachmentsPerEmail datatyper.Uint  `json:"maxSizeAttachmentsPerEmail"`
+	MaxMailboxesPerEmail       *basetypes.Uint `json:"maxMailboxesPerEmail"`
+	MaxMailboxDepth            *basetypes.Uint `json:"maxMailboxDepth"`
+	MaxSizeMailboxName         basetypes.Uint  `json:"maxSizeMailboxName"`
+	MaxSizeAttachmentsPerEmail basetypes.Uint  `json:"maxSizeAttachmentsPerEmail"`
 	EmailQuerySortOptions      []string        `json:"emailQuerySortOptions"`
 	MayCreateTopLevelMailbox   bool            `json:"mayCreateTopLevelMailbox"`
 }
@@ -32,13 +36,13 @@ type MailCapability struct {
 	datatypes []datatyper.Datatyper
 }
 
-func NewMailCapability(settings MailCapabilitySettings) *MailCapability {
+func NewMailCapability(settings MailCapabilitySettings, contextUserKey string) *MailCapability {
 	return &MailCapability{
 		settings: settings,
 		datatypes: []datatyper.Datatyper{
 			NewMailBox(),
 			NewThread(),
-			NewMailBox(),
+			NewEmail(),
 		},
 	}
 }

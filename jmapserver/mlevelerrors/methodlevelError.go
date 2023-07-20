@@ -1,4 +1,4 @@
-package datatyper
+package mlevelerrors
 
 import "fmt"
 
@@ -71,4 +71,11 @@ func NewMethodLevelErrorRequestTooLarge() *MethodLevelError {
 	return &MethodLevelError{
 		Type: "requestTooLarge",
 	}
+}
+
+type ErrorType string
+
+type SetError struct {
+	Type        ErrorType
+	Description *string
 }

@@ -1,8 +1,15 @@
 package mailcapability
 
-import "github.com/mjl-/mox/jmapserver/datatyper"
+import (
+	"context"
+
+	"github.com/mjl-/mox/jmapserver/basetypes"
+	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+)
 
 type MailboxDT struct {
+	//contextUserKey is the key in the context containing the user object
 }
 
 func NewMailBox() MailboxDT {
@@ -13,28 +20,15 @@ func (m MailboxDT) Name() string {
 	return "Mailbox"
 }
 
-type Mailbox struct {
-	Id            datatyper.Id   `json:"id"`
-	Name          string         `json:"name"`
-	ParentId      *datatyper.Id  `json:"parentId"`
-	Role          string         `json:"role"`
-	SortOrder     datatyper.Uint `json:"sortOrder"`
-	TotalEmails   datatyper.Uint `json:"totalEmails"`
-	UnreadEmails  datatyper.Uint `json:"unreadEmails"`
-	TotalThreads  datatyper.Uint `json:"totalThreads"`
-	UnreadThreads datatyper.Uint `json:"unreadThreads"`
-	MyRights      MailboxRights  `json:"myRights"`
-	IsSubscribed  bool           `json:"isSubscribed"`
-}
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
+func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+	retAccountId = accountId
 
-type MailboxRights struct {
-	MayReadItems   bool `json:"mayReadItems"`
-	MayAddItems    bool `json:"mayAddItems"`
-	MayRemoveItems bool `json:"mayRemoveItems"`
-	MaySetSeen     bool `json:"maySetSeen"`
-	MaySetKeywords bool `json:"maySetKeywords"`
-	MayCreateChild bool `json:"mayCreateChild"`
-	MayRename      bool `json:"mayRename"`
-	MayDelete      bool `json:"mayDelete"`
-	MaySubmit      bool `json:"maySubmit"`
+	mailboxes, notFound, state, mErr := jaccount.GetMailboxes(ctx, ids)
+	for _, mb := range mailboxes {
+		//FIXME do not filtering on properties
+		list = append(list, mb)
+	}
+
+	return
 }
