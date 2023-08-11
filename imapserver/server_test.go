@@ -21,6 +21,8 @@ import (
 	"github.com/mjl-/mox/store"
 )
 
+var ctxbg = context.Background()
+
 func init() {
 	sanityChecks = true
 
@@ -156,6 +158,7 @@ type testconn struct {
 	client     *imapclient.Conn
 	done       chan struct{}
 	serverConn net.Conn
+	account    *store.Account
 
 	// Result of last command.
 	lastUntagged []imapclient.Untagged
@@ -190,9 +193,15 @@ func (tc *testconn) xcodeArg(v any) {
 	}
 }
 
-func (tc *testconn) xuntagged(exps ...any) {
+func (tc *testconn) xuntagged(exps ...imapclient.Untagged) {
+	tc.t.Helper()
+	tc.xuntaggedOpt(true, exps...)
+}
+
+func (tc *testconn) xuntaggedOpt(all bool, exps ...imapclient.Untagged) {
 	tc.t.Helper()
 	last := append([]imapclient.Untagged{}, tc.lastUntagged...)
+	var mismatch any
 next:
 	for ei, exp := range exps {
 		for i, l := range last {
@@ -200,11 +209,15 @@ next:
 				continue
 			}
 			if !reflect.DeepEqual(l, exp) {
-				tc.t.Fatalf("untagged data mismatch, got:\n\t%T %#v\nexpected:\n\t%T %#v", l, l, exp, exp)
+				mismatch = l
+				continue
 			}
 			copy(last[i:], last[i+1:])
 			last = last[:len(last)-1]
 			continue next
+		}
+		if mismatch != nil {
+			tc.t.Fatalf("untagged data mismatch, got:\n\t%T %#v\nexpected:\n\t%T %#v", mismatch, mismatch, exp, exp)
 		}
 		var next string
 		if len(tc.lastUntagged) > 0 {
@@ -212,7 +225,7 @@ next:
 		}
 		tc.t.Fatalf("did not find untagged response %#v %T (%d) in %v%s", exp, exp, ei, tc.lastUntagged, next)
 	}
-	if len(last) > 0 {
+	if len(last) > 0 && all {
 		tc.t.Fatalf("leftover untagged responses %v", last)
 	}
 }
@@ -288,9 +301,24 @@ func (tc *testconn) waitDone() {
 }
 
 func (tc *testconn) close() {
+	if tc.account == nil {
+		// Already closed, we are not strict about closing multiple times.
+		return
+	}
+	err := tc.account.Close()
+	tc.check(err, "close account")
+	tc.account = nil
 	tc.client.Close()
 	tc.serverConn.Close()
 	tc.waitDone()
+}
+
+func xparseNumSet(s string) imapclient.NumSet {
+	ns, err := imapclient.ParseNumSet(s)
+	if err != nil {
+		panic(fmt.Sprintf("parsing numset %s: %s", s, err))
+	}
+	return ns
 }
 
 var connCounter int64
@@ -309,22 +337,18 @@ func startArgs(t *testing.T, first, isTLS, allowLoginWithoutTLS bool) *testconn 
 	if first {
 		os.RemoveAll("../testdata/imap/data")
 	}
-	mox.Context = context.Background()
+	mox.Context = ctxbg
 	mox.ConfigStaticPath = "../testdata/imap/mox.conf"
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	acc, err := store.OpenAccount("mjl")
 	tcheck(t, err, "open account")
 	if first {
 		err = acc.SetPassword("testtest")
 		tcheck(t, err, "set password")
 	}
-	err = acc.Close()
-	tcheck(t, err, "close account")
-	var switchDone chan struct{}
+	switchStop := func() {}
 	if first {
-		switchDone = store.Switchboard()
-	} else {
-		switchDone = make(chan struct{}) // Dummy, that can be closed.
+		switchStop = store.Switchboard()
 	}
 
 	serverConn, clientConn := net.Pipe()
@@ -342,12 +366,12 @@ func startArgs(t *testing.T, first, isTLS, allowLoginWithoutTLS bool) *testconn 
 	cid := connCounter
 	go func() {
 		serve("test", cid, tlsConfig, serverConn, isTLS, allowLoginWithoutTLS)
-		close(switchDone)
+		switchStop()
 		close(done)
 	}()
 	client, err := imapclient.New(clientConn, true)
 	tcheck(t, err, "new client")
-	return &testconn{t: t, conn: clientConn, client: client, done: done, serverConn: serverConn}
+	return &testconn{t: t, conn: clientConn, client: client, done: done, serverConn: serverConn, account: acc}
 }
 
 func fakeCert(t *testing.T) tls.Certificate {
@@ -507,7 +531,7 @@ func TestScenario(t *testing.T) {
 	tc.transactf("ok", "append inbox (\\seen) {%d+}\r\n%s", len(exampleMsg), exampleMsg)
 	tc.transactf("no", "append bogus () {%d}", len(exampleMsg))
 	tc.cmdf("", "append inbox () {%d}", len(exampleMsg))
-	tc.readprefixline("+")
+	tc.readprefixline("+ ")
 	_, err := tc.conn.Write([]byte(exampleMsg + "\r\n"))
 	tc.check(err, "write message")
 	tc.response("ok")
@@ -525,7 +549,7 @@ func TestScenario(t *testing.T) {
 	tc.transactf("ok", `store 1 flags.silent (\seen \answered)`)
 	tc.transactf("ok", `store 1 -flags.silent (\answered)`)
 	tc.transactf("ok", `store 1 +flags.silent (\answered)`)
-	tc.transactf("no", `store 1 flags (\badflag)`)
+	tc.transactf("bad", `store 1 flags (\badflag)`)
 	tc.transactf("ok", "noop")
 
 	tc.transactf("ok", "copy 1 Trash")
@@ -643,7 +667,7 @@ func TestSequence(t *testing.T) {
 // Test that a message that is expunged by another session can be read as long as a
 // reference is held by a session. New sessions do not see the expunged message.
 // todo: possibly implement the additional reference counting. so far it hasn't been worth the trouble.
-func disabledTestReference(t *testing.T) {
+func DisabledTestReference(t *testing.T) {
 	tc := start(t)
 	defer tc.close()
 	tc.client.Login("mjl@mox.example", "testtest")

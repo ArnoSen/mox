@@ -1,21 +1,27 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
 
+	"golang.org/x/exp/maps"
+
+	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/metrics"
 	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/store"
 )
 
@@ -24,9 +30,9 @@ import (
 const importCommonHelp = `By default, messages will train the junk filter based on their flags and, if
 "automatic junk flags" configuration is set, based on mailbox naming.
 
-If the destination mailbox is "Sent", the recipients of the messages are added
-to the message metadata, causing later incoming messages from these recipients
-to be accepted, unless other reputation signals prevent that.
+If the destination mailbox is the Sent mailbox, the recipients of the messages
+are added to the message metadata, causing later incoming messages from these
+recipients to be accepted, unless other reputation signals prevent that.
 
 Users can also import mailboxes/messages through the account web page by
 uploading a zip or tgz file with mbox and/or maildirs.
@@ -43,9 +49,12 @@ dovecot-keywords file can specify additional flags, like Forwarded/Junk/NotJunk.
 The maildir files/directories are read by the mox process, so make sure it has
 access to the maildir directories/files.
 `
-
 	args := c.Parse()
-	xcmdImport(false, args, c)
+	if len(args) != 3 {
+		c.Usage()
+	}
+	mustLoadConfig()
+	ctlcmdImport(xctl(), false, args[0], args[1], args[2])
 }
 
 func cmdImportMbox(c *cmd) {
@@ -59,35 +68,77 @@ Using mbox is not recommended, maildir is a better defined format.
 The mailbox is read by the mox process, so make sure it has access to the
 maildir directories/files.
 `
-
 	args := c.Parse()
-	xcmdImport(true, args, c)
+	if len(args) != 3 {
+		c.Usage()
+	}
+	mustLoadConfig()
+	ctlcmdImport(xctl(), true, args[0], args[1], args[2])
 }
 
-func xcmdImport(mbox bool, args []string, c *cmd) {
+func cmdXImportMaildir(c *cmd) {
+	c.unlisted = true
+	c.params = "accountdir mailboxname maildir"
+	c.help = `Import a maildir into an account by directly accessing the data directory.
+
+
+See "mox help import maildir" for details.
+`
+	xcmdXImport(false, c)
+}
+
+func cmdXImportMbox(c *cmd) {
+	c.unlisted = true
+	c.params = "accountdir mailboxname mbox"
+	c.help = `Import an mbox into an account by directly accessing the data directory.
+
+See "mox help import mbox" for details.
+`
+	xcmdXImport(true, c)
+}
+
+func xcmdXImport(mbox bool, c *cmd) {
+	args := c.Parse()
 	if len(args) != 3 {
 		c.Usage()
 	}
 
-	mustLoadConfig()
+	accountdir := args[0]
+	account := filepath.Base(accountdir)
 
-	account := args[0]
-	mailbox := args[1]
-	if strings.EqualFold(mailbox, "inbox") {
+	// Set up the mox config so the account can be opened.
+	if filepath.Base(filepath.Dir(accountdir)) != "accounts" {
+		log.Fatalf("accountdir must be of the form .../accounts/<name>")
+	}
+	var err error
+	mox.Conf.Static.DataDir, err = filepath.Abs(filepath.Dir(filepath.Dir(accountdir)))
+	xcheckf(err, "making absolute datadir")
+	mox.ConfigStaticPath = "fake.conf"
+	mox.Conf.DynamicLastCheck = time.Now().Add(time.Hour) // Silence errors about config file.
+	mox.Conf.Dynamic.Accounts = map[string]config.Account{
+		account: {},
+	}
+	defer store.Switchboard()()
+
+	xlog := mlog.New("import")
+	cconn, sconn := net.Pipe()
+	clientctl := ctl{conn: cconn, r: bufio.NewReader(cconn), log: xlog}
+	serverctl := ctl{conn: sconn, r: bufio.NewReader(sconn), log: xlog}
+	go servectlcmd(context.Background(), &serverctl, func() {})
+
+	ctlcmdImport(&clientctl, mbox, account, args[1], args[2])
+}
+
+func ctlcmdImport(ctl *ctl, mbox bool, account, mailbox, src string) {
+	if mbox {
+		ctl.xwrite("importmbox")
+	} else {
+		ctl.xwrite("importmaildir")
+	}
+	ctl.xwrite(account)
+	if strings.EqualFold(mailbox, "Inbox") {
 		mailbox = "Inbox"
 	}
-	src := args[2]
-
-	var ctlcmd string
-	if mbox {
-		ctlcmd = "importmbox"
-	} else {
-		ctlcmd = "importmaildir"
-	}
-
-	ctl := xctl()
-	ctl.xwrite(ctlcmd)
-	ctl.xwrite(account)
 	ctl.xwrite(mailbox)
 	ctl.xwrite(src)
 	ctl.xreadok()
@@ -218,18 +269,19 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 
 	var changes []store.Change
 
+	var modseq store.ModSeq // Assigned on first delivered messages, used for all messages.
+
 	xdeliver := func(m *store.Message, mf *os.File) {
 		// todo: possibly set dmarcdomain to the domain of the from address? at least for non-spams that have been seen. otherwise user would start without any reputations. the assumption would be that the user has accepted email and deemed it legit, coming from the indicated sender.
 
 		const consumeFile = true
-		isSent := mailbox == "Sent"
 		const sync = false
 		const notrain = true
-		err := a.DeliverMessage(ctl.log, tx, m, mf, consumeFile, isSent, sync, notrain)
+		err := a.DeliverMessage(ctl.log, tx, m, mf, consumeFile, sync, notrain)
 		ctl.xcheck(err, "delivering message")
 		deliveredIDs = append(deliveredIDs, m.ID)
 		ctl.log.Debug("delivered message", mlog.Field("id", m.ID))
-		changes = append(changes, store.ChangeAddUID{MailboxID: m.MailboxID, UID: m.UID, Flags: m.Flags})
+		changes = append(changes, m.ChangeAddUID())
 	}
 
 	// todo: one goroutine for reading messages, one for parsing the message, one adding to database, one for junk filter training.
@@ -239,6 +291,9 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 		var mb store.Mailbox
 		mb, changes, err = a.MailboxEnsure(tx, mailbox, true)
 		ctl.xcheck(err, "ensuring mailbox exists")
+
+		// We ensure keywords in messages make it to the mailbox as well.
+		mailboxKeywords := map[string]bool{}
 
 		jf, _, err := a.OpenJunkFilter(ctx, ctl.log)
 		if err != nil && !errors.Is(err, store.ErrNoJunkFilter) {
@@ -263,6 +318,11 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 				err = msgf.Close()
 				ctl.log.Check(err, "closing temporary message after failing to import")
 			}()
+
+			for _, kw := range m.Keywords {
+				mailboxKeywords[kw] = true
+			}
+			mb.Add(m.MailboxCounts())
 
 			// Parse message and store parsed information for later fast retrieval.
 			p, err := message.EnsurePart(msgf, m.Size)
@@ -294,8 +354,16 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 				}
 			}
 
+			if modseq == 0 {
+				var err error
+				modseq, err = a.NextModSeq(tx)
+				ctl.xcheck(err, "assigning next modseq")
+			}
+
 			m.MailboxID = mb.ID
 			m.MailboxOrigID = mb.ID
+			m.CreateSeq = modseq
+			m.ModSeq = modseq
 			xdeliver(m, msgf)
 			err = msgf.Close()
 			ctl.log.Check(err, "closing message after delivery")
@@ -317,15 +385,30 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 			process(m, msgf, origPath)
 		}
 
+		// Get mailbox again, uidnext is likely updated.
+		mc := mb.MailboxCounts
+		err = tx.Get(&mb)
+		ctl.xcheck(err, "get mailbox")
+		mb.MailboxCounts = mc
+
+		// If there are any new keywords, update the mailbox.
+		var mbKwChanged bool
+		mb.Keywords, mbKwChanged = store.MergeKeywords(mb.Keywords, maps.Keys(mailboxKeywords))
+		if mbKwChanged {
+			changes = append(changes, mb.ChangeKeywords())
+		}
+
+		err = tx.Update(&mb)
+		ctl.xcheck(err, "updating message counts and keywords in mailbox")
+		changes = append(changes, mb.ChangeCounts())
+
 		err = tx.Commit()
 		ctl.xcheck(err, "commit")
 		tx = nil
 		ctl.log.Info("delivered messages through import", mlog.Field("count", len(deliveredIDs)))
 		deliveredIDs = nil
 
-		comm := store.RegisterComm(a)
-		defer comm.Unregister()
-		comm.Broadcast(changes)
+		store.BroadcastChanges(a, changes)
 	})
 
 	err = a.Close()

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/exp/maps"
+
 	"github.com/mjl-/mox/mlog"
 )
 
@@ -92,6 +94,7 @@ func (mr *MboxReader) Next() (*Message, *os.File, string, error) {
 	fromLine := mr.fromLine
 	bf := bufio.NewWriter(f)
 	var flags Flags
+	keywords := map[string]bool{}
 	var size int64
 	for {
 		line, err := mr.r.ReadBytes('\n')
@@ -132,7 +135,23 @@ func (mr *MboxReader) Next() (*Message, *os.File, string, error) {
 				} else if bytes.HasPrefix(line, []byte("X-Keywords:")) {
 					s := strings.TrimSpace(strings.SplitN(string(line), ":", 2)[1])
 					for _, t := range strings.Split(s, ",") {
-						flagSet(&flags, strings.ToLower(strings.TrimSpace(t)))
+						word := strings.ToLower(strings.TrimSpace(t))
+						switch word {
+						case "forwarded", "$forwarded":
+							flags.Forwarded = true
+						case "junk", "$junk":
+							flags.Junk = true
+						case "notjunk", "$notjunk", "nonjunk", "$nonjunk":
+							flags.Notjunk = true
+						case "phishing", "$phishing":
+							flags.Phishing = true
+						case "mdnsent", "$mdnsent":
+							flags.MDNSent = true
+						default:
+							if err := CheckKeyword(word); err == nil {
+								keywords[word] = true
+							}
+						}
 					}
 				}
 			}
@@ -165,7 +184,7 @@ func (mr *MboxReader) Next() (*Message, *os.File, string, error) {
 		return nil, nil, mr.Position(), fmt.Errorf("flush: %v", err)
 	}
 
-	m := &Message{Flags: flags, Size: size}
+	m := &Message{Flags: flags, Keywords: maps.Keys(keywords), Size: size}
 
 	if t := strings.SplitN(fromLine, " ", 3); len(t) == 3 {
 		layouts := []string{time.ANSIC, time.UnixDate, time.RubyDate}
@@ -186,13 +205,13 @@ func (mr *MboxReader) Next() (*Message, *os.File, string, error) {
 }
 
 type MaildirReader struct {
-	createTemp      func(pattern string) (*os.File, error)
-	newf, curf      *os.File
-	f               *os.File // File we are currently reading from. We first read newf, then curf.
-	dir             string   // Name of directory for f. Can be empty on first call.
-	entries         []os.DirEntry
-	dovecotKeywords []string
-	log             *mlog.Log
+	createTemp   func(pattern string) (*os.File, error)
+	newf, curf   *os.File
+	f            *os.File // File we are currently reading from. We first read newf, then curf.
+	dir          string   // Name of directory for f. Can be empty on first call.
+	entries      []os.DirEntry
+	dovecotFlags []string // Lower-case flags/keywords.
+	log          *mlog.Log
 }
 
 func NewMaildirReader(createTemp func(pattern string) (*os.File, error), newf, curf *os.File, log *mlog.Log) *MaildirReader {
@@ -207,7 +226,7 @@ func NewMaildirReader(createTemp func(pattern string) (*os.File, error), newf, c
 	// Best-effort parsing of dovecot keywords.
 	kf, err := os.Open(filepath.Join(filepath.Dir(newf.Name()), "dovecot-keywords"))
 	if err == nil {
-		mr.dovecotKeywords, err = ParseDovecotKeywords(kf, log)
+		mr.dovecotFlags, err = ParseDovecotKeywordsFlags(kf, log)
 		log.Check(err, "parsing dovecot keywords file")
 		err = kf.Close()
 		log.Check(err, "closing dovecot-keywords file")
@@ -297,6 +316,7 @@ func (mr *MaildirReader) Next() (*Message, *os.File, string, error) {
 
 	// Parse flags. See https://cr.yp.to/proto/maildir.html.
 	flags := Flags{}
+	keywords := map[string]bool{}
 	t = strings.SplitN(filepath.Base(sf.Name()), ":2,", 2)
 	if len(t) == 2 {
 		for _, c := range t[1] {
@@ -316,29 +336,30 @@ func (mr *MaildirReader) Next() (*Message, *os.File, string, error) {
 			default:
 				if c >= 'a' && c <= 'z' {
 					index := int(c - 'a')
-					if index >= len(mr.dovecotKeywords) {
+					if index >= len(mr.dovecotFlags) {
 						continue
 					}
-					kw := mr.dovecotKeywords[index]
+					kw := mr.dovecotFlags[index]
 					switch kw {
-					case "$Forwarded", "Forwarded":
+					case "$forwarded", "forwarded":
 						flags.Forwarded = true
-					case "$Junk", "Junk":
+					case "$junk", "junk":
 						flags.Junk = true
-					case "$NotJunk", "NotJunk", "NonJunk":
+					case "$notjunk", "notjunk", "nonjunk":
 						flags.Notjunk = true
-					case "$MDNSent":
+					case "$mdnsent", "mdnsent":
 						flags.MDNSent = true
-					case "$Phishing", "Phishing":
+					case "$phishing", "phishing":
 						flags.Phishing = true
+					default:
+						keywords[kw] = true
 					}
-					// todo: custom labels, e.g. $label1, JunkRecorded?
 				}
 			}
 		}
 	}
 
-	m := &Message{Received: received, Flags: flags, Size: size}
+	m := &Message{Received: received, Flags: flags, Keywords: maps.Keys(keywords), Size: size}
 
 	// Prevent cleanup by defer.
 	mf := f
@@ -347,7 +368,11 @@ func (mr *MaildirReader) Next() (*Message, *os.File, string, error) {
 	return m, mf, p, nil
 }
 
-func ParseDovecotKeywords(r io.Reader, log *mlog.Log) ([]string, error) {
+// ParseDovecotKeywordsFlags attempts to parse a dovecot-keywords file. It only
+// returns valid flags/keywords, as lower-case. If an error is encountered and
+// returned, any keywords that were found are still returned. The returned list has
+// both system/well-known flags and custom keywords.
+func ParseDovecotKeywordsFlags(r io.Reader, log *mlog.Log) ([]string, error) {
 	/*
 		If the dovecot-keywords file is present, we parse its additional flags, see
 		https://doc.dovecot.org/admin_manual/mailbox_formats/maildir/
@@ -383,7 +408,14 @@ func ParseDovecotKeywords(r io.Reader, log *mlog.Log) ([]string, error) {
 			errs = append(errs, fmt.Sprintf("duplicate dovecot keyword: %q", s))
 			continue
 		}
-		keywords[index] = t[1]
+		kw := strings.ToLower(t[1])
+		if !systemWellKnownFlags[kw] {
+			if err := CheckKeyword(kw); err != nil {
+				errs = append(errs, fmt.Sprintf("invalid keyword %q", kw))
+				continue
+			}
+		}
+		keywords[index] = kw
 		if index >= end {
 			end = index + 1
 		}
@@ -396,19 +428,4 @@ func ParseDovecotKeywords(r io.Reader, log *mlog.Log) ([]string, error) {
 		err = errors.New(strings.Join(errs, "; "))
 	}
 	return keywords[:end], err
-}
-
-func flagSet(flags *Flags, word string) {
-	switch word {
-	case "forwarded", "$forwarded":
-		flags.Forwarded = true
-	case "junk", "$junk":
-		flags.Junk = true
-	case "notjunk", "$notjunk", "nonjunk", "$nonjunk":
-		flags.Notjunk = true
-	case "phishing", "$phishing":
-		flags.Phishing = true
-	case "mdnsent", "$mdnsent":
-		flags.MDNSent = true
-	}
 }

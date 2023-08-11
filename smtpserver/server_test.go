@@ -32,6 +32,7 @@ import (
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/queue"
+	"github.com/mjl-/mox/sasl"
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/smtpclient"
 	"github.com/mjl-/mox/store"
@@ -44,7 +45,6 @@ var ctxbg = context.Background()
 func init() {
 	// Don't make tests slow.
 	badClientDelay = 0
-	reputationlessSenderDeliveryDelay = 0
 	authFailDelay = 0
 	unknownRecipientsDelay = 0
 }
@@ -72,13 +72,22 @@ Message-Id: <test@example.org>
 test email
 `, "\n", "\r\n")
 
+var deliverMessage2 = strings.ReplaceAll(`From: <remote@example.org>
+To: <mjl@mox.example>
+Subject: test
+Message-Id: <test2@example.org>
+
+test email, unique.
+`, "\n", "\r\n")
+
 type testserver struct {
 	t          *testing.T
 	acc        *store.Account
-	switchDone chan struct{}
+	switchStop func()
 	comm       *store.Comm
 	cid        int64
 	resolver   dns.Resolver
+	auth       []sasl.Client
 	user, pass string
 	submission bool
 	dnsbls     []dns.Domain
@@ -92,7 +101,7 @@ func newTestServer(t *testing.T, configPath string, resolver dns.Resolver) *test
 
 	mox.Context = ctxbg
 	mox.ConfigStaticPath = configPath
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	dataDir := mox.ConfigDirPath(mox.Conf.Static.DataDir)
 	os.RemoveAll(dataDir)
 	var err error
@@ -100,7 +109,7 @@ func newTestServer(t *testing.T, configPath string, resolver dns.Resolver) *test
 	tcheck(t, err, "open account")
 	err = ts.acc.SetPassword("testtest")
 	tcheck(t, err, "set password")
-	ts.switchDone = store.Switchboard()
+	ts.switchStop = store.Switchboard()
 	err = queue.Init()
 	tcheck(t, err, "queue init")
 
@@ -110,10 +119,15 @@ func newTestServer(t *testing.T, configPath string, resolver dns.Resolver) *test
 }
 
 func (ts *testserver) close() {
+	if ts.acc == nil {
+		return
+	}
 	ts.comm.Unregister()
 	queue.Shutdown()
-	close(ts.switchDone)
-	ts.acc.Close()
+	ts.switchStop()
+	err := ts.acc.Close()
+	tcheck(ts.t, err, "closing account")
+	ts.acc = nil
 }
 
 func (ts *testserver) run(fn func(helloErr error, client *smtpclient.Client)) {
@@ -131,16 +145,20 @@ func (ts *testserver) run(fn func(helloErr error, client *smtpclient.Client)) {
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{fakeCert(ts.t)},
 		}
-		serve("test", ts.cid-2, dns.Domain{ASCII: "mox.example"}, tlsConfig, serverConn, ts.resolver, ts.submission, false, 100<<20, false, false, ts.dnsbls)
+		serve("test", ts.cid-2, dns.Domain{ASCII: "mox.example"}, tlsConfig, serverConn, ts.resolver, ts.submission, false, 100<<20, false, false, ts.dnsbls, 0)
 		close(serverdone)
 	}()
 
-	var authLine string
-	if ts.user != "" {
-		authLine = fmt.Sprintf("AUTH PLAIN %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("\u0000%s\u0000%s", ts.user, ts.pass))))
+	var auth []sasl.Client
+	if len(ts.auth) > 0 {
+		auth = ts.auth
+	} else if ts.user != "" {
+		auth = append(auth, sasl.NewClientPlain(ts.user, ts.pass))
 	}
 
-	client, err := smtpclient.New(ctxbg, xlog.WithCid(ts.cid-1), clientConn, ts.tlsmode, "mox.example", authLine)
+	ourHostname := mox.Conf.Static.HostnameDomain
+	remoteHostname := dns.Domain{ASCII: "mox.example"}
+	client, err := smtpclient.New(ctxbg, xlog.WithCid(ts.cid-1), clientConn, ts.tlsmode, ourHostname, remoteHostname, auth)
 	if err != nil {
 		clientConn.Close()
 	} else {
@@ -192,10 +210,13 @@ func TestSubmission(t *testing.T) {
 	}
 	mox.Conf.Dynamic.Domains["mox.example"] = dom
 
-	testAuth := func(user, pass string, expErr *smtpclient.Error) {
+	testAuth := func(authfn func(user, pass string) sasl.Client, user, pass string, expErr *smtpclient.Error) {
 		t.Helper()
-		ts.user = user
-		ts.pass = pass
+		if authfn != nil {
+			ts.auth = []sasl.Client{authfn(user, pass)}
+		} else {
+			ts.auth = nil
+		}
 		ts.run(func(err error, client *smtpclient.Client) {
 			t.Helper()
 			mailFrom := "mjl@mox.example"
@@ -205,16 +226,24 @@ func TestSubmission(t *testing.T) {
 			}
 			var cerr smtpclient.Error
 			if expErr == nil && err != nil || expErr != nil && (err == nil || !errors.As(err, &cerr) || cerr.Secode != expErr.Secode) {
-				t.Fatalf("got err %#v, expected %#v", err, expErr)
+				t.Fatalf("got err %#v (%q), expected %#v", err, err, expErr)
 			}
 		})
 	}
 
 	ts.submission = true
-	testAuth("", "", &smtpclient.Error{Permanent: true, Code: smtp.C530SecurityRequired, Secode: smtp.SePol7Other0})
-	testAuth("mjl@mox.example", "test", &smtpclient.Error{Secode: smtp.SePol7AuthBadCreds8})         // Bad (short) password.
-	testAuth("mjl@mox.example", "testtesttest", &smtpclient.Error{Secode: smtp.SePol7AuthBadCreds8}) // Bad password.
-	testAuth("mjl@mox.example", "testtest", nil)
+	testAuth(nil, "", "", &smtpclient.Error{Permanent: true, Code: smtp.C530SecurityRequired, Secode: smtp.SePol7Other0})
+	authfns := []func(user, pass string) sasl.Client{
+		sasl.NewClientPlain,
+		sasl.NewClientCRAMMD5,
+		sasl.NewClientSCRAMSHA1,
+		sasl.NewClientSCRAMSHA256,
+	}
+	for _, fn := range authfns {
+		testAuth(fn, "mjl@mox.example", "test", &smtpclient.Error{Secode: smtp.SePol7AuthBadCreds8})         // Bad (short) password.
+		testAuth(fn, "mjl@mox.example", "testtesttest", &smtpclient.Error{Secode: smtp.SePol7AuthBadCreds8}) // Bad password.
+		testAuth(fn, "mjl@mox.example", "testtest", nil)
+	}
 }
 
 // Test delivery from external MTA.
@@ -327,6 +356,7 @@ func tretrain(t *testing.T, acc *store.Account) {
 
 	// Fetch messags to retrain on.
 	q := bstore.QueryDB[store.Message](ctxbg, acc.DB)
+	q.FilterEqual("Expunged", false)
 	q.FilterFn(func(m store.Message) bool {
 		return m.Flags.Junk || m.Flags.Notjunk
 	})
@@ -382,20 +412,22 @@ func TestSpam(t *testing.T) {
 		MsgFromValidated:  true,
 		MsgFromValidation: store.ValidationStrict,
 		Flags:             store.Flags{Seen: true, Junk: true},
+		Size:              int64(len(deliverMessage)),
 	}
 	for i := 0; i < 3; i++ {
 		nm := m
 		tinsertmsg(t, ts.acc, "Inbox", &nm, deliverMessage)
 	}
 
-	checkRejectsCount := func(expect int) {
+	checkCount := func(mailboxName string, expect int) {
 		t.Helper()
 		q := bstore.QueryDB[store.Mailbox](ctxbg, ts.acc.DB)
-		q.FilterNonzero(store.Mailbox{Name: "Rejects"})
+		q.FilterNonzero(store.Mailbox{Name: mailboxName})
 		mb, err := q.Get()
 		tcheck(t, err, "get rejects mailbox")
 		qm := bstore.QueryDB[store.Message](ctxbg, ts.acc.DB)
 		qm.FilterNonzero(store.Message{MailboxID: mb.ID})
+		qm.FilterEqual("Expunged", false)
 		n, err := qm.Count()
 		tcheck(t, err, "count messages in rejects mailbox")
 		if n != expect {
@@ -415,12 +447,26 @@ func TestSpam(t *testing.T) {
 			t.Fatalf("delivery by bad sender, got err %v, expected smtpclient.Error with code %d", err, smtp.C451LocalErr)
 		}
 
-		// Message should now be in Rejects mailbox.
-		checkRejectsCount(1)
+		checkCount("Rejects", 1)
+	})
+
+	// Delivery from sender with bad reputation matching AcceptRejectsToMailbox should
+	// result in accepted delivery to the mailbox.
+	ts.run(func(err error, client *smtpclient.Client) {
+		mailFrom := "remote@example.org"
+		rcptTo := "mjl2@mox.example"
+		if err == nil {
+			err = client.Deliver(ctxbg, mailFrom, rcptTo, int64(len(deliverMessage2)), strings.NewReader(deliverMessage2), false, false)
+		}
+		tcheck(t, err, "deliver")
+
+		checkCount("mjl2junk", 1) // In ruleset rejects mailbox.
+		checkCount("Rejects", 1)  // Same as before.
 	})
 
 	// Mark the messages as having good reputation.
 	q := bstore.QueryDB[store.Message](ctxbg, ts.acc.DB)
+	q.FilterEqual("Expunged", false)
 	_, err := q.UpdateFields(map[string]any{"Junk": false, "Notjunk": true})
 	tcheck(t, err, "update junkiness")
 
@@ -433,13 +479,15 @@ func TestSpam(t *testing.T) {
 		}
 		tcheck(t, err, "deliver")
 
-		// Message should now be removed from Rejects mailbox.
-		checkRejectsCount(0)
+		// Message should now be removed from Rejects mailboxes.
+		checkCount("Rejects", 0)
+		checkCount("mjl2junk", 1)
 	})
 
 	// Undo dmarc pass, mark messages as junk, and train the filter.
 	resolver.TXT = nil
 	q = bstore.QueryDB[store.Message](ctxbg, ts.acc.DB)
+	q.FilterEqual("Expunged", false)
 	_, err = q.UpdateFields(map[string]any{"Junk": true, "Notjunk": false})
 	tcheck(t, err, "update junkiness")
 	tretrain(t, ts.acc)
@@ -456,6 +504,134 @@ func TestSpam(t *testing.T) {
 			t.Fatalf("attempt to deliver spamy message, got err %v, expected smtpclient.Error with code %d", err, smtp.C451LocalErr)
 		}
 	})
+}
+
+// Test accept/reject with forwarded messages, DMARC ignored, no IP/EHLO/MAIL
+// FROM-based reputation.
+func TestForward(t *testing.T) {
+	// Do a run without forwarding, and with.
+	check := func(forward bool) {
+
+		resolver := &dns.MockResolver{
+			A: map[string][]string{
+				"bad.example.":     {"127.0.0.1"},  // For mx check.
+				"good.example.":    {"127.0.0.1"},  // For mx check.
+				"forward.example.": {"127.0.0.10"}, // For mx check.
+			},
+			TXT: map[string][]string{
+				"bad.example.":            {"v=spf1 ip4:127.0.0.1 -all"},
+				"good.example.":           {"v=spf1 ip4:127.0.0.1 -all"},
+				"forward.example.":        {"v=spf1 ip4:127.0.0.10 -all"},
+				"_dmarc.bad.example.":     {"v=DMARC1;p=reject"},
+				"_dmarc.good.example.":    {"v=DMARC1;p=reject"},
+				"_dmarc.forward.example.": {"v=DMARC1;p=reject"},
+			},
+			PTR: map[string][]string{
+				"127.0.0.10": {"forward.example."}, // For iprev check.
+			},
+		}
+		rcptTo := "mjl3@mox.example"
+		if !forward {
+			// For SPF and DMARC pass, otherwise the test ends quickly.
+			resolver.TXT["bad.example."] = []string{"v=spf1 ip4:127.0.0.10 -all"}
+			resolver.TXT["good.example."] = []string{"v=spf1 ip4:127.0.0.10 -all"}
+			rcptTo = "mjl@mox.example" // Without IsForward rule.
+		}
+
+		ts := newTestServer(t, "../testdata/smtp/junk/mox.conf", resolver)
+		defer ts.close()
+
+		var msgBad = strings.ReplaceAll(`From: <remote@bad.example>
+To: <mjl3@mox.example>
+Subject: test
+Message-Id: <bad@example.org>
+
+test email
+`, "\n", "\r\n")
+		var msgOK = strings.ReplaceAll(`From: <remote@good.example>
+To: <mjl3@mox.example>
+Subject: other
+Message-Id: <good@example.org>
+
+unrelated message.
+`, "\n", "\r\n")
+		var msgOK2 = strings.ReplaceAll(`From: <other@forward.example>
+To: <mjl3@mox.example>
+Subject: non-forward
+Message-Id: <regular@example.org>
+
+happens to come from forwarding mail server.
+`, "\n", "\r\n")
+
+		// Deliver forwarded messages, then classify as junk. Normally enough to treat
+		// other unrelated messages from IP as junk, but not for forwarded messages.
+		ts.run(func(err error, client *smtpclient.Client) {
+			tcheck(t, err, "connect")
+
+			mailFrom := "remote@forward.example"
+			if !forward {
+				mailFrom = "remote@bad.example"
+			}
+
+			for i := 0; i < 10; i++ {
+				err = client.Deliver(ctxbg, mailFrom, rcptTo, int64(len(msgBad)), strings.NewReader(msgBad), false, false)
+				tcheck(t, err, "deliver message")
+			}
+
+			n, err := bstore.QueryDB[store.Message](ctxbg, ts.acc.DB).UpdateFields(map[string]any{"Junk": true, "MsgFromValidated": true})
+			tcheck(t, err, "marking messages as junk")
+			tcompare(t, n, 10)
+
+			// Next delivery will fail, with negative "message From" signal.
+			err = client.Deliver(ctxbg, mailFrom, rcptTo, int64(len(msgBad)), strings.NewReader(msgBad), false, false)
+			var cerr smtpclient.Error
+			if err == nil || !errors.As(err, &cerr) || cerr.Code != smtp.C451LocalErr {
+				t.Fatalf("delivery by bad sender, got err %v, expected smtpclient.Error with code %d", err, smtp.C451LocalErr)
+			}
+		})
+
+		// Delivery from different "message From" without reputation, but from same
+		// forwarding email server, should succeed under forwarding, not as regular sending
+		// server.
+		ts.run(func(err error, client *smtpclient.Client) {
+			tcheck(t, err, "connect")
+
+			mailFrom := "remote@forward.example"
+			if !forward {
+				mailFrom = "remote@good.example"
+			}
+
+			err = client.Deliver(ctxbg, mailFrom, rcptTo, int64(len(msgOK)), strings.NewReader(msgOK), false, false)
+			if forward {
+				tcheck(t, err, "deliver")
+			} else {
+				var cerr smtpclient.Error
+				if err == nil || !errors.As(err, &cerr) || cerr.Code != smtp.C451LocalErr {
+					t.Fatalf("delivery by bad ip, got err %v, expected smtpclient.Error with code %d", err, smtp.C451LocalErr)
+				}
+			}
+		})
+
+		// Delivery from forwarding server that isn't a forward should get same treatment.
+		ts.run(func(err error, client *smtpclient.Client) {
+			tcheck(t, err, "connect")
+
+			mailFrom := "other@forward.example"
+
+			err = client.Deliver(ctxbg, mailFrom, rcptTo, int64(len(msgOK2)), strings.NewReader(msgOK2), false, false)
+			if forward {
+				tcheck(t, err, "deliver")
+			} else {
+				var cerr smtpclient.Error
+				if err == nil || !errors.As(err, &cerr) || cerr.Code != smtp.C451LocalErr {
+					t.Fatalf("delivery by bad ip, got err %v, expected smtpclient.Error with code %d", err, smtp.C451LocalErr)
+				}
+			}
+		})
+	}
+
+	check(true)
+	check(false)
 }
 
 // Messages that we sent to, that have passing DMARC, but that are otherwise spammy, should be accepted.
@@ -478,6 +654,7 @@ func TestDMARCSent(t *testing.T) {
 		RcptToLocalpart: smtp.Localpart("mjl"),
 		RcptToDomain:    "mox.example",
 		Flags:           store.Flags{Seen: true, Junk: true},
+		Size:            int64(len(deliverMessage)),
 	}
 	for i := 0; i < 3; i++ {
 		nm := m
@@ -499,7 +676,7 @@ func TestDMARCSent(t *testing.T) {
 	})
 
 	// Insert a message that we sent to the address that is about to send to us.
-	var sentMsg store.Message
+	sentMsg := store.Message{Size: int64(len(deliverMessage))}
 	tinsertmsg(t, ts.acc, "Sent", &sentMsg, deliverMessage)
 	err := ts.acc.DB.Insert(ctxbg, &store.Recipient{MessageID: sentMsg.ID, Localpart: "remote", Domain: "example.org", OrgDomain: "example.org", Sent: time.Now()})
 	tcheck(t, err, "inserting message recipient")
@@ -897,7 +1074,7 @@ func TestNonSMTP(t *testing.T) {
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{fakeCert(ts.t)},
 		}
-		serve("test", ts.cid-2, dns.Domain{ASCII: "mox.example"}, tlsConfig, serverConn, ts.resolver, ts.submission, false, 100<<20, false, false, ts.dnsbls)
+		serve("test", ts.cid-2, dns.Domain{ASCII: "mox.example"}, tlsConfig, serverConn, ts.resolver, ts.submission, false, 100<<20, false, false, ts.dnsbls, 0)
 		close(serverdone)
 	}()
 

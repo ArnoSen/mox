@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,6 @@ import (
 	"github.com/mjl-/mox/dmarcrpt"
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/dnsbl"
-	"github.com/mjl-/mox/http"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
@@ -44,6 +44,7 @@ import (
 	"github.com/mjl-/mox/tlsrpt"
 	"github.com/mjl-/mox/tlsrptdb"
 	"github.com/mjl-/mox/updates"
+	"github.com/mjl-/mox/webadmin"
 )
 
 var (
@@ -131,6 +132,15 @@ var commands = []struct {
 	{"tlsrpt parsereportmsg", cmdTLSRPTParsereportmsg},
 	{"version", cmdVersion},
 
+	{"bumpuidvalidity", cmdBumpUIDValidity},
+	{"reassignuids", cmdReassignUIDs},
+	{"fixuidmeta", cmdFixUIDMeta},
+	{"fixmsgsize", cmdFixmsgsize},
+	{"reparse", cmdReparse},
+	{"ensureparsed", cmdEnsureParsed},
+	{"recalculatemailboxcounts", cmdRecalculateMailboxCounts},
+	{"message parse", cmdMessageParse},
+
 	// Not listed.
 	{"helpall", cmdHelpall},
 	{"junk analyze", cmdJunkAnalyze},
@@ -138,10 +148,7 @@ var commands = []struct {
 	{"junk play", cmdJunkPlay},
 	{"junk test", cmdJunkTest},
 	{"junk train", cmdJunkTrain},
-	{"bumpuidvalidity", cmdBumpUIDValidity},
 	{"dmarcdb addreport", cmdDMARCDBAddReport},
-	{"ensureparsed", cmdEnsureParsed},
-	{"message parse", cmdMessageParse},
 	{"tlsrptdb addreport", cmdTLSRPTDBAddReport},
 	{"updates addsigned", cmdUpdatesAddSigned},
 	{"updates genkey", cmdUpdatesGenkey},
@@ -149,6 +156,8 @@ var commands = []struct {
 	{"updates serve", cmdUpdatesServe},
 	{"updates verify", cmdUpdatesVerify},
 	{"gentestdata", cmdGentestdata},
+	{"ximport maildir", cmdXImportMaildir},
+	{"ximport mbox", cmdXImportMbox},
 }
 
 var cmds []cmd
@@ -356,9 +365,9 @@ var pedantic bool
 
 // subcommands that are not "serve" should use this function to load the config, it
 // restores any loglevel specified on the command-line, instead of using the
-// loglevels from the config file.
+// loglevels from the config file and it does not load files like TLS keys/certs.
 func mustLoadConfig() {
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(false, false)
 	if level, ok := mlog.Levels[loglevel]; loglevel != "" && ok {
 		mox.Conf.Log[""] = level
 		mlog.SetConfig(mox.Conf.Log)
@@ -371,6 +380,11 @@ func mustLoadConfig() {
 }
 
 func main() {
+	// CheckConsistencyOnClose is true by default, for all the test packages. A regular
+	// mox server should never use it. But integration tests enable it again with a
+	// flag.
+	store.CheckConsistencyOnClose = false
+
 	log.SetFlags(0)
 
 	// If invoked as sendmail, e.g. /usr/sbin/sendmail, we do enough so cron can get a
@@ -387,6 +401,11 @@ func main() {
 	flag.StringVar(&mox.ConfigStaticPath, "config", envString("MOXCONF", "config/mox.conf"), "configuration file, other config files are looked up in the same directory, defaults to $MOXCONF with a fallback to mox.conf")
 	flag.StringVar(&loglevel, "loglevel", "", "if non-empty, this log level is set early in startup")
 	flag.BoolVar(&pedantic, "pedantic", false, "protocol violations result in errors instead of accepting/working around them")
+	flag.BoolVar(&store.CheckConsistencyOnClose, "checkconsistency", false, "dangerous option for testing only, enables data checks that abort/panic when inconsistencies are found")
+
+	var cpuprofile, memprofile string
+	flag.StringVar(&cpuprofile, "cpuprof", "", "store cpu profile to file")
+	flag.StringVar(&memprofile, "memprof", "", "store mem profile to file")
 
 	flag.Usage = func() { usage(cmds, false) }
 	flag.Parse()
@@ -394,6 +413,9 @@ func main() {
 	if len(args) == 0 {
 		usage(cmds, false)
 	}
+
+	defer profile(cpuprofile, memprofile)()
+
 	if pedantic {
 		moxvar.Pedantic = true
 	}
@@ -580,17 +602,20 @@ must be set if and only if account does not yet exist.
 
 	d := xparseDomain(args[0], "domain")
 	mustLoadConfig()
+	var localpart string
+	if len(args) == 3 {
+		localpart = args[2]
+	}
+	ctlcmdConfigDomainAdd(xctl(), d, args[1], localpart)
+}
 
-	if len(args) == 2 {
-		args = append(args, "")
-	}
-	ctl := xctl()
+func ctlcmdConfigDomainAdd(ctl *ctl, domain dns.Domain, account, localpart string) {
 	ctl.xwrite("domainadd")
-	for _, s := range args {
-		ctl.xwrite(s)
-	}
+	ctl.xwrite(domain.Name())
+	ctl.xwrite(account)
+	ctl.xwrite(localpart)
 	ctl.xreadok()
-	fmt.Printf("domain added, remember to add dns records, see:\n\nmox config dnsrecords %s\nmox config dnscheck %s\n", d.Name(), d.Name())
+	fmt.Printf("domain added, remember to add dns records, see:\n\nmox config dnsrecords %s\nmox config dnscheck %s\n", domain.Name(), domain.Name())
 }
 
 func cmdConfigDomainRemove(c *cmd) {
@@ -607,9 +632,12 @@ rejected.
 
 	d := xparseDomain(args[0], "domain")
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdConfigDomainRemove(xctl(), d)
+}
+
+func ctlcmdConfigDomainRemove(ctl *ctl, d dns.Domain) {
 	ctl.xwrite("domainrm")
-	ctl.xwrite(args[0])
+	ctl.xwrite(d.Name())
 	ctl.xreadok()
 	fmt.Printf("domain removed, remember to remove dns records for %s\n", d)
 }
@@ -627,13 +655,15 @@ explicitly, see the setaccountpassword command.
 	}
 
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdConfigAccountAdd(xctl(), args[0], args[1])
+}
+
+func ctlcmdConfigAccountAdd(ctl *ctl, account, address string) {
 	ctl.xwrite("accountadd")
-	for _, s := range args {
-		ctl.xwrite(s)
-	}
+	ctl.xwrite(account)
+	ctl.xwrite(address)
 	ctl.xreadok()
-	fmt.Printf("account added, set a password with \"mox setaccountpassword %s\"\n", args[1])
+	fmt.Printf("account added, set a password with \"mox setaccountpassword %s\"\n", address)
 }
 
 func cmdConfigAccountRemove(c *cmd) {
@@ -649,9 +679,12 @@ these addresses will be rejected.
 	}
 
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdConfigAccountRemove(xctl(), args[0])
+}
+
+func ctlcmdConfigAccountRemove(ctl *ctl, account string) {
 	ctl.xwrite("accountrm")
-	ctl.xwrite(args[0])
+	ctl.xwrite(account)
 	ctl.xreadok()
 	fmt.Println("account removed")
 }
@@ -669,11 +702,13 @@ address for the domain.
 	}
 
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdConfigAddressAdd(xctl(), args[0], args[1])
+}
+
+func ctlcmdConfigAddressAdd(ctl *ctl, address, account string) {
 	ctl.xwrite("addressadd")
-	for _, s := range args {
-		ctl.xwrite(s)
-	}
+	ctl.xwrite(address)
+	ctl.xwrite(account)
 	ctl.xreadok()
 	fmt.Println("address added")
 }
@@ -690,9 +725,12 @@ Incoming email for this address will be rejected after removing an address.
 	}
 
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdConfigAddressRemove(xctl(), args[0])
+}
+
+func ctlcmdConfigAddressRemove(ctl *ctl, address string) {
 	ctl.xwrite("addressrm")
-	ctl.xwrite(args[0])
+	ctl.xwrite(address)
 	ctl.xreadok()
 	fmt.Println("address removed")
 }
@@ -749,7 +787,7 @@ func cmdConfigDNSCheck(c *cmd) {
 		log.Fatalf("%s", err)
 	}()
 
-	printResult := func(name string, r http.Result) {
+	printResult := func(name string, r webadmin.Result) {
 		if len(r.Errors) == 0 && len(r.Warnings) == 0 {
 			return
 		}
@@ -762,7 +800,7 @@ func cmdConfigDNSCheck(c *cmd) {
 		}
 	}
 
-	result := http.Admin{}.CheckDomain(context.Background(), args[0])
+	result := webadmin.Admin{}.CheckDomain(context.Background(), args[0])
 	printResult("IPRev", result.IPRev.Result)
 	printResult("MX", result.MX.Result)
 	printResult("TLS", result.TLS.Result)
@@ -919,21 +957,26 @@ Valid labels: error, info, debug, trace, traceauth, tracedata.
 	mustLoadConfig()
 
 	if len(args) == 0 {
-		ctl := xctl()
-		ctl.xwrite("loglevels")
-		ctl.xreadok()
-		ctl.xstreamto(os.Stdout)
-		return
-	}
-
-	ctl := xctl()
-	ctl.xwrite("setloglevels")
-	if len(args) == 2 {
-		ctl.xwrite(args[1])
+		ctlcmdLoglevels(xctl())
 	} else {
-		ctl.xwrite("")
+		var pkg string
+		if len(args) == 2 {
+			pkg = args[1]
+		}
+		ctlcmdSetLoglevels(xctl(), pkg, args[0])
 	}
-	ctl.xwrite(args[0])
+}
+
+func ctlcmdLoglevels(ctl *ctl) {
+	ctl.xwrite("loglevels")
+	ctl.xreadok()
+	ctl.xstreamto(os.Stdout)
+}
+
+func ctlcmdSetLoglevels(ctl *ctl, pkg, level string) {
+	ctl.xwrite("setloglevels")
+	ctl.xwrite(pkg)
+	ctl.xwrite(level)
 	ctl.xreadok()
 }
 
@@ -1013,7 +1056,10 @@ upgrading.
 	dstDataDir, err := filepath.Abs(args[0])
 	xcheckf(err, "making path absolute")
 
-	ctl := xctl()
+	ctlcmdBackup(xctl(), dstDataDir, verbose)
+}
+
+func ctlcmdBackup(ctl *ctl, dstDataDir string, verbose bool) {
 	ctl.xwrite("backup")
 	ctl.xwrite(dstDataDir)
 	if verbose {
@@ -1090,10 +1136,13 @@ Any email address configured for the account can be used.
 
 	pw := xreadpassword()
 
-	ctl := xctl()
+	ctlcmdSetaccountpassword(xctl(), args[0], pw)
+}
+
+func ctlcmdSetaccountpassword(ctl *ctl, address, password string) {
 	ctl.xwrite("setaccountpassword")
-	ctl.xwrite(args[0])
-	ctl.xwrite(pw)
+	ctl.xwrite(address)
+	ctl.xwrite(password)
 	ctl.xreadok()
 }
 
@@ -1106,10 +1155,12 @@ func cmdDeliver(c *cmd) {
 		c.Usage()
 	}
 	mustLoadConfig()
+	ctlcmdDeliver(xctl(), args[0])
+}
 
-	ctl := xctl()
+func ctlcmdDeliver(ctl *ctl, address string) {
 	ctl.xwrite("deliver")
-	ctl.xwrite(args[0])
+	ctl.xwrite(address)
 	ctl.xreadok()
 	ctl.xstreamfrom(os.Stdin)
 	line := ctl.xread()
@@ -1130,8 +1181,10 @@ error.
 		c.Usage()
 	}
 	mustLoadConfig()
+	ctlcmdQueueList(xctl())
+}
 
-	ctl := xctl()
+func ctlcmdQueueList(ctl *ctl) {
 	ctl.xwrite("queue")
 	ctl.xreadok()
 	if _, err := io.Copy(os.Stdout, ctl.reader()); err != nil {
@@ -1140,29 +1193,37 @@ error.
 }
 
 func cmdQueueKick(c *cmd) {
-	c.params = "[-id id] [-todomain domain] [-recipient address]"
+	c.params = "[-id id] [-todomain domain] [-recipient address] [-transport transport]"
 	c.help = `Schedule matching messages in the queue for immediate delivery.
 
 Messages deliveries are normally attempted with exponential backoff. The first
 retry after 7.5 minutes, and doubling each time. Kicking messages sets their
 next scheduled attempt to now, it can cause delivery to fail earlier than
 without rescheduling.
+
+With the -transport flag, future delivery attempts are done using the specified
+transport. Transports can be configured in mox.conf, e.g. to submit to a remote
+queue over SMTP.
 `
 	var id int64
-	var todomain, recipient string
+	var todomain, recipient, transport string
 	c.flag.Int64Var(&id, "id", 0, "id of message in queue")
 	c.flag.StringVar(&todomain, "todomain", "", "destination domain of messages")
 	c.flag.StringVar(&recipient, "recipient", "", "recipient email address")
+	c.flag.StringVar(&transport, "transport", "", "transport to use for the next delivery")
 	if len(c.Parse()) != 0 {
 		c.Usage()
 	}
 	mustLoadConfig()
+	ctlcmdQueueKick(xctl(), id, todomain, recipient, transport)
+}
 
-	ctl := xctl()
+func ctlcmdQueueKick(ctl *ctl, id int64, todomain, recipient, transport string) {
 	ctl.xwrite("queuekick")
 	ctl.xwrite(fmt.Sprintf("%d", id))
 	ctl.xwrite(todomain)
 	ctl.xwrite(recipient)
+	ctl.xwrite(transport)
 	count := ctl.xread()
 	line := ctl.xread()
 	if line == "ok" {
@@ -1188,8 +1249,10 @@ the message, use "queue dump" before removing.
 		c.Usage()
 	}
 	mustLoadConfig()
+	ctlcmdQueueDrop(xctl(), id, todomain, recipient)
+}
 
-	ctl := xctl()
+func ctlcmdQueueDrop(ctl *ctl, id int64, todomain, recipient string) {
 	ctl.xwrite("queuedrop")
 	ctl.xwrite(fmt.Sprintf("%d", id))
 	ctl.xwrite(todomain)
@@ -1214,10 +1277,12 @@ The message is printed to stdout and is in standard internet mail format.
 		c.Usage()
 	}
 	mustLoadConfig()
+	ctlcmdQueueDump(xctl(), args[0])
+}
 
-	ctl := xctl()
+func ctlcmdQueueDump(ctl *ctl, id string) {
 	ctl.xwrite("queuedump")
-	ctl.xwrite(args[0])
+	ctl.xwrite(id)
 	ctl.xreadok()
 	if _, err := io.Copy(os.Stdout, ctl.reader()); err != nil {
 		log.Fatalf("%s", err)
@@ -1768,9 +1833,12 @@ implementation has changed.
 	}
 
 	mustLoadConfig()
-	ctl := xctl()
+	ctlcmdRetrain(xctl(), args[0])
+}
+
+func ctlcmdRetrain(ctl *ctl, account string) {
 	ctl.xwrite("retrain")
-	ctl.xwrite(args[0])
+	ctl.xwrite(account)
 	ctl.xreadok()
 }
 
@@ -1922,85 +1990,15 @@ func cmdVersion(c *cmd) {
 	fmt.Println(moxvar.Version)
 }
 
-func cmdEnsureParsed(c *cmd) {
-	c.unlisted = true
-	c.params = "account"
-	c.help = "Ensure messages in the database have a ParsedBuf."
-	var all bool
-	c.flag.BoolVar(&all, "all", false, "store new parsed message for all messages")
-	args := c.Parse()
-	if len(args) != 1 {
-		c.Usage()
-	}
-
-	mustLoadConfig()
-	a, err := store.OpenAccount(args[0])
-	xcheckf(err, "open account")
-	defer func() {
-		if err := a.Close(); err != nil {
-			log.Printf("closing account: %v", err)
-		}
-	}()
-
-	n := 0
-	err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
-		q := bstore.QueryTx[store.Message](tx)
-		q.FilterFn(func(m store.Message) bool {
-			return all || m.ParsedBuf == nil
-		})
-		l, err := q.List()
-		if err != nil {
-			return fmt.Errorf("list messages: %v", err)
-		}
-		for _, m := range l {
-			mr := a.MessageReader(m)
-			p, err := message.EnsurePart(mr, m.Size)
-			if err != nil {
-				log.Printf("parsing message %d: %v (continuing)", m.ID, err)
-			}
-			m.ParsedBuf, err = json.Marshal(p)
-			if err != nil {
-				return fmt.Errorf("marshal parsed message: %v", err)
-			}
-			if err := tx.Update(&m); err != nil {
-				return fmt.Errorf("update message: %v", err)
-			}
-			n++
-		}
-		return nil
-	})
-	xcheckf(err, "update messages with parsed mime structure")
-	fmt.Printf("%d messages updated\n", n)
-}
-
-func cmdMessageParse(c *cmd) {
-	c.unlisted = true
-	c.params = "message.eml"
-	c.help = "Parse message, print JSON representation."
-
-	args := c.Parse()
-	if len(args) != 1 {
-		c.Usage()
-	}
-
-	f, err := os.Open(args[0])
-	xcheckf(err, "open")
-	defer f.Close()
-
-	part, err := message.Parse(f)
-	xcheckf(err, "parsing message")
-	err = part.Walk(nil)
-	xcheckf(err, "parsing nested parts")
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "\t")
-	err = enc.Encode(part)
-	xcheckf(err, "write")
-}
-
 func cmdBumpUIDValidity(c *cmd) {
-	c.unlisted = true
 	c.params = "account [mailbox]"
-	c.help = "Change the IMAP UID validity of the mailbox, causing IMAP clients to refetch messages."
+	c.help = `Change the IMAP UID validity of the mailbox, causing IMAP clients to refetch messages.
+
+This can be useful after manually repairing metadata about the account/mailbox.
+
+Opens account database file directly. Ensure mox does not have the account
++open, or is not running.
+`
 	args := c.Parse()
 	if len(args) != 1 && len(args) != 2 {
 		c.Usage()
@@ -2042,26 +2040,325 @@ func cmdBumpUIDValidity(c *cmd) {
 	xcheckf(err, "updating database")
 }
 
-var submitconf struct {
-	LocalHostname      string `sconf-doc:"Hosts don't always have an FQDN, set it explicitly, for EHLO."`
-	Host               string `sconf-doc:"Host to dial for delivery, e.g. mail.<domain>."`
-	Port               int    `sconf-doc:"Port to dial for delivery, e.g. 465 for submissions, 587 for submission, or perhaps 25 for smtp."`
-	TLS                bool   `sconf-doc:"Connect with TLS. Usually for connections to port 465."`
-	STARTTLS           bool   `sconf-doc:"After starting in plain text, use STARTTLS to enable TLS. For port 587 and 25."`
-	Username           string `sconf-doc:"For SMTP plain auth."`
-	Password           string `sconf-doc:"For SMTP plain auth."`
-	AuthMethod         string `sconf-doc:"Ignored for now, regardless of value, AUTH PLAIN is done. This will change in the future."`
-	From               string `sconf-doc:"Address for MAIL FROM in SMTP and From-header in message."`
-	DefaultDestination string `sconf:"optional" sconf-doc:"Used when specified address does not contain an @ and may be a local user (eg root)."`
-}
+func cmdReassignUIDs(c *cmd) {
+	c.params = "account [mailboxid]"
+	c.help = `Reassign UIDs in one mailbox or all mailboxes in an account and bump UID validity, causing IMAP clients to refetch messages.
 
-func cmdConfigDescribeSendmail(c *cmd) {
-	c.params = ">/etc/moxsubmit.conf"
-	c.help = `Describe configuration for mox when invoked as sendmail.`
-	if len(c.Parse()) != 0 {
+Opens account database file directly. Ensure mox does not have the account
+open, or is not running.
+`
+	args := c.Parse()
+	if len(args) != 1 && len(args) != 2 {
 		c.Usage()
 	}
 
-	err := sconf.Describe(os.Stdout, submitconf)
-	xcheckf(err, "describe config")
+	var mailboxID int64
+	if len(args) == 2 {
+		var err error
+		mailboxID, err = strconv.ParseInt(args[1], 10, 64)
+		xcheckf(err, "parsing mailbox id")
+	}
+
+	mustLoadConfig()
+	a, err := store.OpenAccount(args[0])
+	xcheckf(err, "open account")
+	defer func() {
+		if err := a.Close(); err != nil {
+			log.Printf("closing account: %v", err)
+		}
+	}()
+
+	// Gather the last-assigned UIDs per mailbox.
+	uidlasts := map[int64]store.UID{}
+
+	err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
+		// Reassign UIDs, going per mailbox. We assign starting at 1, only changing the
+		// message if it isn't already at the intended UID. Doing it in this order ensures
+		// we don't get into trouble with duplicate UIDs for a mailbox. We assign a new
+		// modseq. Not strictly needed, for doesn't hurt.
+		modseq, err := a.NextModSeq(tx)
+		xcheckf(err, "assigning next modseq")
+
+		q := bstore.QueryTx[store.Message](tx)
+		if len(args) == 2 {
+			q.FilterNonzero(store.Message{MailboxID: mailboxID})
+		}
+		q.SortAsc("MailboxID", "UID")
+		err = q.ForEach(func(m store.Message) error {
+			uidlasts[m.MailboxID]++
+			uid := uidlasts[m.MailboxID]
+			if m.UID != uid {
+				m.UID = uid
+				m.ModSeq = modseq
+				if err := tx.Update(&m); err != nil {
+					return fmt.Errorf("updating uid for message: %v", err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("reading through messages: %v", err)
+		}
+
+		// Now update the uidnext and uidvalidity for each mailbox.
+		err = bstore.QueryTx[store.Mailbox](tx).ForEach(func(mb store.Mailbox) error {
+			// Assign each mailbox a completely new uidvalidity.
+			uidvalidity, err := a.NextUIDValidity(tx)
+			if err != nil {
+				return fmt.Errorf("assigning next uid validity: %v", err)
+			}
+
+			if mb.UIDValidity >= uidvalidity {
+				// This should not happen, but since we're fixing things up after a hypothetical
+				// mishap, might as well account for inconsistent uidvalidity.
+				next := store.NextUIDValidity{ID: 1, Next: mb.UIDValidity + 2}
+				if err := tx.Update(&next); err != nil {
+					log.Printf("updating nextuidvalidity: %v, continuing", err)
+				}
+				mb.UIDValidity++
+			} else {
+				mb.UIDValidity = uidvalidity
+			}
+			mb.UIDNext = uidlasts[mb.ID] + 1
+			if err := tx.Update(&mb); err != nil {
+				return fmt.Errorf("updating uidvalidity and uidnext for mailbox: %v", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("updating mailboxes: %v", err)
+		}
+		return nil
+	})
+	xcheckf(err, "updating database")
+}
+
+func cmdFixUIDMeta(c *cmd) {
+	c.params = "account"
+	c.help = `Fix inconsistent UIDVALIDITY and UIDNEXT in messages/mailboxes/account.
+
+The next UID to use for a message in a mailbox should always be higher than any
+existing message UID in the mailbox. If it is not, the mailbox UIDNEXT is
+updated.
+
+Each mailbox has a UIDVALIDITY sequence number, which should always be lower
+than the per-account next UIDVALIDITY to use. If it is not, the account next
+UIDVALIDITY is updated.
+
+Opens account database file directly. Ensure mox does not have the account
+open, or is not running.
+`
+	args := c.Parse()
+	if len(args) != 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	a, err := store.OpenAccount(args[0])
+	xcheckf(err, "open account")
+	defer func() {
+		if err := a.Close(); err != nil {
+			log.Printf("closing account: %v", err)
+		}
+	}()
+
+	var maxUIDValidity uint32
+
+	err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
+		// We look at each mailbox, retrieve its max UID and compare against the mailbox
+		// UIDNEXT.
+		err := bstore.QueryTx[store.Mailbox](tx).ForEach(func(mb store.Mailbox) error {
+			if mb.UIDValidity > maxUIDValidity {
+				maxUIDValidity = mb.UIDValidity
+			}
+			m, err := bstore.QueryTx[store.Message](tx).FilterNonzero(store.Message{MailboxID: mb.ID}).SortDesc("UID").Limit(1).Get()
+			if err == bstore.ErrAbsent || err == nil && m.UID < mb.UIDNext {
+				return nil
+			} else if err != nil {
+				return fmt.Errorf("finding message with max uid in mailbox: %w", err)
+			}
+			olduidnext := mb.UIDNext
+			mb.UIDNext = m.UID + 1
+			log.Printf("fixing uidnext to %d (max uid is %d, old uidnext was %d) for mailbox %q (id %d)", mb.UIDNext, m.UID, olduidnext, mb.Name, mb.ID)
+			if err := tx.Update(&mb); err != nil {
+				return fmt.Errorf("updating mailbox uidnext: %v", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("processing mailboxes: %v", err)
+		}
+
+		uidvalidity := store.NextUIDValidity{ID: 1}
+		if err := tx.Get(&uidvalidity); err != nil {
+			return fmt.Errorf("reading account next uidvalidity: %v", err)
+		}
+		if maxUIDValidity >= uidvalidity.Next {
+			log.Printf("account next uidvalidity %d <= highest uidvalidity %d found in mailbox, resetting account next uidvalidity to %d", uidvalidity.Next, maxUIDValidity, maxUIDValidity+1)
+			uidvalidity.Next = maxUIDValidity + 1
+			if err := tx.Update(&uidvalidity); err != nil {
+				return fmt.Errorf("updating account next uidvalidity: %v", err)
+			}
+		}
+
+		return nil
+	})
+	xcheckf(err, "updating database")
+}
+
+func cmdFixmsgsize(c *cmd) {
+	c.params = "[account]"
+	c.help = `Ensure message sizes in the database matching the sum of the message prefix length and on-disk file size.
+
+Messages with an inconsistent size are also parsed again.
+
+If an inconsistency is found, you should probably also run "mox
+bumpuidvalidity" on the mailboxes or entire account to force IMAP clients to
+refetch messages.
+`
+	args := c.Parse()
+	if len(args) > 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	var account string
+	if len(args) == 1 {
+		account = args[0]
+	}
+	ctlcmdFixmsgsize(xctl(), account)
+}
+
+func ctlcmdFixmsgsize(ctl *ctl, account string) {
+	ctl.xwrite("fixmsgsize")
+	ctl.xwrite(account)
+	ctl.xreadok()
+	ctl.xstreamto(os.Stdout)
+}
+
+func cmdReparse(c *cmd) {
+	c.params = "[account]"
+	c.help = `Parse all messages in the account or all accounts again
+
+Can be useful after upgrading mox with improved message parsing. Messages are
+parsed in batches, so other access to the mailboxes/messages are not blocked
+while reparsing all messages.
+`
+	args := c.Parse()
+	if len(args) > 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	var account string
+	if len(args) == 1 {
+		account = args[0]
+	}
+	ctlcmdReparse(xctl(), account)
+}
+
+func ctlcmdReparse(ctl *ctl, account string) {
+	ctl.xwrite("reparse")
+	ctl.xwrite(account)
+	ctl.xreadok()
+	ctl.xstreamto(os.Stdout)
+}
+
+func cmdEnsureParsed(c *cmd) {
+	c.params = "account"
+	c.help = "Ensure messages in the database have a pre-parsed MIME form in the database."
+	var all bool
+	c.flag.BoolVar(&all, "all", false, "store new parsed message for all messages")
+	args := c.Parse()
+	if len(args) != 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	a, err := store.OpenAccount(args[0])
+	xcheckf(err, "open account")
+	defer func() {
+		if err := a.Close(); err != nil {
+			log.Printf("closing account: %v", err)
+		}
+	}()
+
+	n := 0
+	err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
+		q := bstore.QueryTx[store.Message](tx)
+		q.FilterEqual("Expunged", false)
+		q.FilterFn(func(m store.Message) bool {
+			return all || m.ParsedBuf == nil
+		})
+		l, err := q.List()
+		if err != nil {
+			return fmt.Errorf("list messages: %v", err)
+		}
+		for _, m := range l {
+			mr := a.MessageReader(m)
+			p, err := message.EnsurePart(mr, m.Size)
+			if err != nil {
+				log.Printf("parsing message %d: %v (continuing)", m.ID, err)
+			}
+			m.ParsedBuf, err = json.Marshal(p)
+			if err != nil {
+				return fmt.Errorf("marshal parsed message: %v", err)
+			}
+			if err := tx.Update(&m); err != nil {
+				return fmt.Errorf("update message: %v", err)
+			}
+			n++
+		}
+		return nil
+	})
+	xcheckf(err, "update messages with parsed mime structure")
+	fmt.Printf("%d messages updated\n", n)
+}
+
+func cmdRecalculateMailboxCounts(c *cmd) {
+	c.params = "account"
+	c.help = `Recalculate message counts for all mailboxes in the account.
+
+When a message is added to/removed from a mailbox, or when message flags change,
+the total, unread, unseen and deleted messages are accounted, and the total size
+of the mailbox. In case of a bug in this accounting, the numbers could become
+incorrect. This command will find, fix and print them.
+`
+	args := c.Parse()
+	if len(args) != 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	ctlcmdRecalculateMailboxCounts(xctl(), args[0])
+}
+
+func ctlcmdRecalculateMailboxCounts(ctl *ctl, account string) {
+	ctl.xwrite("recalculatemailboxcounts")
+	ctl.xwrite(account)
+	ctl.xreadok()
+	ctl.xstreamto(os.Stdout)
+}
+
+func cmdMessageParse(c *cmd) {
+	c.params = "message.eml"
+	c.help = "Parse message, print JSON representation."
+
+	args := c.Parse()
+	if len(args) != 1 {
+		c.Usage()
+	}
+
+	f, err := os.Open(args[0])
+	xcheckf(err, "open")
+	defer f.Close()
+
+	part, err := message.Parse(f)
+	xcheckf(err, "parsing message")
+	err = part.Walk(nil)
+	xcheckf(err, "parsing nested parts")
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "\t")
+	err = enc.Encode(part)
+	xcheckf(err, "write")
 }

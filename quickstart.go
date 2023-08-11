@@ -457,6 +457,17 @@ listed in more DNS block lists, visit:
 			fmt.Printf(" OK\n")
 		}
 	}
+
+	if len(publicIPs) == 0 {
+		log.Printf(`WARNING: Could not find your public IP address(es). The "public" listener is
+configured to listen on 0.0.0.0 (IPv4) and :: (IPv6). If you don't change these
+to your actual public IP addresses, you will likely get "address in use" errors
+when starting mox because the "internal" listener binds to a specific IP
+address on the same port(s).
+
+`)
+	}
+
 	fmt.Printf("\n")
 
 	user := "mox"
@@ -530,9 +541,11 @@ listed in more DNS block lists, visit:
 	internal.AccountHTTP.Enabled = true
 	internal.AdminHTTP.Enabled = true
 	internal.MetricsHTTP.Enabled = true
+	internal.WebmailHTTP.Enabled = true
 	if existingWebserver {
 		internal.AccountHTTP.Port = 1080
 		internal.AdminHTTP.Port = 1080
+		internal.WebmailHTTP.Port = 1080
 		internal.AutoconfigHTTPS.Enabled = true
 		internal.AutoconfigHTTPS.Port = 81
 		internal.AutoconfigHTTPS.NonTLS = true
@@ -616,7 +629,7 @@ listed in more DNS block lists, visit:
 	if err := sconf.Describe(&destBuf, destsExample); err != nil {
 		fatalf("describing destination example: %v", err)
 	}
-	ndests := odests + "#\t\t\tIf you receive email from mailing lists, you probably want to configure them like the example below.\n"
+	ndests := odests + "# If you receive email from mailing lists, you may want to configure them like the\n# example below (remove the empty/false SMTPMailRegexp and IsForward).\n# If you are receiving forwarded email, see the IsForwarded option in a Ruleset.\n"
 	for _, line := range strings.Split(destBuf.String(), "\n")[1:] {
 		ndests += "#\t\t" + line + "\n"
 	}
@@ -754,8 +767,9 @@ starting up. On linux, you may want to enable mox as a systemd service.
 	fmt.Printf(`
 After starting mox, the web interfaces are served at:
 
-http://localhost/       - account (email address as username)
-http://localhost/admin/ - admin (empty username)
+http://localhost/         - account (email address as username)
+http://localhost/webmail/ - webmail (email address as username)
+http://localhost/admin/   - admin (empty username)
 
 To access these from your browser, run
 "ssh -L 8080:localhost:80 you@yourmachine" locally and open

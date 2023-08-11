@@ -34,11 +34,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/exp/slices"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/mjl-/bstore"
@@ -49,10 +51,17 @@ import (
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/moxio"
+	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/publicsuffix"
 	"github.com/mjl-/mox/scram"
 	"github.com/mjl-/mox/smtp"
 )
+
+// If true, each time an account is closed its database file is checked for
+// consistency. If an inconsistency is found, panic is called. Set by default
+// because of all the packages with tests, the mox main function sets it to
+// false again.
+var CheckConsistencyOnClose = true
 
 var xlog = mlog.New("store")
 
@@ -64,7 +73,15 @@ var (
 
 var subjectpassRand = mox.NewRand()
 
-var InitialMailboxes = []string{"Inbox", "Sent", "Archive", "Trash", "Drafts", "Junk"}
+var DefaultInitialMailboxes = config.InitialMailboxes{
+	SpecialUse: config.SpecialUseMailboxes{
+		Sent:    "Sent",
+		Archive: "Archive",
+		Trash:   "Trash",
+		Draft:   "Drafts",
+		Junk:    "Junk",
+	},
+}
 
 type SCRAM struct {
 	Salt           []byte
@@ -149,6 +166,24 @@ type NextUIDValidity struct {
 	Next uint32
 }
 
+// SyncState track ModSeqs.
+type SyncState struct {
+	ID int // Just a single record with ID 1.
+
+	// Last used, next assigned will be one higher. The first value we hand out is 2.
+	// That's because 0 (the default value for old existing messages, from before the
+	// Message.ModSeq field) is special in IMAP, so we return it as 1.
+	LastModSeq ModSeq `bstore:"nonzero"`
+
+	// Highest ModSeq of expunged record that we deleted. When a clients synchronizes
+	// and requests changes based on a modseq before this one, we don't have the
+	// history to provide information about deletions. We normally keep these expunged
+	// records around, but we may periodically truly delete them to reclaim storage
+	// space. Initially set to -1 because we don't want to match with any ModSeq in the
+	// database, which can be zero values.
+	HighestDeletedModSeq ModSeq
+}
+
 // Mailbox is collection of messages, e.g. Inbox or Sent.
 type Mailbox struct {
 	ID int64
@@ -165,13 +200,101 @@ type Mailbox struct {
 	// delivered to a mailbox.
 	UIDNext UID
 
-	// Special-use hints. The mailbox holds these types of messages. Used
-	// in IMAP LIST (mailboxes) response.
+	SpecialUse
+
+	// Keywords as used in messages. Storing a non-system keyword for a message
+	// automatically adds it to this list. Used in the IMAP FLAGS response. Only
+	// "atoms" are allowed (IMAP syntax), keywords are case-insensitive, only stored in
+	// lower case (for JMAP), sorted.
+	Keywords []string
+
+	HaveCounts    bool // Whether MailboxCounts have been initialized.
+	MailboxCounts      // Statistics about messages, kept up to date whenever a change happens.
+}
+
+// MailboxCounts tracks statistics about messages for a mailbox.
+type MailboxCounts struct {
+	Total   int64 // Total number of messages, excluding \Deleted. For JMAP.
+	Deleted int64 // Number of messages with \Deleted flag. Used for IMAP message count that includes messages with \Deleted.
+	Unread  int64 // Messages without \Seen, excluding those with \Deleted, for JMAP.
+	Unseen  int64 // Messages without \Seen, including those with \Deleted, for IMAP.
+	Size    int64 // Number of bytes for all messages.
+}
+
+func (mc MailboxCounts) String() string {
+	return fmt.Sprintf("%d total, %d deleted, %d unread, %d unseen, size %d bytes", mc.Total, mc.Deleted, mc.Unread, mc.Unseen, mc.Size)
+}
+
+// Add increases mailbox counts mc with those of delta.
+func (mc *MailboxCounts) Add(delta MailboxCounts) {
+	mc.Total += delta.Total
+	mc.Deleted += delta.Deleted
+	mc.Unread += delta.Unread
+	mc.Unseen += delta.Unseen
+	mc.Size += delta.Size
+}
+
+// Add decreases mailbox counts mc with those of delta.
+func (mc *MailboxCounts) Sub(delta MailboxCounts) {
+	mc.Total -= delta.Total
+	mc.Deleted -= delta.Deleted
+	mc.Unread -= delta.Unread
+	mc.Unseen -= delta.Unseen
+	mc.Size -= delta.Size
+}
+
+// SpecialUse identifies a specific role for a mailbox, used by clients to
+// understand where messages should go.
+type SpecialUse struct {
 	Archive bool
 	Draft   bool
 	Junk    bool
 	Sent    bool
 	Trash   bool
+}
+
+// CalculateCounts calculates the full current counts for messages in the mailbox.
+func (mb *Mailbox) CalculateCounts(tx *bstore.Tx) (mc MailboxCounts, err error) {
+	q := bstore.QueryTx[Message](tx)
+	q.FilterNonzero(Message{MailboxID: mb.ID})
+	q.FilterEqual("Expunged", false)
+	err = q.ForEach(func(m Message) error {
+		mc.Add(m.MailboxCounts())
+		return nil
+	})
+	return
+}
+
+// ChangeSpecialUse returns a change for special-use flags, for broadcasting to
+// other connections.
+func (mb Mailbox) ChangeSpecialUse() ChangeMailboxSpecialUse {
+	return ChangeMailboxSpecialUse{mb.ID, mb.Name, mb.SpecialUse}
+}
+
+// ChangeKeywords returns a change with new keywords for a mailbox (e.g. after
+// setting a new keyword on a message in the mailbox), for broadcasting to other
+// connections.
+func (mb Mailbox) ChangeKeywords() ChangeMailboxKeywords {
+	return ChangeMailboxKeywords{mb.ID, mb.Name, mb.Keywords}
+}
+
+// KeywordsChanged returns whether the keywords in a mailbox have changed.
+func (mb Mailbox) KeywordsChanged(origmb Mailbox) bool {
+	if len(mb.Keywords) != len(origmb.Keywords) {
+		return true
+	}
+	// Keywords are stored sorted.
+	for i, kw := range mb.Keywords {
+		if origmb.Keywords[i] != kw {
+			return true
+		}
+	}
+	return false
+}
+
+// CountsChange returns a change with mailbox counts.
+func (mb Mailbox) ChangeCounts() ChangeMailboxCounts {
+	return ChangeMailboxCounts{mb.ID, mb.Name, mb.MailboxCounts}
 }
 
 // Subscriptions are separate from existence of mailboxes.
@@ -226,12 +349,42 @@ type Message struct {
 	ID int64
 
 	UID       UID   `bstore:"nonzero"` // UID, for IMAP. Set during deliver.
-	MailboxID int64 `bstore:"nonzero,unique MailboxID+UID,index MailboxID+Received,ref Mailbox"`
+	MailboxID int64 `bstore:"nonzero,unique MailboxID+UID,index MailboxID+Received,index MailboxID+ModSeq,ref Mailbox"`
+
+	// Modification sequence, for faster syncing with IMAP QRESYNC and JMAP.
+	// ModSeq is the last modification. CreateSeq is the Seq the message was inserted,
+	// always <= ModSeq. If Expunged is set, the message has been removed and should not
+	// be returned to the user. In this case, ModSeq is the Seq where the message is
+	// removed, and will never be changed again.
+	// We have an index on both ModSeq (for JMAP that synchronizes per account) and
+	// MailboxID+ModSeq (for IMAP that synchronizes per mailbox).
+	// The index on CreateSeq helps efficiently finding created messages for JMAP.
+	// The value of ModSeq is special for IMAP. Messages that existed before ModSeq was
+	// added have 0 as value. But modseq 0 in IMAP is special, so we return it as 1. If
+	// we get modseq 1 from a client, the IMAP server will translate it to 0. When we
+	// return modseq to clients, we turn 0 into 1.
+	ModSeq    ModSeq `bstore:"index"`
+	CreateSeq ModSeq `bstore:"index"`
+	Expunged  bool
+
+	// If set, this message was delivered to a Rejects mailbox. When it is moved to a
+	// different mailbox, its MailboxOrigID is set to the destination mailbox and this
+	// flag cleared.
+	IsReject bool
+
+	// If set, this is a forwarded message (through a ruleset with IsForward). This
+	// causes fields used during junk analysis to be moved to their Orig variants, and
+	// masked IP fields cleared, so they aren't used in junk classifications for
+	// incoming messages. This ensures the forwarded messages don't cause negative
+	// reputation for the forwarding mail server, which may also be sending regular
+	// messages.
+	IsForward bool
 
 	// MailboxOrigID is the mailbox the message was originally delivered to. Typically
-	// Inbox or Rejects, but can also be Postmaster and TLS/DMARC reporting addresses.
-	// MailboxOrigID is not changed when the message is moved to another mailbox, e.g.
-	// Archive/Trash/Junk. Used for per-mailbox reputation.
+	// Inbox or Rejects, but can also be a mailbox configured in a Ruleset, or
+	// Postmaster, TLS/DMARC reporting addresses. MailboxOrigID is not changed when the
+	// message is moved to another mailbox, e.g. Archive/Trash/Junk. Used for
+	// per-mailbox reputation.
 	//
 	// MailboxDestinedID is normally 0, but when a message is delivered to the Rejects
 	// mailbox, it is set to the intended mailbox according to delivery rules,
@@ -248,19 +401,24 @@ type Message struct {
 
 	Received time.Time `bstore:"default now,index"`
 
-	// Full IP address of remote SMTP server. Empty if not delivered over
-	// SMTP.
+	// Full IP address of remote SMTP server. Empty if not delivered over SMTP. The
+	// masked IPs are used to classify incoming messages. They are left empty for
+	// messages matching a ruleset for forwarded messages.
 	RemoteIP        string
 	RemoteIPMasked1 string `bstore:"index RemoteIPMasked1+Received"` // For IPv4 /32, for IPv6 /64, for reputation.
 	RemoteIPMasked2 string `bstore:"index RemoteIPMasked2+Received"` // For IPv4 /26, for IPv6 /48.
 	RemoteIPMasked3 string `bstore:"index RemoteIPMasked3+Received"` // For IPv4 /21, for IPv6 /32.
 
-	EHLODomain        string         `bstore:"index EHLODomain+Received"` // Only set if present and not an IP address. Unicode string.
+	// Only set if present and not an IP address. Unicode string. Empty for forwarded
+	// messages.
+	EHLODomain        string         `bstore:"index EHLODomain+Received"`
 	MailFrom          string         // With localpart and domain. Can be empty.
 	MailFromLocalpart smtp.Localpart // SMTP "MAIL FROM", can be empty.
-	MailFromDomain    string         `bstore:"index MailFromDomain+Received"` // Only set if it is a domain, not an IP. Unicode string.
-	RcptToLocalpart   smtp.Localpart // SMTP "RCPT TO", can be empty.
-	RcptToDomain      string         // Unicode string.
+	// Only set if it is a domain, not an IP. Unicode string. Empty for forwarded
+	// messages, but see OrigMailFromDomain.
+	MailFromDomain  string         `bstore:"index MailFromDomain+Received"`
+	RcptToLocalpart smtp.Localpart // SMTP "RCPT TO", can be empty.
+	RcptToDomain    string         // Unicode string.
 
 	// Parsed "From" message header, used for reputation along with domain validation.
 	MsgFromLocalpart smtp.Localpart
@@ -277,15 +435,28 @@ type Message struct {
 	MailFromValidation Validation // Can have SPF-specific validations like ValidationSoftfail.
 	MsgFromValidation  Validation // Desirable validations: Strict, DMARC, Relaxed. Will not be just Pass.
 
-	DKIMDomains []string `bstore:"index DKIMDomains+Received"` // Domains with verified DKIM signatures. Unicode string.
+	// Domains with verified DKIM signatures. Unicode string. For forwarded messages, a
+	// DKIM domain that matched a ruleset's verified domain is left out, but included
+	// in OrigDKIMDomains.
+	DKIMDomains []string `bstore:"index DKIMDomains+Received"`
+
+	// For forwarded messages,
+	OrigEHLODomain  string
+	OrigDKIMDomains []string
 
 	// Value of Message-Id header. Only set for messages that were
 	// delivered to the rejects mailbox. For ensuring such messages are
 	// delivered only once. Value includes <>.
 	MessageID string `bstore:"index"`
 
-	MessageHash []byte // Hash of message. For rejects delivery, so optional like MessageID.
+	// Hash of message. For rejects delivery, so optional like MessageID.
+	MessageHash []byte
+
 	Flags
+	// For keywords other than system flags or the basic well-known $-flags. Only in
+	// "atom" syntax (IMAP), they are case-insensitive, always stored in lower-case
+	// (for JMAP), sorted.
+	Keywords    []string `bstore:"index"`
 	Size        int64
 	TrainedJunk *bool  // If nil, no training done yet. Otherwise, true is trained as junk, false trained as nonjunk.
 	MsgPrefix   []byte // Typically holds received headers and/or header separator.
@@ -293,7 +464,73 @@ type Message struct {
 	// ParsedBuf message structure. Currently saved as JSON of message.Part because bstore
 	// cannot yet store recursive types. Created when first needed, and saved in the
 	// database.
+	// todo: once replaced with non-json storage, remove date fixup in ../message/part.go.
 	ParsedBuf []byte
+}
+
+// MailboxCounts returns the delta to counts this message means for its
+// mailbox.
+func (m Message) MailboxCounts() (mc MailboxCounts) {
+	if m.Expunged {
+		return
+	}
+	if m.Deleted {
+		mc.Deleted++
+	} else {
+		mc.Total++
+	}
+	if !m.Seen {
+		mc.Unseen++
+		if !m.Deleted {
+			mc.Unread++
+		}
+	}
+	mc.Size += m.Size
+	return
+}
+
+func (m Message) ChangeAddUID() ChangeAddUID {
+	return ChangeAddUID{m.MailboxID, m.UID, m.ModSeq, m.Flags, m.Keywords}
+}
+
+func (m Message) ChangeFlags(orig Flags) ChangeFlags {
+	mask := m.Flags.Changed(orig)
+	return ChangeFlags{MailboxID: m.MailboxID, UID: m.UID, ModSeq: m.ModSeq, Mask: mask, Flags: m.Flags, Keywords: m.Keywords}
+}
+
+// ModSeq represents a modseq as stored in the database. ModSeq 0 in the
+// database is sent to the client as 1, because modseq 0 is special in IMAP.
+// ModSeq coming from the client are of type int64.
+type ModSeq int64
+
+func (ms ModSeq) Client() int64 {
+	if ms == 0 {
+		return 1
+	}
+	return int64(ms)
+}
+
+// ModSeqFromClient converts a modseq from a client to a modseq for internal
+// use, e.g. in a database query.
+// ModSeq 1 is turned into 0 (the Go zero value for ModSeq).
+func ModSeqFromClient(modseq int64) ModSeq {
+	if modseq == 1 {
+		return 0
+	}
+	return ModSeq(modseq)
+}
+
+// PrepareExpunge clears fields that are no longer needed after an expunge, so
+// almost all fields. Does not change ModSeq, but does set Expunged.
+func (m *Message) PrepareExpunge() {
+	*m = Message{
+		ID:        m.ID,
+		UID:       m.UID,
+		MailboxID: m.MailboxID,
+		CreateSeq: m.CreateSeq,
+		ModSeq:    m.ModSeq,
+		Expunged:  true,
+	}
 }
 
 // LoadPart returns a message.Part by reading from m.ParsedBuf.
@@ -353,12 +590,12 @@ func (m *Message) JunkFlagsForMailbox(mailbox string, conf config.Account) {
 }
 
 // Recipient represents the recipient of a message. It is tracked to allow
-// first-time incoming replies from users this account has sent messages to. On
-// IMAP append to Sent, the message is parsed and recipients are inserted as
-// recipient. Recipients are never removed other than for removing the message. On
-// IMAP move/copy, recipients aren't modified either. don't modify anything either.
-// This works by the assumption that an IMAP client simply appends messages to the
-// Sent mailbox (as opposed to copying messages from some place).
+// first-time incoming replies from users this account has sent messages to. When a
+// mailbox is added to the Sent mailbox the message is parsed and recipients are
+// inserted as recipient. Recipients are never removed other than for removing the
+// message. On move/copy of a message, recipients aren't modified either. For IMAP,
+// this assumes a client simply appends messages to the Sent mailbox (as opposed to
+// copying messages from some place).
 type Recipient struct {
 	ID        int64
 	MessageID int64          `bstore:"nonzero,ref Message"` // Ref gives it its own index, useful for fast removal as well.
@@ -377,7 +614,7 @@ type Outgoing struct {
 }
 
 // Types stored in DB.
-var DBTypes = []any{NextUIDValidity{}, Message{}, Recipient{}, Mailbox{}, Subscription{}, Outgoing{}, Password{}, Subjectpass{}}
+var DBTypes = []any{NextUIDValidity{}, Message{}, Recipient{}, Mailbox{}, Subscription{}, Outgoing{}, Password{}, Subjectpass{}, SyncState{}}
 
 // Account holds the information about a user, includings mailboxes, messages, imap subscriptions.
 type Account struct {
@@ -475,6 +712,27 @@ func openAccount(name string) (a *Account, rerr error) {
 		if err := initAccount(db); err != nil {
 			return nil, fmt.Errorf("initializing account: %v", err)
 		}
+	} else {
+		// Ensure mailbox counts are set.
+		var mentioned bool
+		err := db.Write(context.TODO(), func(tx *bstore.Tx) error {
+			return bstore.QueryTx[Mailbox](tx).FilterEqual("HaveCounts", false).ForEach(func(mb Mailbox) error {
+				if !mentioned {
+					mentioned = true
+					xlog.Info("first calculation of mailbox counts for account", mlog.Field("account", name))
+				}
+				mc, err := mb.CalculateCounts(tx)
+				if err != nil {
+					return err
+				}
+				mb.HaveCounts = true
+				mb.MailboxCounts = mc
+				return tx.Update(&mb)
+			})
+		})
+		if err != nil {
+			return nil, fmt.Errorf("calculating counts for mailbox: %v", err)
+		}
 	}
 
 	return &Account{
@@ -489,36 +747,79 @@ func initAccount(db *bstore.DB) error {
 	return db.Write(context.TODO(), func(tx *bstore.Tx) error {
 		uidvalidity := InitialUIDValidity()
 
-		mailboxes := InitialMailboxes
-		defaultMailboxes := mox.Conf.Static.DefaultMailboxes
-		if len(defaultMailboxes) > 0 {
-			mailboxes = []string{"Inbox"}
+		if len(mox.Conf.Static.DefaultMailboxes) > 0 {
+			// Deprecated in favor of InitialMailboxes.
+			defaultMailboxes := mox.Conf.Static.DefaultMailboxes
+			mailboxes := []string{"Inbox"}
 			for _, name := range defaultMailboxes {
 				if strings.EqualFold(name, "Inbox") {
 					continue
 				}
 				mailboxes = append(mailboxes, name)
 			}
-		}
-		for _, name := range mailboxes {
-			mb := Mailbox{Name: name, UIDValidity: uidvalidity, UIDNext: 1}
-			if strings.HasPrefix(name, "Archive") {
-				mb.Archive = true
-			} else if strings.HasPrefix(name, "Drafts") {
-				mb.Draft = true
-			} else if strings.HasPrefix(name, "Junk") {
-				mb.Junk = true
-			} else if strings.HasPrefix(name, "Sent") {
-				mb.Sent = true
-			} else if strings.HasPrefix(name, "Trash") {
-				mb.Trash = true
+			for _, name := range mailboxes {
+				mb := Mailbox{Name: name, UIDValidity: uidvalidity, UIDNext: 1, HaveCounts: true}
+				if strings.HasPrefix(name, "Archive") {
+					mb.Archive = true
+				} else if strings.HasPrefix(name, "Drafts") {
+					mb.Draft = true
+				} else if strings.HasPrefix(name, "Junk") {
+					mb.Junk = true
+				} else if strings.HasPrefix(name, "Sent") {
+					mb.Sent = true
+				} else if strings.HasPrefix(name, "Trash") {
+					mb.Trash = true
+				}
+				if err := tx.Insert(&mb); err != nil {
+					return fmt.Errorf("creating mailbox: %w", err)
+				}
+				if err := tx.Insert(&Subscription{name}); err != nil {
+					return fmt.Errorf("adding subscription: %w", err)
+				}
 			}
-			if err := tx.Insert(&mb); err != nil {
-				return fmt.Errorf("creating mailbox: %w", err)
+		} else {
+			mailboxes := mox.Conf.Static.InitialMailboxes
+			var zerouse config.SpecialUseMailboxes
+			if mailboxes.SpecialUse == zerouse && len(mailboxes.Regular) == 0 {
+				mailboxes = DefaultInitialMailboxes
 			}
 
-			if err := tx.Insert(&Subscription{name}); err != nil {
-				return fmt.Errorf("adding subscription: %w", err)
+			add := func(name string, use SpecialUse) error {
+				mb := Mailbox{Name: name, UIDValidity: uidvalidity, UIDNext: 1, SpecialUse: use, HaveCounts: true}
+				if err := tx.Insert(&mb); err != nil {
+					return fmt.Errorf("creating mailbox: %w", err)
+				}
+				if err := tx.Insert(&Subscription{name}); err != nil {
+					return fmt.Errorf("adding subscription: %w", err)
+				}
+				return nil
+			}
+			addSpecialOpt := func(nameOpt string, use SpecialUse) error {
+				if nameOpt == "" {
+					return nil
+				}
+				return add(nameOpt, use)
+			}
+			l := []struct {
+				nameOpt string
+				use     SpecialUse
+			}{
+				{"Inbox", SpecialUse{}},
+				{mailboxes.SpecialUse.Archive, SpecialUse{Archive: true}},
+				{mailboxes.SpecialUse.Draft, SpecialUse{Draft: true}},
+				{mailboxes.SpecialUse.Junk, SpecialUse{Junk: true}},
+				{mailboxes.SpecialUse.Sent, SpecialUse{Sent: true}},
+				{mailboxes.SpecialUse.Trash, SpecialUse{Trash: true}},
+			}
+			for _, e := range l {
+				if err := addSpecialOpt(e.nameOpt, e.use); err != nil {
+					return err
+				}
+			}
+			for _, name := range mailboxes.Regular {
+				if err := add(name, SpecialUse{}); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -533,7 +834,110 @@ func initAccount(db *bstore.DB) error {
 // Close reduces the reference count, and closes the database connection when
 // it was the last user.
 func (a *Account) Close() error {
+	if CheckConsistencyOnClose {
+		xerr := a.CheckConsistency()
+		err := closeAccount(a)
+		if xerr != nil {
+			panic(xerr)
+		}
+		return err
+	}
 	return closeAccount(a)
+}
+
+// CheckConsistency checks the consistency of the database and returns a non-nil
+// error for these cases:
+//
+// - Missing on-disk file for message.
+// - Mismatch between message size and length of MsgPrefix and on-disk file.
+// - Missing HaveCounts.
+// - Incorrect mailbox counts.
+// - Message with UID >= mailbox uid next.
+// - Mailbox uidvalidity >= account uid validity.
+// - ModSeq > 0, CreateSeq > 0, CreateSeq <= ModSeq.
+func (a *Account) CheckConsistency() error {
+	var uiderrors []string    // With a limit, could be many.
+	var modseqerrors []string // With limit.
+	var fileerrors []string   // With limit.
+	var errors []string
+
+	err := a.DB.Read(context.Background(), func(tx *bstore.Tx) error {
+		nuv := NextUIDValidity{ID: 1}
+		err := tx.Get(&nuv)
+		if err != nil {
+			return fmt.Errorf("fetching next uid validity: %v", err)
+		}
+
+		mailboxes := map[int64]Mailbox{}
+		err = bstore.QueryTx[Mailbox](tx).ForEach(func(mb Mailbox) error {
+			mailboxes[mb.ID] = mb
+
+			if mb.UIDValidity >= nuv.Next {
+				errmsg := fmt.Sprintf("mailbox %q (id %d) has uidvalidity %d >= account next uidvalidity %d", mb.Name, mb.ID, mb.UIDValidity, nuv.Next)
+				errors = append(errors, errmsg)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("listing mailboxes: %v", err)
+		}
+
+		counts := map[int64]MailboxCounts{}
+		err = bstore.QueryTx[Message](tx).ForEach(func(m Message) error {
+			mc := counts[m.MailboxID]
+			mc.Add(m.MailboxCounts())
+			counts[m.MailboxID] = mc
+
+			mb := mailboxes[m.MailboxID]
+
+			if (m.ModSeq == 0 || m.CreateSeq == 0 || m.CreateSeq > m.ModSeq) && len(modseqerrors) < 20 {
+				modseqerr := fmt.Sprintf("message %d in mailbox %q (id %d) has invalid modseq %d or createseq %d, both must be > 0 and createseq <= modseq", m.ID, mb.Name, mb.ID, m.ModSeq, m.CreateSeq)
+				modseqerrors = append(modseqerrors, modseqerr)
+			}
+			if m.UID >= mb.UIDNext && len(uiderrors) < 20 {
+				uiderr := fmt.Sprintf("message %d in mailbox %q (id %d) has uid %d >= mailbox uidnext %d", m.ID, mb.Name, mb.ID, m.UID, mb.UIDNext)
+				uiderrors = append(uiderrors, uiderr)
+			}
+			if m.Expunged {
+				return nil
+			}
+			p := a.MessagePath(m.ID)
+			st, err := os.Stat(p)
+			if err != nil {
+				existserr := fmt.Sprintf("message %d in mailbox %q (id %d) on-disk file %s: %v", m.ID, mb.Name, mb.ID, p, err)
+				fileerrors = append(fileerrors, existserr)
+			} else if len(fileerrors) < 20 && m.Size != int64(len(m.MsgPrefix))+st.Size() {
+				sizeerr := fmt.Sprintf("message %d in mailbox %q (id %d) has size %d != len msgprefix %d + on-disk file size %d = %d", m.ID, mb.Name, mb.ID, m.Size, len(m.MsgPrefix), st.Size(), int64(len(m.MsgPrefix))+st.Size())
+				fileerrors = append(fileerrors, sizeerr)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("reading messages: %v", err)
+		}
+
+		for _, mb := range mailboxes {
+			if !mb.HaveCounts {
+				errmsg := fmt.Sprintf("mailbox %q (id %d) does not have counts, should be %#v", mb.Name, mb.ID, counts[mb.ID])
+				errors = append(errors, errmsg)
+			} else if mb.MailboxCounts != counts[mb.ID] {
+				mbcounterr := fmt.Sprintf("mailbox %q (id %d) has wrong counts %s, should be %s", mb.Name, mb.ID, mb.MailboxCounts, counts[mb.ID])
+				errors = append(errors, mbcounterr)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	errors = append(errors, uiderrors...)
+	errors = append(errors, modseqerrors...)
+	errors = append(errors, fileerrors...)
+	if len(errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(errors, "; "))
+	}
+	return nil
 }
 
 // Conf returns the configuration for this account if it still exists. During
@@ -554,6 +958,33 @@ func (a *Account) NextUIDValidity(tx *bstore.Tx) (uint32, error) {
 		return 0, err
 	}
 	return v, nil
+}
+
+// NextModSeq returns the next modification sequence, which is global per account,
+// over all types.
+func (a *Account) NextModSeq(tx *bstore.Tx) (ModSeq, error) {
+	v := SyncState{ID: 1}
+	if err := tx.Get(&v); err == bstore.ErrAbsent {
+		// We start assigning from modseq 2. Modseq 0 is not usable, so returned as 1, so
+		// already used.
+		// HighestDeletedModSeq is -1 so comparison against the default ModSeq zero value
+		// makes sense.
+		v = SyncState{1, 2, -1}
+		return v.LastModSeq, tx.Insert(&v)
+	} else if err != nil {
+		return 0, err
+	}
+	v.LastModSeq++
+	return v.LastModSeq, tx.Update(&v)
+}
+
+func (a *Account) HighestDeletedModSeq(tx *bstore.Tx) (ModSeq, error) {
+	v := SyncState{ID: 1}
+	err := tx.Get(&v)
+	if err == bstore.ErrAbsent {
+		return 0, nil
+	}
+	return v.HighestDeletedModSeq, err
 }
 
 // WithWLock runs fn with account writelock held. Necessary for account/mailbox modification. For message delivery, a read lock is required.
@@ -579,16 +1010,25 @@ func (a *Account) WithRLock(fn func()) {
 // section. The caller is responsible for adding a header separator to
 // msg.MsgPrefix if missing from an incoming message.
 //
-// If isSent is true, the message is parsed for its recipients (to/cc/bcc). Their
-// domains are added to Recipients for use in dmarc reputation.
+// If the destination mailbox has the Sent special-use flag, the message is parsed
+// for its recipients (to/cc/bcc). Their domains are added to Recipients for use in
+// dmarc reputation.
 //
 // If sync is true, the message file and its directory are synced. Should be true
 // for regular mail delivery, but can be false when importing many messages.
 //
+// If CreateSeq/ModSeq is not set, it is assigned automatically.
+//
 // Must be called with account rlock or wlock.
 //
 // Caller must broadcast new message.
-func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFile *os.File, consumeFile, isSent, sync, notrain bool) error {
+//
+// Caller must update mailbox counts.
+func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFile *os.File, consumeFile, sync, notrain bool) error {
+	if m.Expunged {
+		return fmt.Errorf("cannot deliver expunged message")
+	}
+
 	mb := Mailbox{ID: m.MailboxID}
 	if err := tx.Get(&mb); err != nil {
 		return fmt.Errorf("get mailbox: %w", err)
@@ -622,12 +1062,21 @@ func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFi
 	if m.MailboxDestinedID != 0 && m.MailboxDestinedID == m.MailboxOrigID {
 		m.MailboxDestinedID = 0
 	}
+	if m.CreateSeq == 0 || m.ModSeq == 0 {
+		modseq, err := a.NextModSeq(tx)
+		if err != nil {
+			return fmt.Errorf("assigning next modseq: %w", err)
+		}
+		m.CreateSeq = modseq
+		m.ModSeq = modseq
+	}
 
 	if err := tx.Insert(m); err != nil {
 		return fmt.Errorf("inserting message: %w", err)
 	}
 
-	if isSent {
+	// todo: perhaps we should match the recipients based on smtp submission and a matching message-id? we now miss the addresses in bcc's. for webmail, we could insert the recipients directly.
+	if mb.Sent {
 		// Attempt to parse the message for its To/Cc/Bcc headers, which we insert into Recipient.
 		if part == nil {
 			var p message.Part
@@ -685,13 +1134,11 @@ func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFi
 
 	if consumeFile {
 		if err := os.Rename(msgFile.Name(), msgPath); err != nil {
+			// Could be due to cross-filesystem rename. Users shouldn't configure their systems that way.
 			return fmt.Errorf("moving msg file to destination directory: %w", err)
 		}
-	} else if err := os.Link(msgFile.Name(), msgPath); err != nil {
-		// Assume file system does not support hardlinks. Copy it instead.
-		if err := writeFile(msgPath, &moxio.AtReader{R: msgFile}); err != nil {
-			return fmt.Errorf("copying message to new file: %w", err)
-		}
+	} else if err := moxio.LinkOrCopy(log, msgPath, msgFile.Name(), &moxio.AtReader{R: msgFile}, true); err != nil {
+		return fmt.Errorf("linking/copying message to new file: %w", err)
 	}
 
 	if sync {
@@ -708,28 +1155,6 @@ func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFi
 		*m = l[0]
 	}
 
-	return nil
-}
-
-// write contents of r to new file dst, for delivering a message.
-func writeFile(dst string, r io.Reader) error {
-	df, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0660)
-	if err != nil {
-		return fmt.Errorf("create: %w", err)
-	}
-	defer func() {
-		if df != nil {
-			df.Close()
-		}
-	}()
-	if _, err := io.Copy(df, r); err != nil {
-		return fmt.Errorf("copy: %s", err)
-	} else if err := df.Sync(); err != nil {
-		return fmt.Errorf("sync: %s", err)
-	} else if err := df.Close(); err != nil {
-		return fmt.Errorf("close: %s", err)
-	}
-	df = nil
 	return nil
 }
 
@@ -865,21 +1290,24 @@ func (a *Account) MailboxEnsure(tx *bstore.Tx, name string, subscribe bool) (mb 
 			Name:        p,
 			UIDValidity: uidval,
 			UIDNext:     1,
+			HaveCounts:  true,
 		}
 		err = tx.Insert(&mb)
 		if err != nil {
 			return Mailbox{}, nil, fmt.Errorf("creating new mailbox: %v", err)
 		}
 
-		change := ChangeAddMailbox{Name: p}
+		var flags []string
 		if subscribe {
-			err := tx.Insert(&Subscription{p})
-			if err != nil && !errors.Is(err, bstore.ErrUnique) {
-				return Mailbox{}, nil, fmt.Errorf("subscribing to mailbox: %v", err)
+			if tx.Get(&Subscription{p}) != nil {
+				err := tx.Insert(&Subscription{p})
+				if err != nil {
+					return Mailbox{}, nil, fmt.Errorf("subscribing to mailbox: %v", err)
+				}
 			}
-			change.Flags = []string{`\Subscribed`}
+			flags = []string{`\Subscribed`}
 		}
-		changes = append(changes, change)
+		changes = append(changes, ChangeAddMailbox{mb, flags})
 	}
 	return mb, changes, nil
 }
@@ -920,14 +1348,13 @@ func (a *Account) SubscriptionEnsure(tx *bstore.Tx, name string) ([]Change, erro
 
 	q := bstore.QueryTx[Mailbox](tx)
 	q.FilterEqual("Name", name)
-	exists, err := q.Exists()
-	if err != nil {
+	_, err := q.Get()
+	if err == nil {
+		return []Change{ChangeAddSubscription{name, nil}}, nil
+	} else if err != bstore.ErrAbsent {
 		return nil, fmt.Errorf("looking up mailbox for subscription: %w", err)
 	}
-	if exists {
-		return []Change{ChangeAddSubscription{name}}, nil
-	}
-	return []Change{ChangeAddMailbox{Name: name, Flags: []string{`\Subscribed`, `\NonExistent`}}}, nil
+	return []Change{ChangeAddSubscription{name, []string{`\NonExistent`}}}, nil
 }
 
 // MessageRuleset returns the first ruleset (if any) that message the message
@@ -1018,7 +1445,8 @@ func (a *Account) MessageReader(m Message) *MsgReader {
 // Deliver delivers an email to dest, based on the configured rulesets.
 //
 // Caller must hold account wlock (mailbox may be created).
-// Message delivery and possible mailbox creation are broadcasted.
+// Message delivery, possible mailbox creation, and updated mailbox counts are
+// broadcasted.
 func (a *Account) Deliver(log *mlog.Log, dest config.Destination, m *Message, msgFile *os.File, consumeFile bool) error {
 	var mailbox string
 	rs := MessageRuleset(log, dest, m, m.MsgPrefix, msgFile)
@@ -1035,7 +1463,8 @@ func (a *Account) Deliver(log *mlog.Log, dest config.Destination, m *Message, ms
 // DeliverMailbox delivers an email to the specified mailbox.
 //
 // Caller must hold account wlock (mailbox may be created).
-// Message delivery and possible mailbox creation are broadcasted.
+// Message delivery, possible mailbox creation, and updated mailbox counts are
+// broadcasted.
 func (a *Account) DeliverMailbox(log *mlog.Log, mailbox string, m *Message, msgFile *os.File, consumeFile bool) error {
 	var changes []Change
 	err := a.DB.Write(context.TODO(), func(tx *bstore.Tx) error {
@@ -1045,19 +1474,28 @@ func (a *Account) DeliverMailbox(log *mlog.Log, mailbox string, m *Message, msgF
 		}
 		m.MailboxID = mb.ID
 		m.MailboxOrigID = mb.ID
-		changes = append(changes, chl...)
 
-		return a.DeliverMessage(log, tx, m, msgFile, consumeFile, mb.Sent, true, false)
+		// Update count early, DeliverMessage will update mb too and we don't want to fetch
+		// it again before updating.
+		mb.MailboxCounts.Add(m.MailboxCounts())
+		if err := tx.Update(&mb); err != nil {
+			return fmt.Errorf("updating mailbox for delivery: %w", err)
+		}
+
+		if err := a.DeliverMessage(log, tx, m, msgFile, consumeFile, true, false); err != nil {
+			return err
+		}
+
+		changes = append(changes, chl...)
+		changes = append(changes, m.ChangeAddUID(), mb.ChangeCounts())
+		return nil
 	})
 	// todo: if rename succeeded but transaction failed, we should remove the file.
 	if err != nil {
 		return err
 	}
 
-	changes = append(changes, ChangeAddUID{m.MailboxID, m.UID, m.Flags})
-	comm := RegisterComm(a)
-	defer comm.Unregister()
-	comm.Broadcast(changes)
+	BroadcastChanges(a, changes)
 	return nil
 }
 
@@ -1092,13 +1530,14 @@ func (a *Account) TidyRejectsMailbox(log *mlog.Log, rejectsMailbox string) (hasS
 		old := time.Now().Add(-14 * 24 * time.Hour)
 		qdel := bstore.QueryTx[Message](tx)
 		qdel.FilterNonzero(Message{MailboxID: mb.ID})
+		qdel.FilterEqual("Expunged", false)
 		qdel.FilterLess("Received", old)
 		remove, err = qdel.List()
 		if err != nil {
 			return fmt.Errorf("listing old messages: %w", err)
 		}
 
-		changes, err = a.removeMessages(context.TODO(), log, tx, mb, remove)
+		changes, err = a.rejectsRemoveMessages(context.TODO(), log, tx, mb, remove)
 		if err != nil {
 			return fmt.Errorf("removing messages: %w", err)
 		}
@@ -1106,6 +1545,7 @@ func (a *Account) TidyRejectsMailbox(log *mlog.Log, rejectsMailbox string) (hasS
 		// We allow up to n messages.
 		qcount := bstore.QueryTx[Message](tx)
 		qcount.FilterNonzero(Message{MailboxID: mb.ID})
+		qcount.FilterEqual("Expunged", false)
 		qcount.Limit(1000)
 		n, err := qcount.Count()
 		if err != nil {
@@ -1120,14 +1560,12 @@ func (a *Account) TidyRejectsMailbox(log *mlog.Log, rejectsMailbox string) (hasS
 		return false, err
 	}
 
-	comm := RegisterComm(a)
-	defer comm.Unregister()
-	comm.Broadcast(changes)
+	BroadcastChanges(a, changes)
 
 	return hasSpace, nil
 }
 
-func (a *Account) removeMessages(ctx context.Context, log *mlog.Log, tx *bstore.Tx, mb *Mailbox, l []Message) ([]Change, error) {
+func (a *Account) rejectsRemoveMessages(ctx context.Context, log *mlog.Log, tx *bstore.Tx, mb *Mailbox, l []Message) ([]Change, error) {
 	if len(l) == 0 {
 		return nil, nil
 	}
@@ -1146,28 +1584,43 @@ func (a *Account) removeMessages(ctx context.Context, log *mlog.Log, tx *bstore.
 		return nil, fmt.Errorf("deleting from message recipient: %w", err)
 	}
 
-	// Actually remove the messages.
-	qdm := bstore.QueryTx[Message](tx)
-	qdm.FilterIDs(ids)
-	var deleted []Message
-	qdm.Gather(&deleted)
-	if _, err := qdm.Delete(); err != nil {
-		return nil, fmt.Errorf("deleting from messages: %w", err)
+	// Assign new modseq.
+	modseq, err := a.NextModSeq(tx)
+	if err != nil {
+		return nil, fmt.Errorf("assign next modseq: %w", err)
+	}
+
+	// Expunge the messages.
+	qx := bstore.QueryTx[Message](tx)
+	qx.FilterIDs(ids)
+	var expunged []Message
+	qx.Gather(&expunged)
+	if _, err := qx.UpdateNonzero(Message{ModSeq: modseq, Expunged: true}); err != nil {
+		return nil, fmt.Errorf("expunging messages: %w", err)
+	}
+
+	for _, m := range expunged {
+		m.Expunged = false // Was set by update, but would cause wrong count.
+		mb.MailboxCounts.Sub(m.MailboxCounts())
+	}
+	if err := tx.Update(mb); err != nil {
+		return nil, fmt.Errorf("updating mailbox counts: %w", err)
 	}
 
 	// Mark as neutral and train so junk filter gets untrained with these (junk) messages.
-	for i := range deleted {
-		deleted[i].Junk = false
-		deleted[i].Notjunk = false
+	for i := range expunged {
+		expunged[i].Junk = false
+		expunged[i].Notjunk = false
 	}
-	if err := a.RetrainMessages(ctx, log, tx, deleted, true); err != nil {
-		return nil, fmt.Errorf("training deleted messages: %w", err)
+	if err := a.RetrainMessages(ctx, log, tx, expunged, true); err != nil {
+		return nil, fmt.Errorf("retraining expunged messages: %w", err)
 	}
 
-	changes := make([]Change, len(l))
+	changes := make([]Change, len(l), len(l)+1)
 	for i, m := range l {
-		changes[i] = ChangeRemoveUIDs{mb.ID, []UID{m.UID}}
+		changes[i] = ChangeRemoveUIDs{mb.ID, []UID{m.UID}, modseq}
 	}
+	changes = append(changes, mb.ChangeCounts())
 	return changes, nil
 }
 
@@ -1197,12 +1650,13 @@ func (a *Account) RejectsRemove(log *mlog.Log, rejectsMailbox, messageID string)
 
 		q := bstore.QueryTx[Message](tx)
 		q.FilterNonzero(Message{MailboxID: mb.ID, MessageID: messageID})
+		q.FilterEqual("Expunged", false)
 		remove, err = q.List()
 		if err != nil {
 			return fmt.Errorf("listing messages to remove: %w", err)
 		}
 
-		changes, err = a.removeMessages(context.TODO(), log, tx, mb, remove)
+		changes, err = a.rejectsRemoveMessages(context.TODO(), log, tx, mb, remove)
 		if err != nil {
 			return fmt.Errorf("removing messages: %w", err)
 		}
@@ -1214,9 +1668,7 @@ func (a *Account) RejectsRemove(log *mlog.Log, rejectsMailbox, messageID string)
 		return err
 	}
 
-	comm := RegisterComm(a)
-	defer comm.Unregister()
-	comm.Broadcast(changes)
+	BroadcastChanges(a, changes)
 
 	return nil
 }
@@ -1348,24 +1800,455 @@ func (f Flags) Set(mask, flags Flags) Flags {
 	return r
 }
 
-// FlagsQuerySet returns a map with the flags that are true in mask, with
-// values from flags.
-func FlagsQuerySet(mask, flags Flags) map[string]any {
-	r := map[string]any{}
-	set := func(f string, m, v bool) {
-		if m {
-			r[f] = v
+// Changed returns a mask of flags that have been between f and other.
+func (f Flags) Changed(other Flags) (mask Flags) {
+	mask.Seen = f.Seen != other.Seen
+	mask.Answered = f.Answered != other.Answered
+	mask.Flagged = f.Flagged != other.Flagged
+	mask.Forwarded = f.Forwarded != other.Forwarded
+	mask.Junk = f.Junk != other.Junk
+	mask.Notjunk = f.Notjunk != other.Notjunk
+	mask.Deleted = f.Deleted != other.Deleted
+	mask.Draft = f.Draft != other.Draft
+	mask.Phishing = f.Phishing != other.Phishing
+	mask.MDNSent = f.MDNSent != other.MDNSent
+	return
+}
+
+var systemWellKnownFlags = map[string]bool{
+	`\answered`:  true,
+	`\flagged`:   true,
+	`\deleted`:   true,
+	`\seen`:      true,
+	`\draft`:     true,
+	`$junk`:      true,
+	`$notjunk`:   true,
+	`$forwarded`: true,
+	`$phishing`:  true,
+	`$mdnsent`:   true,
+}
+
+// ParseFlagsKeywords parses a list of textual flags into system/known flags, and
+// other keywords. Keywords are lower-cased and sorted and check for valid syntax.
+func ParseFlagsKeywords(l []string) (flags Flags, keywords []string, rerr error) {
+	fields := map[string]*bool{
+		`\answered`:  &flags.Answered,
+		`\flagged`:   &flags.Flagged,
+		`\deleted`:   &flags.Deleted,
+		`\seen`:      &flags.Seen,
+		`\draft`:     &flags.Draft,
+		`$junk`:      &flags.Junk,
+		`$notjunk`:   &flags.Notjunk,
+		`$forwarded`: &flags.Forwarded,
+		`$phishing`:  &flags.Phishing,
+		`$mdnsent`:   &flags.MDNSent,
+	}
+	seen := map[string]bool{}
+	for _, f := range l {
+		f = strings.ToLower(f)
+		if field, ok := fields[f]; ok {
+			*field = true
+		} else if seen[f] {
+			if moxvar.Pedantic {
+				return Flags{}, nil, fmt.Errorf("duplicate keyword %s", f)
+			}
+		} else {
+			if err := CheckKeyword(f); err != nil {
+				return Flags{}, nil, fmt.Errorf("invalid keyword %s", f)
+			}
+			keywords = append(keywords, f)
+			seen[f] = true
 		}
 	}
-	set("Seen", mask.Seen, flags.Seen)
-	set("Answered", mask.Answered, flags.Answered)
-	set("Flagged", mask.Flagged, flags.Flagged)
-	set("Forwarded", mask.Forwarded, flags.Forwarded)
-	set("Junk", mask.Junk, flags.Junk)
-	set("Notjunk", mask.Notjunk, flags.Notjunk)
-	set("Deleted", mask.Deleted, flags.Deleted)
-	set("Draft", mask.Draft, flags.Draft)
-	set("Phishing", mask.Phishing, flags.Phishing)
-	set("MDNSent", mask.MDNSent, flags.MDNSent)
-	return r
+	sort.Strings(keywords)
+	return flags, keywords, nil
+}
+
+// RemoveKeywords removes keywords from l, returning whether any modifications were
+// made, and a slice, a new slice in case of modifications. Keywords must have been
+// validated earlier, e.g. through ParseFlagKeywords or CheckKeyword. Should only
+// be used with valid keywords, not with system flags like \Seen.
+func RemoveKeywords(l, remove []string) ([]string, bool) {
+	var copied bool
+	var changed bool
+	for _, k := range remove {
+		if i := slices.Index(l, k); i >= 0 {
+			if !copied {
+				l = append([]string{}, l...)
+				copied = true
+			}
+			copy(l[i:], l[i+1:])
+			l = l[:len(l)-1]
+			changed = true
+		}
+	}
+	return l, changed
+}
+
+// MergeKeywords adds keywords from add into l, returning whether it added any
+// keyword, and the slice with keywords, a new slice if modifications were made.
+// Keywords are only added if they aren't already present. Should only be used with
+// keywords, not with system flags like \Seen.
+func MergeKeywords(l, add []string) ([]string, bool) {
+	var copied bool
+	var changed bool
+	for _, k := range add {
+		if !slices.Contains(l, k) {
+			if !copied {
+				l = append([]string{}, l...)
+				copied = true
+			}
+			l = append(l, k)
+			changed = true
+		}
+	}
+	if changed {
+		sort.Strings(l)
+	}
+	return l, changed
+}
+
+// CheckKeyword returns an error if kw is not a valid keyword. Kw should
+// already be in lower-case.
+func CheckKeyword(kw string) error {
+	if kw == "" {
+		return fmt.Errorf("keyword cannot be empty")
+	}
+	if systemWellKnownFlags[kw] {
+		return fmt.Errorf("cannot use well-known flag as keyword")
+	}
+	for _, c := range kw {
+		// ../rfc/9051:6334
+		if c <= ' ' || c > 0x7e || c >= 'A' && c <= 'Z' || strings.ContainsRune(`(){%*"\]`, c) {
+			return errors.New(`not a valid keyword, must be lower-case ascii without spaces and without any of these characters: (){%*"\]`)
+		}
+	}
+	return nil
+}
+
+// SendLimitReached checks whether sending a message to recipients would reach
+// the limit of outgoing messages for the account. If so, the message should
+// not be sent. If the returned numbers are >= 0, the limit was reached and the
+// values are the configured limits.
+//
+// To limit damage to the internet and our reputation in case of account
+// compromise, we limit the max number of messages sent in a 24 hour window, both
+// total number of messages and number of first-time recipients.
+func (a *Account) SendLimitReached(tx *bstore.Tx, recipients []smtp.Path) (msglimit, rcptlimit int, rerr error) {
+	conf, _ := a.Conf()
+	msgmax := conf.MaxOutgoingMessagesPerDay
+	if msgmax == 0 {
+		// For human senders, 1000 recipients in a day is quite a lot.
+		msgmax = 1000
+	}
+	rcptmax := conf.MaxFirstTimeRecipientsPerDay
+	if rcptmax == 0 {
+		// Human senders may address a new human-sized list of people once in a while. In
+		// case of a compromise, a spammer will probably try to send to many new addresses.
+		rcptmax = 200
+	}
+
+	rcpts := map[string]time.Time{}
+	n := 0
+	err := bstore.QueryTx[Outgoing](tx).FilterGreater("Submitted", time.Now().Add(-24*time.Hour)).ForEach(func(o Outgoing) error {
+		n++
+		if rcpts[o.Recipient].IsZero() || o.Submitted.Before(rcpts[o.Recipient]) {
+			rcpts[o.Recipient] = o.Submitted
+		}
+		return nil
+	})
+	if err != nil {
+		return -1, -1, fmt.Errorf("querying message recipients in past 24h: %w", err)
+	}
+	if n+len(recipients) > msgmax {
+		return msgmax, -1, nil
+	}
+
+	// Only check if max first-time recipients is reached if there are enough messages
+	// to trigger the limit.
+	if n+len(recipients) < rcptmax {
+		return -1, -1, nil
+	}
+
+	isFirstTime := func(rcpt string, before time.Time) (bool, error) {
+		exists, err := bstore.QueryTx[Outgoing](tx).FilterNonzero(Outgoing{Recipient: rcpt}).FilterLess("Submitted", before).Exists()
+		return !exists, err
+	}
+
+	firsttime := 0
+	now := time.Now()
+	for _, r := range recipients {
+		if first, err := isFirstTime(r.XString(true), now); err != nil {
+			return -1, -1, fmt.Errorf("checking whether recipient is first-time: %v", err)
+		} else if first {
+			firsttime++
+		}
+	}
+	for r, t := range rcpts {
+		if first, err := isFirstTime(r, t); err != nil {
+			return -1, -1, fmt.Errorf("checking whether recipient is first-time: %v", err)
+		} else if first {
+			firsttime++
+		}
+	}
+	if firsttime > rcptmax {
+		return -1, rcptmax, nil
+	}
+	return -1, -1, nil
+}
+
+// MailboxCreate creates a new mailbox, including any missing parent mailboxes,
+// the total list of created mailboxes is returned in created. On success, if
+// exists is false and rerr nil, the changes must be broadcasted by the caller.
+//
+// Name must be in normalized form.
+func (a *Account) MailboxCreate(tx *bstore.Tx, name string) (changes []Change, created []string, exists bool, rerr error) {
+	elems := strings.Split(name, "/")
+	var p string
+	for i, elem := range elems {
+		if i > 0 {
+			p += "/"
+		}
+		p += elem
+		exists, err := a.MailboxExists(tx, p)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("checking if mailbox exists")
+		}
+		if exists {
+			if i == len(elems)-1 {
+				return nil, nil, true, fmt.Errorf("mailbox already exists")
+			}
+			continue
+		}
+		_, nchanges, err := a.MailboxEnsure(tx, p, true)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("ensuring mailbox exists")
+		}
+		changes = append(changes, nchanges...)
+		created = append(created, p)
+	}
+	return changes, created, false, nil
+}
+
+// MailboxRename renames mailbox mbsrc to dst, and any missing parents for the
+// destination, and any children of mbsrc and the destination.
+//
+// Names must be normalized and cannot be Inbox.
+func (a *Account) MailboxRename(tx *bstore.Tx, mbsrc Mailbox, dst string) (changes []Change, isInbox, notExists, alreadyExists bool, rerr error) {
+	if mbsrc.Name == "Inbox" || dst == "Inbox" {
+		return nil, true, false, false, fmt.Errorf("inbox cannot be renamed")
+	}
+
+	// We gather existing mailboxes that we need for deciding what to create/delete/update.
+	q := bstore.QueryTx[Mailbox](tx)
+	srcPrefix := mbsrc.Name + "/"
+	dstRoot := strings.SplitN(dst, "/", 2)[0]
+	dstRootPrefix := dstRoot + "/"
+	q.FilterFn(func(mb Mailbox) bool {
+		return mb.Name == mbsrc.Name || strings.HasPrefix(mb.Name, srcPrefix) || mb.Name == dstRoot || strings.HasPrefix(mb.Name, dstRootPrefix)
+	})
+	q.SortAsc("Name") // We'll rename the parents before children.
+	l, err := q.List()
+	if err != nil {
+		return nil, false, false, false, fmt.Errorf("listing relevant mailboxes: %v", err)
+	}
+
+	mailboxes := map[string]Mailbox{}
+	for _, mb := range l {
+		mailboxes[mb.Name] = mb
+	}
+
+	if _, ok := mailboxes[mbsrc.Name]; !ok {
+		return nil, false, true, false, fmt.Errorf("mailbox does not exist")
+	}
+
+	uidval, err := a.NextUIDValidity(tx)
+	if err != nil {
+		return nil, false, false, false, fmt.Errorf("next uid validity: %v", err)
+	}
+
+	// Ensure parent mailboxes for the destination paths exist.
+	var parent string
+	dstElems := strings.Split(dst, "/")
+	for i, elem := range dstElems[:len(dstElems)-1] {
+		if i > 0 {
+			parent += "/"
+		}
+		parent += elem
+
+		mb, ok := mailboxes[parent]
+		if ok {
+			continue
+		}
+		omb := mb
+		mb = Mailbox{
+			ID:          omb.ID,
+			Name:        parent,
+			UIDValidity: uidval,
+			UIDNext:     1,
+			HaveCounts:  true,
+		}
+		if err := tx.Insert(&mb); err != nil {
+			return nil, false, false, false, fmt.Errorf("creating parent mailbox %q: %v", mb.Name, err)
+		}
+		if err := tx.Get(&Subscription{Name: parent}); err != nil {
+			if err := tx.Insert(&Subscription{Name: parent}); err != nil {
+				return nil, false, false, false, fmt.Errorf("creating subscription for %q: %v", parent, err)
+			}
+		}
+		changes = append(changes, ChangeAddMailbox{Mailbox: mb, Flags: []string{`\Subscribed`}})
+	}
+
+	// Process src mailboxes, renaming them to dst.
+	for _, srcmb := range l {
+		if srcmb.Name != mbsrc.Name && !strings.HasPrefix(srcmb.Name, srcPrefix) {
+			continue
+		}
+		srcName := srcmb.Name
+		dstName := dst + srcmb.Name[len(mbsrc.Name):]
+		if _, ok := mailboxes[dstName]; ok {
+			return nil, false, false, true, fmt.Errorf("destination mailbox %q already exists", dstName)
+		}
+
+		srcmb.Name = dstName
+		srcmb.UIDValidity = uidval
+		if err := tx.Update(&srcmb); err != nil {
+			return nil, false, false, false, fmt.Errorf("renaming mailbox: %v", err)
+		}
+
+		var dstFlags []string
+		if tx.Get(&Subscription{Name: dstName}) == nil {
+			dstFlags = []string{`\Subscribed`}
+		}
+		changes = append(changes, ChangeRenameMailbox{MailboxID: srcmb.ID, OldName: srcName, NewName: dstName, Flags: dstFlags})
+	}
+
+	// If we renamed e.g. a/b to a/b/c/d, and a/b/c to a/b/c/d/c, we'll have to recreate a/b and a/b/c.
+	srcElems := strings.Split(mbsrc.Name, "/")
+	xsrc := mbsrc.Name
+	for i := 0; i < len(dstElems) && strings.HasPrefix(dst, xsrc+"/"); i++ {
+		mb := Mailbox{
+			UIDValidity: uidval,
+			UIDNext:     1,
+			Name:        xsrc,
+			HaveCounts:  true,
+		}
+		if err := tx.Insert(&mb); err != nil {
+			return nil, false, false, false, fmt.Errorf("creating mailbox at old path %q: %v", mb.Name, err)
+		}
+		xsrc += "/" + dstElems[len(srcElems)+i]
+	}
+	return changes, false, false, false, nil
+}
+
+// MailboxDelete deletes a mailbox by ID. If it has children, the return value
+// indicates that and an error is returned.
+//
+// Caller should broadcast the changes and remove files for the removed message IDs.
+func (a *Account) MailboxDelete(ctx context.Context, log *mlog.Log, tx *bstore.Tx, mailbox Mailbox) (changes []Change, removeMessageIDs []int64, hasChildren bool, rerr error) {
+	// Look for existence of child mailboxes. There is a lot of text in the IMAP RFCs about
+	// NoInferior and NoSelect. We just require only leaf mailboxes are deleted.
+	qmb := bstore.QueryTx[Mailbox](tx)
+	mbprefix := mailbox.Name + "/"
+	qmb.FilterFn(func(mb Mailbox) bool {
+		return strings.HasPrefix(mb.Name, mbprefix)
+	})
+	if childExists, err := qmb.Exists(); err != nil {
+		return nil, nil, false, fmt.Errorf("checking if mailbox has child: %v", err)
+	} else if childExists {
+		return nil, nil, true, fmt.Errorf("mailbox has a child, only leaf mailboxes can be deleted")
+	}
+
+	// todo jmap: instead of completely deleting a mailbox and its messages, we need to mark them all as expunged.
+
+	qm := bstore.QueryTx[Message](tx)
+	qm.FilterNonzero(Message{MailboxID: mailbox.ID})
+	remove, err := qm.List()
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("listing messages to remove: %v", err)
+	}
+
+	if len(remove) > 0 {
+		removeIDs := make([]any, len(remove))
+		for i, m := range remove {
+			removeIDs[i] = m.ID
+		}
+		qmr := bstore.QueryTx[Recipient](tx)
+		qmr.FilterEqual("MessageID", removeIDs...)
+		if _, err = qmr.Delete(); err != nil {
+			return nil, nil, false, fmt.Errorf("removing message recipients for messages: %v", err)
+		}
+
+		qm = bstore.QueryTx[Message](tx)
+		qm.FilterNonzero(Message{MailboxID: mailbox.ID})
+		if _, err := qm.Delete(); err != nil {
+			return nil, nil, false, fmt.Errorf("removing messages: %v", err)
+		}
+
+		for _, m := range remove {
+			if !m.Expunged {
+				removeMessageIDs = append(removeMessageIDs, m.ID)
+			}
+		}
+
+		// Mark messages as not needing training. Then retrain them, so they are untrained if they were.
+		n := 0
+		o := 0
+		for _, m := range remove {
+			if !m.Expunged {
+				remove[o] = m
+				remove[o].Junk = false
+				remove[o].Notjunk = false
+				n++
+			}
+		}
+		remove = remove[:n]
+		if err := a.RetrainMessages(ctx, log, tx, remove, true); err != nil {
+			return nil, nil, false, fmt.Errorf("untraining deleted messages: %v", err)
+		}
+	}
+
+	if err := tx.Delete(&Mailbox{ID: mailbox.ID}); err != nil {
+		return nil, nil, false, fmt.Errorf("removing mailbox: %v", err)
+	}
+	return []Change{ChangeRemoveMailbox{MailboxID: mailbox.ID, Name: mailbox.Name}}, removeMessageIDs, false, nil
+}
+
+// CheckMailboxName checks if name is valid, returning an INBOX-normalized name.
+// I.e. it changes various casings of INBOX and INBOX/* to Inbox and Inbox/*.
+// Name is invalid if it contains leading/trailing/double slashes, or when it isn't
+// unicode-normalized, or when empty or has special characters.
+//
+// If name is the inbox, and allowInbox is false, this is indicated with the isInbox return parameter.
+// For that case, and for other invalid names, an error is returned.
+func CheckMailboxName(name string, allowInbox bool) (normalizedName string, isInbox bool, rerr error) {
+	first := strings.SplitN(name, "/", 2)[0]
+	if strings.EqualFold(first, "inbox") {
+		if len(name) == len("inbox") && !allowInbox {
+			return "", true, fmt.Errorf("special mailbox name Inbox not allowed")
+		}
+		name = "Inbox" + name[len("Inbox"):]
+	}
+
+	if norm.NFC.String(name) != name {
+		return "", false, errors.New("non-unicode-normalized mailbox names not allowed")
+	}
+
+	if name == "" {
+		return "", false, errors.New("empty mailbox name")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
+		return "", false, errors.New("bad slashes in mailbox name")
+	}
+	for _, c := range name {
+		switch c {
+		case '%', '*', '#', '&':
+			return "", false, fmt.Errorf("character %c not allowed in mailbox name", c)
+		}
+		// ../rfc/6855:192
+		if c <= 0x1f || c >= 0x7f && c <= 0x9f || c == 0x2028 || c == 0x2029 {
+			return "", false, errors.New("control characters not allowed in mailbox name")
+		}
+	}
+	return name, false, nil
 }

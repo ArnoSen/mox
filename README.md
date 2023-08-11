@@ -5,10 +5,10 @@ See Quickstart below to get started.
 ## Features
 
 - Quick and easy to start/maintain mail server, for your own domain(s).
-- SMTP (with extensions) for receiving and submitting email.
+- SMTP (with extensions) for receiving, submitting and delivering email.
 - IMAP4 (with extensions) for giving email clients access to email.
 - Automatic TLS with ACME, for use with Let's Encrypt and other CA's.
-- SPF, verifying that a remote host is allowed to sent email for a domain.
+- SPF, verifying that a remote host is allowed to send email for a domain.
 - DKIM, verifying that a message is signed by the claimed sender domain,
   and for signing emails sent by mox for others to verify.
 - DMARC, for enforcing SPF/DKIM policies set by domains. Incoming DMARC
@@ -31,6 +31,7 @@ See Quickstart below to get started.
   accounts/domains, and modifying the configuration file.
 - Autodiscovery (with SRV records, Microsoft-style and Thunderbird-style) for
   easy account setup (though not many clients support it).
+- Webmail for reading/sending email from the browser.
 - Webserver with serving static files and forwarding requests (reverse
   proxy), so port 443 can also be used to serve websites.
 - Prometheus metrics and structured logging for operational insight.
@@ -51,8 +52,8 @@ https://go.dev/doc/manage-install and $HOME/go/bin):
 	GOBIN=$PWD CGO_ENABLED=0 go install github.com/mjl-/mox@latest
 
 Or you can download a binary built with the latest Go toolchain from
-https://beta.gobuilds.org/github.com/mjl-/mox, and symlink or rename it to
-"mox".
+https://beta.gobuilds.org/github.com/mjl-/mox@latest/linux-amd64-latest/, and
+symlink or rename it to "mox".
 
 Verify you have a working mox binary:
 
@@ -108,21 +109,26 @@ The code is heavily cross-referenced with the RFCs for readability/maintainabili
 
 ## Roadmap
 
-- Privilege separation, isolating parts of the application to more restricted
-  sandbox (e.g. new unauthenticated connections).
-- DANE and DNSSEC.
-- Sending DMARC and TLS reports (currently only receiving).
-- OAUTH2 support, for single sign on.
-- Add special IMAP mailbox ("Queue?") that contains queued but
-  not-yet-delivered messages.
-- Sieve for filtering (for now see Rulesets in the account config)
-- Calendaring
-- IMAP CONDSTORE and QRESYNC extensions
+- Improve message parsing, more lenient for imported messages
+- Rewrite account and admin javascript to typescript
+- Prepare data storage for JMAP
 - IMAP THREAD extension
-- Using mox as backup MX.
-- Old-style internationalization in messages.
+- DANE and DNSSEC
+- Sending DMARC and TLS reports (currently only receiving)
+- Accepting/processing/monitoring DMARC reports for external domains
+- Calendaring
+- OAUTH2 support, for single sign on
+- Add special IMAP mailbox ("Queue?") that contains queued but
+  not-yet-delivered messages
+- Sieve for filtering (for now see Rulesets in the account config)
+- Privilege separation, isolating parts of the application to more restricted
+  sandbox (e.g. new unauthenticated connections)
+- Using mox as backup MX
+- ARC, with forwarded email from trusted source
 - JMAP
-- Webmail
+- Autoresponder (out of office/vacation)
+- HTTP-based API for sending messages and receiving delivery feedback
+- Milter support, for integration with external tools
 
 There are many smaller improvements to make as well, search for "todo" in the code.
 
@@ -130,15 +136,13 @@ There are many smaller improvements to make as well, search for "todo" in the co
 
 But perhaps in the future...
 
-- HTTP-based API for sending messages and receiving delivery feedback
 - Functioning as SMTP relay
 - Forwarding (to an external address)
-- Autoresponders
 - POP3
 - Delivery to (unix) OS system users
 - Mailing list manager
 - Support for pluggable delivery mechanisms
-- iOS Mail push notifications (with XAPPLEPUSHSERVICE undocumened imap
+- iOS Mail push notifications (with XAPPLEPUSHSERVICE undocumented imap
   extension and hard to get APNS certificate)
 
 
@@ -179,6 +183,9 @@ and copy or move messages from one account to the other.
 
 Similarly, see the export functionality on the accounts web page and the "mox
 export maildir" and "mox export mbox" subcommands to export email.
+
+Importing large mailboxes may require a lot of memory (a limitation of the
+current database). Splitting up mailboxes in smaller parts would help.
 
 ## How can I help?
 
@@ -350,3 +357,26 @@ domain. Sending messages with content that resembles known spam messages.
 Should your email be rejected, you will typically get an error message that
 explains why. In the case of big email providers the error message often has
 instructions on how to prove to them you are a legimate sender.
+
+## Can I use existing TLS certificates/keys?
+
+Yes. The quickstart command creates a config that uses ACME with Let's Encrypt,
+but you can change the config file to use existing certificate and key files.
+
+You'll see "ACME: letsencrypt" in the "TLS" section of the "public" Listener.
+Remove or comment out the ACME-line, and add a "KeyCerts" section like in the
+example config file in
+https://pkg.go.dev/github.com/mjl-/mox/config#hdr-mox_conf. You can have
+multiple certificates and keys: The line with the "-" (dash) is the start of a
+list item. Duplicate that line up to and including the line with KeyFile for
+each certificate/key you have. Mox makes a TLS config that holds all specified
+certificates/keys, and uses it for all services for that Listener (including a
+webserver), choosing the correct certificate for incoming requests.
+
+Keep in mind that for each email domain you host, you will need a certificate
+for `mta-sts.<domain>` and `autoconfig.<domain>`, unless you disable MTA-STS
+and autoconfig for that domain.
+
+Mox opens the key and certificate files during initial startup, as root (and
+passes file descriptors to the unprivileged process).  No special permissions
+are needed on the key and certificate files.

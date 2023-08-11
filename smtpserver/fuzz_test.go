@@ -31,7 +31,7 @@ func FuzzServer(f *testing.F) {
 
 	mox.Context = ctxbg
 	mox.ConfigStaticPath = "../testdata/smtpserverfuzz/mox.conf"
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	dataDir := mox.ConfigDirPath(mox.Conf.Static.DataDir)
 	os.RemoveAll(dataDir)
 	acc, err := store.OpenAccount("mjl")
@@ -43,8 +43,7 @@ func FuzzServer(f *testing.F) {
 	if err != nil {
 		f.Fatalf("set password: %v", err)
 	}
-	done := store.Switchboard()
-	defer close(done)
+	defer store.Switchboard()()
 	err = queue.Init()
 	if err != nil {
 		f.Fatalf("queue init: %v", err)
@@ -100,7 +99,7 @@ func FuzzServer(f *testing.F) {
 			const submission = false
 			err := serverConn.SetDeadline(time.Now().Add(time.Second))
 			flog(err, "set server deadline")
-			serve("test", cid, dns.Domain{ASCII: "mox.example"}, nil, serverConn, resolver, submission, false, 100<<10, false, false, nil)
+			serve("test", cid, dns.Domain{ASCII: "mox.example"}, nil, serverConn, resolver, submission, false, 100<<10, false, false, nil, 0)
 			cid++
 		}
 

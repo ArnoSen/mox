@@ -36,11 +36,17 @@ this is html.
 func (tc *testconn) xsearch(nums ...uint32) {
 	tc.t.Helper()
 
+	tc.xuntagged(imapclient.UntaggedSearch(nums))
+}
+
+func (tc *testconn) xsearchmodseq(modseq int64, nums ...uint32) {
+	tc.t.Helper()
+
 	if len(nums) == 0 {
 		tc.xnountagged()
 		return
 	}
-	tc.xuntagged(imapclient.UntaggedSearch(nums))
+	tc.xuntagged(imapclient.UntaggedSearchModSeq{Nums: nums, ModSeq: modseq})
 }
 
 func (tc *testconn) xesearch(exp imapclient.UntaggedEsearch) {
@@ -79,6 +85,8 @@ func TestSearch(t *testing.T) {
 		`$Notjunk`,
 		`$Phishing`,
 		`$MDNSent`,
+		`custom1`,
+		`Custom2`,
 	}
 	tc.client.Append("inbox", mostFlags, &received, []byte(searchMsg))
 
@@ -103,6 +111,14 @@ func TestSearch(t *testing.T) {
 
 	tc.transactf("ok", `search body "Joe"`)
 	tc.xsearch(1)
+	tc.transactf("ok", `search body "Joe" body "bogus"`)
+	tc.xsearch()
+	tc.transactf("ok", `search body "Joe" text "Blurdybloop"`)
+	tc.xsearch(1)
+	tc.transactf("ok", `search body "Joe" not text "mox"`)
+	tc.xsearch(1)
+	tc.transactf("ok", `search body "Joe" not not body "Joe"`)
+	tc.xsearch(1)
 	tc.transactf("ok", `search body "this is plain text"`)
 	tc.xsearch(2, 3)
 	tc.transactf("ok", `search body "this is html"`)
@@ -121,6 +137,12 @@ func TestSearch(t *testing.T) {
 	tc.xsearch(1)
 
 	tc.transactf("ok", `search keyword $Forwarded`)
+	tc.xsearch(3)
+
+	tc.transactf("ok", `search keyword Custom1`)
+	tc.xsearch(3)
+
+	tc.transactf("ok", `search keyword custom2`)
 	tc.xsearch(3)
 
 	tc.transactf("ok", `search new`)
@@ -162,6 +184,9 @@ func TestSearch(t *testing.T) {
 	tc.transactf("ok", `search unkeyword $Junk`)
 	tc.xsearch(1, 2)
 
+	tc.transactf("ok", `search unkeyword custom1`)
+	tc.xsearch(1, 2)
+
 	tc.transactf("ok", `search unseen`)
 	tc.xsearch(1, 2)
 
@@ -201,6 +226,9 @@ func TestSearch(t *testing.T) {
 	tc.transactf("ok", `search uid 5`)
 	tc.xsearch(1)
 
+	tc.transactf("ok", `search or larger 1000000 smaller 1`)
+	tc.xsearch()
+
 	tc.transactf("ok", `search undraft`)
 	tc.xsearch(1, 2)
 
@@ -210,43 +238,11 @@ func TestSearch(t *testing.T) {
 	tc.transactf("ok", `search charset utf-8 text "mox"`)
 	tc.xsearch(2, 3)
 
-	// esearchall makes an UntaggedEsearch response with All set, for comparisons.
-	esearchall0 := func(ss string) imapclient.NumSet {
-		seqset := imapclient.NumSet{}
-		for _, rs := range strings.Split(ss, ",") {
-			t := strings.Split(rs, ":")
-			if len(t) > 2 {
-				panic("bad seqset")
-			}
-			var first uint32
-			var last *uint32
-			if t[0] != "*" {
-				v, err := strconv.ParseUint(t[0], 10, 32)
-				if err != nil {
-					panic("parse first")
-				}
-				first = uint32(v)
-			}
-			if len(t) == 2 {
-				if t[1] != "*" {
-					v, err := strconv.ParseUint(t[1], 10, 32)
-					if err != nil {
-						panic("parse last")
-					}
-					u := uint32(v)
-					last = &u
-				}
-			}
-			seqset.Ranges = append(seqset.Ranges, imapclient.NumRange{First: first, Last: last})
-		}
-		return seqset
-	}
-
 	esearchall := func(ss string) imapclient.UntaggedEsearch {
 		return imapclient.UntaggedEsearch{All: esearchall0(ss)}
 	}
 
-	uintptr := func(v uint32) *uint32 {
+	uint32ptr := func(v uint32) *uint32 {
 		return &v
 	}
 
@@ -255,10 +251,10 @@ func TestSearch(t *testing.T) {
 	tc.xesearch(esearchall("1:3")) // Without any options, "ALL" is implicit.
 
 	tc.transactf("ok", "search return (min max count all) all")
-	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uintptr(3), All: esearchall0("1:3")})
+	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uint32ptr(3), All: esearchall0("1:3")})
 
 	tc.transactf("ok", "UID search return (min max count all) all")
-	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uintptr(3), All: esearchall0("5:7")})
+	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uint32ptr(3), All: esearchall0("5:7")})
 
 	tc.transactf("ok", "search return (min) all")
 	tc.xesearch(imapclient.UntaggedEsearch{Min: 1})
@@ -294,19 +290,19 @@ func TestSearch(t *testing.T) {
 	tc.xesearch(imapclient.UntaggedEsearch{})
 
 	tc.transactf("ok", "search return (min max all count) not all")
-	tc.xesearch(imapclient.UntaggedEsearch{Count: uintptr(0)})
+	tc.xesearch(imapclient.UntaggedEsearch{Count: uint32ptr(0)})
 
 	tc.transactf("ok", "search return (min max count all) 1,3")
-	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uintptr(2), All: esearchall0("1,3")})
+	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uint32ptr(2), All: esearchall0("1,3")})
 
 	tc.transactf("ok", "search return (min max count all) UID 5,7")
-	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uintptr(2), All: esearchall0("1,3")})
+	tc.xesearch(imapclient.UntaggedEsearch{Min: 1, Max: 3, Count: uint32ptr(2), All: esearchall0("1,3")})
 
 	tc.transactf("ok", "uid search return (min max count all) 1,3")
-	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uintptr(2), All: esearchall0("5,7")})
+	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uint32ptr(2), All: esearchall0("5,7")})
 
 	tc.transactf("ok", "uid search return (min max count all) UID 5,7")
-	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uintptr(2), All: esearchall0("5,7")})
+	tc.xesearch(imapclient.UntaggedEsearch{UID: true, Min: 5, Max: 7, Count: uint32ptr(2), All: esearchall0("5,7")})
 
 	tc.transactf("no", `search return () charset unknown text "mox"`)
 	tc.transactf("ok", `search return () charset us-ascii text "mox"`)
@@ -342,4 +338,36 @@ func TestSearch(t *testing.T) {
 	tc.client.Enable("IMAP4rev2")
 	tc.transactf("ok", `search undraft`)
 	tc.xesearch(esearchall("1:2"))
+}
+
+// esearchall makes an UntaggedEsearch response with All set, for comparisons.
+func esearchall0(ss string) imapclient.NumSet {
+	seqset := imapclient.NumSet{}
+	for _, rs := range strings.Split(ss, ",") {
+		t := strings.Split(rs, ":")
+		if len(t) > 2 {
+			panic("bad seqset")
+		}
+		var first uint32
+		var last *uint32
+		if t[0] != "*" {
+			v, err := strconv.ParseUint(t[0], 10, 32)
+			if err != nil {
+				panic("parse first")
+			}
+			first = uint32(v)
+		}
+		if len(t) == 2 {
+			if t[1] != "*" {
+				v, err := strconv.ParseUint(t[1], 10, 32)
+				if err != nil {
+					panic("parse last")
+				}
+				u := uint32(v)
+				last = &u
+			}
+		}
+		seqset.Ranges = append(seqset.Ranges, imapclient.NumRange{First: first, Last: last})
+	}
+	return seqset
 }

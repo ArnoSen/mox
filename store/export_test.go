@@ -21,16 +21,15 @@ func TestExport(t *testing.T) {
 
 	os.RemoveAll("../testdata/store/data")
 	mox.ConfigStaticPath = "../testdata/store/mox.conf"
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	acc, err := OpenAccount("mjl")
 	tcheck(t, err, "open account")
 	defer acc.Close()
-	switchDone := Switchboard()
-	defer close(switchDone)
+	defer Switchboard()()
 
 	log := mlog.New("export")
 
-	msgFile, err := os.CreateTemp("", "mox-test-export")
+	msgFile, err := CreateMessageTemp("mox-test-export")
 	tcheck(t, err, "create temp")
 	defer os.Remove(msgFile.Name()) // To be sure.
 	const msg = "test: test\r\n\r\ntest\r\n"

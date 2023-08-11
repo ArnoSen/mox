@@ -18,6 +18,8 @@ import (
 
 	_ "net/http/pprof"
 
+	"golang.org/x/exp/maps"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -30,6 +32,9 @@ import (
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/ratelimit"
 	"github.com/mjl-/mox/store"
+	"github.com/mjl-/mox/webaccount"
+	"github.com/mjl-/mox/webadmin"
+	"github.com/mjl-/mox/webmail"
 )
 
 var xlog = mlog.New("http")
@@ -69,9 +74,14 @@ var (
 
 // todo: automatic gzip on responses, if client supports it, content is not already compressed. in case of static file only if it isn't too large. skip for certain response content-types (image/*, video/*), or file extensions if there is no identifying content-type. if cpu load isn't too high. if first N kb look compressible and come in quickly enough after first byte (e.g. within 100ms). always flush after 100ms to prevent stalled real-time connections.
 
+type responseWriterFlusher interface {
+	http.ResponseWriter
+	http.Flusher
+}
+
 // http.ResponseWriter that writes access log and tracks metrics at end of response.
 type loggingWriter struct {
-	W                http.ResponseWriter // Calls are forwarded.
+	W                responseWriterFlusher // Calls are forwarded.
 	Start            time.Time
 	R                *http.Request
 	WebsocketRequest bool // Whether request from was websocket.
@@ -82,8 +92,17 @@ type loggingWriter struct {
 	StatusCode                   int
 	Size                         int64 // Of data served, for non-websocket responses.
 	Err                          error
-	WebsocketResponse            bool  // If this was a successful websocket connection with backend.
-	SizeFromClient, SizeToClient int64 // Websocket data.
+	WebsocketResponse            bool        // If this was a successful websocket connection with backend.
+	SizeFromClient, SizeToClient int64       // Websocket data.
+	Fields                       []mlog.Pair // Additional fields to log.
+}
+
+func (w *loggingWriter) AddField(p mlog.Pair) {
+	w.Fields = append(w.Fields, p)
+}
+
+func (w *loggingWriter) Flush() {
+	w.W.Flush()
 }
 
 func (w *loggingWriter) Header() http.Header {
@@ -201,6 +220,7 @@ func (w *loggingWriter) Done() {
 			mlog.Field("size", w.Size),
 		)
 	}
+	fields = append(fields, w.Fields...)
 	xlog.WithContext(w.R.Context()).Debugx("http request", err, fields...)
 }
 
@@ -279,8 +299,14 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(r.Context(), mlog.CidKey, mox.Cid())
 	r = r.WithContext(ctx)
 
+	wf, ok := xw.(responseWriterFlusher)
+	if !ok {
+		http.Error(xw, "500 - internal server error - cannot access underlying connection"+recvid(r), http.StatusInternalServerError)
+		return
+	}
+
 	nw := &loggingWriter{
-		W:     xw,
+		W:     wf,
 		Start: now,
 		R:     r,
 	}
@@ -335,7 +361,23 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 func Listen() {
 	globalHostname := mox.Conf.Static.Hostname
 
-	for name, l := range mox.Conf.Static.Listeners {
+	redirectToTrailingSlash := func(srv *serve, name, path string) {
+		// Helpfully redirect user to version with ending slash.
+		if path != "/" && strings.HasSuffix(path, "/") {
+			handler := safeHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, path, http.StatusSeeOther)
+			}))
+			srv.Handle(name, nil, path[:len(path)-1], handler)
+		}
+	}
+
+	// Initialize listeners in deterministic order for the same potential error
+	// messages.
+	names := maps.Keys(mox.Conf.Static.Listeners)
+	sort.Strings(names)
+	for _, name := range names {
+		l := mox.Conf.Static.Listeners[name]
+
 		portServe := map[int]*serve{}
 
 		var ensureServe func(https bool, port int, kind string) *serve
@@ -370,8 +412,9 @@ func Listen() {
 				path = l.AccountHTTP.Path
 			}
 			srv := ensureServe(false, port, "account-http at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(accountHandle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handle)))
 			srv.Handle("account", nil, path, handler)
+			redirectToTrailingSlash(srv, "account", path)
 		}
 		if l.AccountHTTPS.Enabled {
 			port := config.Port(l.AccountHTTPS.Port, 443)
@@ -380,8 +423,9 @@ func Listen() {
 				path = l.AccountHTTPS.Path
 			}
 			srv := ensureServe(true, port, "account-https at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(accountHandle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handle)))
 			srv.Handle("account", nil, path, handler)
+			redirectToTrailingSlash(srv, "account", path)
 		}
 
 		if l.AdminHTTP.Enabled {
@@ -391,8 +435,9 @@ func Listen() {
 				path = l.AdminHTTP.Path
 			}
 			srv := ensureServe(false, port, "admin-http at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(adminHandle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handle)))
 			srv.Handle("admin", nil, path, handler)
+			redirectToTrailingSlash(srv, "admin", path)
 		}
 		if l.AdminHTTPS.Enabled {
 			port := config.Port(l.AdminHTTPS.Port, 443)
@@ -401,9 +446,36 @@ func Listen() {
 				path = l.AdminHTTPS.Path
 			}
 			srv := ensureServe(true, port, "admin-https at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(adminHandle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handle)))
 			srv.Handle("admin", nil, path, handler)
+			redirectToTrailingSlash(srv, "admin", path)
 		}
+
+		maxMsgSize := l.SMTPMaxMessageSize
+		if maxMsgSize == 0 {
+			maxMsgSize = config.DefaultMaxMsgSize
+		}
+		if l.WebmailHTTP.Enabled {
+			port := config.Port(l.WebmailHTTP.Port, 80)
+			path := "/webmail/"
+			if l.WebmailHTTP.Path != "" {
+				path = l.WebmailHTTP.Path
+			}
+			srv := ensureServe(false, port, "webmail-http at "+path)
+			srv.Handle("webmail", nil, path, http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize))))
+			redirectToTrailingSlash(srv, "webmail", path)
+		}
+		if l.WebmailHTTPS.Enabled {
+			port := config.Port(l.WebmailHTTPS.Port, 443)
+			path := "/webmail/"
+			if l.WebmailHTTPS.Path != "" {
+				path = l.WebmailHTTPS.Path
+			}
+			srv := ensureServe(true, port, "webmail-https at "+path)
+			srv.Handle("webmail", nil, path, http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize))))
+			redirectToTrailingSlash(srv, "webmail", path)
+		}
+
 		if l.MetricsHTTP.Enabled {
 			port := config.Port(l.MetricsHTTP.Port, 8010)
 			srv := ensureServe(false, port, "metrics-http")
@@ -504,7 +576,10 @@ func Listen() {
 			ensureManagerHosts[m] = hosts
 		}
 
-		for port, srv := range portServe {
+		ports := maps.Keys(portServe)
+		sort.Ints(ports)
+		for _, port := range ports {
+			srv := portServe[port]
 			sort.Slice(srv.PathHandlers, func(i, j int) bool {
 				a := srv.PathHandlers[i].Path
 				b := srv.PathHandlers[j].Path
@@ -576,8 +651,8 @@ func listen1(ip string, port int, tlsConfig *tls.Config, name string, kinds []st
 
 // Serve starts serving on the initialized listeners.
 func Serve() {
-	go manageAuthCache()
-	go importManage()
+	go webadmin.ManageAuthCache()
+	go webaccount.ImportManage()
 
 	for _, serve := range servers {
 		go serve()

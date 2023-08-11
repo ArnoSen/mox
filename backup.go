@@ -240,15 +240,19 @@ func backupctl(ctx context.Context, ctl *ctl) {
 		if err != nil {
 			return false, fmt.Errorf("open source path %s: %v", srcpath, err)
 		}
-		defer sf.Close()
+		defer func() {
+			err := sf.Close()
+			ctl.log.Check(err, "closing copied source file")
+		}()
 
 		df, err := os.OpenFile(dstpath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0660)
 		if err != nil {
-			return false, fmt.Errorf("open destination path %s: %v", dstpath, err)
+			return false, fmt.Errorf("create destination path %s: %v", dstpath, err)
 		}
 		defer func() {
 			if df != nil {
-				df.Close()
+				err := df.Close()
+				ctl.log.Check(err, "closing partial destination file")
 			}
 		}()
 		if _, err := io.Copy(df, sf); err != nil {
@@ -257,7 +261,7 @@ func backupctl(ctx context.Context, ctl *ctl) {
 		err = df.Close()
 		df = nil
 		if err != nil {
-			return false, fmt.Errorf("close: %v", err)
+			return false, fmt.Errorf("closing destination file: %v", err)
 		}
 		return false, nil
 	}
@@ -420,7 +424,7 @@ func backupctl(ctx context.Context, ctl *ctl) {
 		tmMsgs := time.Now()
 		seen := map[string]struct{}{}
 		var nlinked, ncopied int
-		err = bstore.QueryDB[store.Message](ctx, db).ForEach(func(m store.Message) error {
+		err = bstore.QueryDB[store.Message](ctx, db).FilterEqual("Expunged", false).ForEach(func(m store.Message) error {
 			mp := store.MessagePath(m.ID)
 			seen[mp] = struct{}{}
 			amp := filepath.Join("accounts", acc.Name, "msg", mp)

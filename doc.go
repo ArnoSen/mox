@@ -20,7 +20,7 @@ low-maintenance self-hosted email.
 	mox setadminpassword
 	mox loglevels [level [pkg]]
 	mox queue list
-	mox queue kick [-id id] [-todomain domain] [-recipient address]
+	mox queue kick [-id id] [-todomain domain] [-recipient address] [-transport transport]
 	mox queue drop [-id id] [-todomain domain] [-recipient address]
 	mox queue dump id
 	mox import maildir accountname mailboxname maildir
@@ -68,6 +68,14 @@ low-maintenance self-hosted email.
 	mox tlsrpt lookup domain
 	mox tlsrpt parsereportmsg message ...
 	mox version
+	mox bumpuidvalidity account [mailbox]
+	mox reassignuids account [mailboxid]
+	mox fixuidmeta account
+	mox fixmsgsize [account]
+	mox reparse [account]
+	mox ensureparsed account
+	mox recalculatemailboxcounts account
+	mox message parse message.eml
 
 Many commands talk to a running mox instance, through the ctl file in the data
 directory. Specify the configuration file (that holds the path to the data
@@ -192,13 +200,19 @@ retry after 7.5 minutes, and doubling each time. Kicking messages sets their
 next scheduled attempt to now, it can cause delivery to fail earlier than
 without rescheduling.
 
-	usage: mox queue kick [-id id] [-todomain domain] [-recipient address]
+With the -transport flag, future delivery attempts are done using the specified
+transport. Transports can be configured in mox.conf, e.g. to submit to a remote
+queue over SMTP.
+
+	usage: mox queue kick [-id id] [-todomain domain] [-recipient address] [-transport transport]
 	  -id int
 	    	id of message in queue
 	  -recipient string
 	    	recipient email address
 	  -todomain string
 	    	destination domain of messages
+	  -transport string
+	    	transport to use for the next delivery
 
 # mox queue drop
 
@@ -230,9 +244,9 @@ Import a maildir into an account.
 By default, messages will train the junk filter based on their flags and, if
 "automatic junk flags" configuration is set, based on mailbox naming.
 
-If the destination mailbox is "Sent", the recipients of the messages are added
-to the message metadata, causing later incoming messages from these recipients
-to be accepted, unless other reputation signals prevent that.
+If the destination mailbox is the Sent mailbox, the recipients of the messages
+are added to the message metadata, causing later incoming messages from these
+recipients to be accepted, unless other reputation signals prevent that.
 
 Users can also import mailboxes/messages through the account web page by
 uploading a zip or tgz file with mbox and/or maildirs.
@@ -254,9 +268,9 @@ Using mbox is not recommended, maildir is a better defined format.
 By default, messages will train the junk filter based on their flags and, if
 "automatic junk flags" configuration is set, based on mailbox naming.
 
-If the destination mailbox is "Sent", the recipients of the messages are added
-to the message metadata, causing later incoming messages from these recipients
-to be accepted, unless other reputation signals prevent that.
+If the destination mailbox is the Sent mailbox, the recipients of the messages
+are added to the message metadata, causing later incoming messages from these
+recipients to be accepted, unless other reputation signals prevent that.
 
 Users can also import mailboxes/messages through the account web page by
 uploading a zip or tgz file with mbox and/or maildirs.
@@ -323,6 +337,8 @@ during those commands instead of during "data".
 	usage: mox localserve
 	  -dir string
 	    	configuration storage directory (default "$userconfigdir/mox-localserve")
+	  -ip string
+	    	serve on this ip instead of default 127.0.0.1 and ::1. only used when writing configuration, at first launch.
 
 # mox help
 
@@ -384,6 +400,8 @@ on-disk message file and there are no unrecognized files. If option -fix is
 specified, unrecognized message files are moved away. This may be needed after
 a restore, because messages enqueued or delivered in the future may get those
 message sequence numbers assigned and writing the message file would fail.
+Consistency of message/mailbox UID, UIDNEXT and UIDVALIDITY is verified as
+well.
 
 Because verifydata opens the database files, schema upgrades may automatically
 be applied. This can happen if you use a new mox release. It is useful to run
@@ -765,6 +783,90 @@ The report is printed in formatted JSON.
 Prints this mox version.
 
 	usage: mox version
+
+# mox bumpuidvalidity
+
+Change the IMAP UID validity of the mailbox, causing IMAP clients to refetch messages.
+
+This can be useful after manually repairing metadata about the account/mailbox.
+
+Opens account database file directly. Ensure mox does not have the account
++open, or is not running.
+
+	usage: mox bumpuidvalidity account [mailbox]
+
+# mox reassignuids
+
+Reassign UIDs in one mailbox or all mailboxes in an account and bump UID validity, causing IMAP clients to refetch messages.
+
+Opens account database file directly. Ensure mox does not have the account
+open, or is not running.
+
+	usage: mox reassignuids account [mailboxid]
+
+# mox fixuidmeta
+
+Fix inconsistent UIDVALIDITY and UIDNEXT in messages/mailboxes/account.
+
+The next UID to use for a message in a mailbox should always be higher than any
+existing message UID in the mailbox. If it is not, the mailbox UIDNEXT is
+updated.
+
+Each mailbox has a UIDVALIDITY sequence number, which should always be lower
+than the per-account next UIDVALIDITY to use. If it is not, the account next
+UIDVALIDITY is updated.
+
+Opens account database file directly. Ensure mox does not have the account
+open, or is not running.
+
+	usage: mox fixuidmeta account
+
+# mox fixmsgsize
+
+Ensure message sizes in the database matching the sum of the message prefix length and on-disk file size.
+
+Messages with an inconsistent size are also parsed again.
+
+If an inconsistency is found, you should probably also run "mox
+bumpuidvalidity" on the mailboxes or entire account to force IMAP clients to
+refetch messages.
+
+	usage: mox fixmsgsize [account]
+
+# mox reparse
+
+# Parse all messages in the account or all accounts again
+
+Can be useful after upgrading mox with improved message parsing. Messages are
+parsed in batches, so other access to the mailboxes/messages are not blocked
+while reparsing all messages.
+
+	usage: mox reparse [account]
+
+# mox ensureparsed
+
+Ensure messages in the database have a pre-parsed MIME form in the database.
+
+	usage: mox ensureparsed account
+	  -all
+	    	store new parsed message for all messages
+
+# mox recalculatemailboxcounts
+
+Recalculate message counts for all mailboxes in the account.
+
+When a message is added to/removed from a mailbox, or when message flags change,
+the total, unread, unseen and deleted messages are accounted, and the total size
+of the mailbox. In case of a bug in this accounting, the numbers could become
+incorrect. This command will find, fix and print them.
+
+	usage: mox recalculatemailboxcounts account
+
+# mox message parse
+
+Parse message, print JSON representation.
+
+	usage: mox message parse message.eml
 */
 package main
 

@@ -34,6 +34,8 @@ on-disk message file and there are no unrecognized files. If option -fix is
 specified, unrecognized message files are moved away. This may be needed after
 a restore, because messages enqueued or delivered in the future may get those
 message sequence numbers assigned and writing the message file would fail.
+Consistency of message/mailbox UID, UIDNEXT and UIDVALIDITY is verified as
+well.
 
 Because verifydata opens the database files, schema upgrades may automatically
 be applied. This can happen if you use a new mox release. It is useful to run
@@ -135,9 +137,13 @@ possibly making them potentially no longer readable by the previous version.
 		checkf(err, path, "checking database file")
 	}
 
-	checkFile := func(path string) {
-		_, err := os.Stat(path)
+	checkFile := func(dbpath, path string, prefixSize int, size int64) {
+		st, err := os.Stat(path)
 		checkf(err, path, "checking if file exists")
+		if err == nil && int64(prefixSize)+st.Size() != size {
+			filesize := st.Size()
+			checkf(fmt.Errorf("%s: message size is %d, should be %d (length of MsgPrefix %d + file size %d), see \"mox fixmsgsize\"", path, size, int64(prefixSize)+st.Size(), prefixSize, filesize), dbpath, "checking message size")
+		}
 	}
 
 	checkQueue := func() {
@@ -153,7 +159,7 @@ possibly making them potentially no longer readable by the previous version.
 				mp := store.MessagePath(m.ID)
 				seen[mp] = struct{}{}
 				p := filepath.Join(dataDir, "queue", mp)
-				checkFile(p)
+				checkFile(dbpath, p, len(m.MsgPrefix), m.Size)
 				return nil
 			})
 			checkf(err, dbpath, "reading messages in queue database to check files")
@@ -218,19 +224,60 @@ possibly making them potentially no longer readable by the previous version.
 		// todo: add some kind of check for the bloom filter?
 
 		// Check that all messages in the database have a message file on disk.
+		// And check consistency of UIDs with the mailbox UIDNext, and check UIDValidity.
 		seen := map[string]struct{}{}
 		dbpath := filepath.Join(accdir, "index.db")
 		db, err := bstore.Open(ctxbg, dbpath, &bstore.Options{MustExist: true}, store.DBTypes...)
 		checkf(err, dbpath, "opening account database to check messages")
 		if err == nil {
-			err := bstore.QueryDB[store.Message](ctxbg, db).ForEach(func(m store.Message) error {
+			uidvalidity := store.NextUIDValidity{ID: 1}
+			if err := db.Get(ctxbg, &uidvalidity); err != nil {
+				checkf(err, dbpath, "missing nextuidvalidity")
+			}
+
+			mailboxes := map[int64]store.Mailbox{}
+			err := bstore.QueryDB[store.Mailbox](ctxbg, db).ForEach(func(mb store.Mailbox) error {
+				mailboxes[mb.ID] = mb
+
+				if mb.UIDValidity >= uidvalidity.Next {
+					checkf(errors.New(`inconsistent uidvalidity for mailbox/account, see "mox fixuidmeta"`), dbpath, "mailbox %q (id %d) has uidvalidity %d >= account nextuidvalidity %d", mb.Name, mb.ID, mb.UIDValidity, uidvalidity.Next)
+				}
+				return nil
+			})
+			checkf(err, dbpath, "reading mailboxes to check uidnext consistency")
+
+			mbCounts := map[int64]store.MailboxCounts{}
+			err = bstore.QueryDB[store.Message](ctxbg, db).ForEach(func(m store.Message) error {
+				mb := mailboxes[m.MailboxID]
+				if m.UID >= mb.UIDNext {
+					checkf(errors.New(`inconsistent uidnext for message/mailbox, see "mox fixuidmeta"`), dbpath, "message id %d in mailbox %q (id %d) has uid %d >= mailbox uidnext %d", m.ID, mb.Name, mb.ID, m.UID, mb.UIDNext)
+				}
+
+				if m.ModSeq < m.CreateSeq {
+					checkf(errors.New(`inconsistent modseq/createseq for message`), dbpath, "message id %d in mailbox %q (id %d) has modseq %d < createseq %d", m.ID, mb.Name, mb.ID, m.ModSeq, m.CreateSeq)
+				}
+
+				mc := mbCounts[mb.ID]
+				mc.Add(m.MailboxCounts())
+				mbCounts[mb.ID] = mc
+
+				if m.Expunged {
+					return nil
+				}
 				mp := store.MessagePath(m.ID)
 				seen[mp] = struct{}{}
 				p := filepath.Join(accdir, "msg", mp)
-				checkFile(p)
+				checkFile(dbpath, p, len(m.MsgPrefix), m.Size)
 				return nil
 			})
 			checkf(err, dbpath, "reading messages in account database to check files")
+
+			for _, mb := range mailboxes {
+				// We only check if database doesn't have zero values, i.e. not yet set.
+				if mb.HaveCounts && mb.MailboxCounts != mbCounts[mb.ID] {
+					checkf(errors.New(`wrong mailbox counts, see "mox recalculatemailboxcounts"`), dbpath, "mailbox %q (id %d) has wrong counts %s, should be %s", mb.Name, mb.ID, mb.MailboxCounts, mbCounts[mb.ID])
+				}
+			}
 		}
 
 		// Walk through all files in the msg directory. Warn about files that weren't in

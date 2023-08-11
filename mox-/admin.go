@@ -186,7 +186,7 @@ func MakeDomainConfig(ctx context.Context, domain, hostname dns.Domain, accountN
 	addSelector := func(kind, name string, privKey []byte) error {
 		record := fmt.Sprintf("%s._domainkey.%s", name, domain.ASCII)
 		keyPath := filepath.Join("dkim", fmt.Sprintf("%s.%s.%skey.pkcs8.pem", record, timestamp, kind))
-		p := ConfigDirPath(keyPath)
+		p := configDirPath(ConfigDynamicPath, keyPath)
 		if err := writeFile(p, privKey); err != nil {
 			return err
 		}
@@ -776,6 +776,42 @@ func AddressRemove(ctx context.Context, address string) (rerr error) {
 	return nil
 }
 
+// AccountFullNameSave updates the full name for an account and reloads the configuration.
+func AccountFullNameSave(ctx context.Context, account, fullName string) (rerr error) {
+	log := xlog.WithContext(ctx)
+	defer func() {
+		if rerr != nil {
+			log.Errorx("saving account full name", rerr, mlog.Field("account", account))
+		}
+	}()
+
+	Conf.dynamicMutex.Lock()
+	defer Conf.dynamicMutex.Unlock()
+
+	c := Conf.Dynamic
+	acc, ok := c.Accounts[account]
+	if !ok {
+		return fmt.Errorf("account not present")
+	}
+
+	// Compose new config without modifying existing data structures. If we fail, we
+	// leave no trace.
+	nc := c
+	nc.Accounts = map[string]config.Account{}
+	for name, a := range c.Accounts {
+		nc.Accounts[name] = a
+	}
+
+	acc.FullName = fullName
+	nc.Accounts[account] = acc
+
+	if err := writeDynamic(ctx, log, nc); err != nil {
+		return fmt.Errorf("writing domains.conf: %v", err)
+	}
+	log.Info("account full name saved", mlog.Field("account", account))
+	return nil
+}
+
 // DestinationSave updates a destination for an account and reloads the configuration.
 func DestinationSave(ctx context.Context, account, destName string, newDest config.Destination) (rerr error) {
 	log := xlog.WithContext(ctx)
@@ -923,8 +959,8 @@ func ClientConfigDomain(d dns.Domain) (ClientConfig, error) {
 	return c, nil
 }
 
-// return IPs we may be listening on or connecting from to the outside.
-func IPs(ctx context.Context) ([]net.IP, error) {
+// return IPs we may be listening/receiving mail on or connecting/sending from to the outside.
+func IPs(ctx context.Context, receiveOnly bool) ([]net.IP, error) {
 	log := xlog.WithContext(ctx)
 
 	// Try to gather all IPs we are listening on by going through the config.
@@ -982,5 +1018,16 @@ func IPs(ctx context.Context) ([]net.IP, error) {
 			}
 		}
 	}
+
+	if receiveOnly {
+		return ips, nil
+	}
+
+	for _, t := range Conf.Static.Transports {
+		if t.Socks != nil {
+			ips = append(ips, t.Socks.IPs...)
+		}
+	}
+
 	return ips, nil
 }

@@ -25,7 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/encoding/ianaindex"
+
 	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/moxio"
 	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/smtp"
 )
@@ -81,6 +84,10 @@ type Part struct {
 	parent          *Part                // Parent part, for getting bound from, and setting nextBoundOffset when a part has finished reading. Only for subparts, not top-level parts.
 	bound           []byte               // Only set if valid multipart with boundary, includes leading --, excludes \r\n.
 }
+
+// todo: have all Content* fields in Part?
+// todo: make Address contain a type Localpart and dns.Domain?
+// todo: if we ever make a major change and reparse all parts, switch to lower-case values if not too troublesome.
 
 // Envelope holds the basic/common message headers as used in IMAP4.
 type Envelope struct {
@@ -351,14 +358,56 @@ func (p *Part) HeaderReader() io.Reader {
 }
 
 func parseHeader(r io.Reader) (textproto.MIMEHeader, error) {
-	return textproto.NewReader(bufio.NewReader(r)).ReadMIMEHeader()
+	// We read using mail.ReadMessage instead of textproto.ReadMIMEHeaders because the
+	// first handles email messages properly, while the second only works for HTTP
+	// headers.
+	var zero textproto.MIMEHeader
+	msg, err := mail.ReadMessage(bufio.NewReader(r))
+	if err != nil {
+		return zero, err
+	}
+	return textproto.MIMEHeader(msg.Header), nil
+}
+
+var wordDecoder = mime.WordDecoder{
+	CharsetReader: func(charset string, r io.Reader) (io.Reader, error) {
+		switch strings.ToLower(charset) {
+		case "", "us-ascii", "utf-8":
+			return r, nil
+		}
+		enc, _ := ianaindex.MIME.Encoding(charset)
+		if enc == nil {
+			enc, _ = ianaindex.IANA.Encoding(charset)
+		}
+		if enc == nil {
+			return r, fmt.Errorf("unknown charset %q", charset)
+		}
+		return enc.NewDecoder().Reader(r), nil
+	},
 }
 
 func parseEnvelope(h mail.Header) (*Envelope, error) {
 	date, _ := h.Date()
+
+	// We currently marshal this field to JSON. But JSON cannot represent all
+	// time.Time. Time zone of 24:00 was seen in the wild. We won't try for extreme
+	// years, but we can readjust timezones.
+	// todo: remove this once we no longer store using json.
+	_, offset := date.Zone()
+	if date.Year() > 9999 {
+		date = time.Time{}
+	} else if offset <= -24*3600 || offset >= 24*3600 {
+		date = time.Unix(date.Unix(), 0).UTC()
+	}
+
+	subject := h.Get("Subject")
+	if s, err := wordDecoder.DecodeHeader(subject); err == nil {
+		subject = s
+	}
+
 	env := &Envelope{
 		date,
-		h.Get("Subject"),
+		subject,
 		parseAddressList(h, "from"),
 		parseAddressList(h, "sender"),
 		parseAddressList(h, "reply-to"),
@@ -460,6 +509,14 @@ func (p *Part) ParseNextPart() (*Part, error) {
 // Reader returns a reader for the decoded body content.
 func (p *Part) Reader() io.Reader {
 	return p.bodyReader(p.RawReader())
+}
+
+// ReaderUTF8OrBinary returns a reader for the decode body content, transformed to
+// utf-8 for known mime/iana encodings (only if they aren't us-ascii or utf-8
+// already). For unknown or missing character sets/encodings, the original reader
+// is returned.
+func (p *Part) ReaderUTF8OrBinary() io.Reader {
+	return moxio.DecodeReader(p.ContentTypeParams["charset"], p.Reader())
 }
 
 func (p *Part) bodyReader(r io.Reader) io.Reader {

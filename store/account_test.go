@@ -29,12 +29,14 @@ func tcheck(t *testing.T, err error, msg string) {
 func TestMailbox(t *testing.T) {
 	os.RemoveAll("../testdata/store/data")
 	mox.ConfigStaticPath = "../testdata/store/mox.conf"
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	acc, err := OpenAccount("mjl")
 	tcheck(t, err, "open account")
-	defer acc.Close()
-	switchDone := Switchboard()
-	defer close(switchDone)
+	defer func() {
+		err = acc.Close()
+		tcheck(t, err, "closing account")
+	}()
+	defer Switchboard()()
 
 	log := mlog.New("store")
 
@@ -57,7 +59,7 @@ func TestMailbox(t *testing.T) {
 	}
 	msent := m
 	var mbsent Mailbox
-	mbrejects := Mailbox{Name: "Rejects", UIDValidity: 1, UIDNext: 1}
+	mbrejects := Mailbox{Name: "Rejects", UIDValidity: 1, UIDNext: 1, HaveCounts: true}
 	mreject := m
 	mconsumed := Message{
 		Received:  m.Received,
@@ -75,15 +77,27 @@ func TestMailbox(t *testing.T) {
 			tcheck(t, err, "sent mailbox")
 			msent.MailboxID = mbsent.ID
 			msent.MailboxOrigID = mbsent.ID
-			err = acc.DeliverMessage(xlog, tx, &msent, msgFile, false, true, true, false)
+			err = acc.DeliverMessage(xlog, tx, &msent, msgFile, false, true, false)
 			tcheck(t, err, "deliver message")
+
+			err = tx.Get(&mbsent)
+			tcheck(t, err, "get mbsent")
+			mbsent.Add(msent.MailboxCounts())
+			err = tx.Update(&mbsent)
+			tcheck(t, err, "update mbsent")
 
 			err = tx.Insert(&mbrejects)
 			tcheck(t, err, "insert rejects mailbox")
 			mreject.MailboxID = mbrejects.ID
 			mreject.MailboxOrigID = mbrejects.ID
-			err = acc.DeliverMessage(xlog, tx, &mreject, msgFile, false, false, true, false)
+			err = acc.DeliverMessage(xlog, tx, &mreject, msgFile, false, true, false)
 			tcheck(t, err, "deliver message")
+
+			err = tx.Get(&mbrejects)
+			tcheck(t, err, "get mbrejects")
+			mbrejects.Add(mreject.MailboxCounts())
+			err = tx.Update(&mbrejects)
+			tcheck(t, err, "update mbrejects")
 
 			return nil
 		})
@@ -228,20 +242,6 @@ func TestMailbox(t *testing.T) {
 	_, err = OpenEmailAuth("mjl@test.example", "testtest")
 	if err != ErrUnknownCredentials {
 		t.Fatalf("got %v, expected ErrUnknownCredentials", err)
-	}
-}
-
-func TestWriteFile(t *testing.T) {
-	name := "../testdata/account.test"
-	os.Remove(name)
-	defer os.Remove(name)
-	err := writeFile(name, strings.NewReader("test"))
-	if err != nil {
-		t.Fatalf("writeFile, unexpected error %v", err)
-	}
-	buf, err := os.ReadFile(name)
-	if err != nil || string(buf) != "test" {
-		t.Fatalf("writeFile, read file, got err %v, data %q", err, buf)
 	}
 }
 

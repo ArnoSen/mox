@@ -65,8 +65,9 @@ during those commands instead of during "data".
 		userConfDir = "."
 	}
 
-	var dir string
+	var dir, ip string
 	c.flag.StringVar(&dir, "dir", filepath.Join(userConfDir, "mox-localserve"), "configuration storage directory")
+	c.flag.StringVar(&ip, "ip", "", "serve on this ip instead of default 127.0.0.1 and ::1. only used when writing configuration, at first launch.")
 	args := c.Parse()
 	if len(args) != 0 {
 		c.Usage()
@@ -77,8 +78,9 @@ during those commands instead of during "data".
 	mox.FilesImmediate = true
 
 	// Load config, creating a new one if needed.
+	var existingConfig bool
 	if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) {
-		err := writeLocalConfig(log, dir)
+		err := writeLocalConfig(log, dir, ip)
 		if err != nil {
 			log.Fatalx("creating mox localserve config", err, mlog.Field("dir", dir))
 		}
@@ -86,6 +88,10 @@ during those commands instead of during "data".
 		log.Fatalx("stat config dir", err, mlog.Field("dir", dir))
 	} else if err := localLoadConfig(log, dir); err != nil {
 		log.Fatalx("loading mox localserve config (hint: when creating a new config with -dir, the directory must not yet exist)", err, mlog.Field("dir", dir))
+	} else if ip != "" {
+		log.Fatal("can only use -ip when writing a new config file")
+	} else {
+		existingConfig = true
 	}
 
 	if level, ok := mlog.Levels[loglevel]; loglevel != "" && ok {
@@ -144,13 +150,20 @@ during those commands instead of during "data".
 	golog.Print(" imap://mox%40localhost:moxmoxmox@localhost:1143          - read email (without tls)")
 	golog.Print("https://mox%40localhost:moxmoxmox@localhost:1443/account/ - account https")
 	golog.Print(" http://mox%40localhost:moxmoxmox@localhost:1080/account/ - account http (without tls)")
+	golog.Print("https://mox%40localhost:moxmoxmox@localhost:1443/webmail/ - webmail https")
+	golog.Print(" http://mox%40localhost:moxmoxmox@localhost:1080/webmail/ - webmail http (without tls)")
 	golog.Print("https://admin:moxadmin@localhost:1443/admin/              - admin https")
 	golog.Print(" http://admin:moxadmin@localhost:1080/admin/              - admin http (without tls)")
 	if l, ok := mox.Conf.Static.Listeners["local"]; ok && l.JMAPHTTPS.Enabled {
 		golog.Print("https://mox%40localhost:moxmoxmox@localhost:1443/jmap/    - JMAP handler to be detailed")
 	}
 	golog.Print("")
-	golog.Printf("serving from %s", dir)
+	if existingConfig {
+		golog.Printf("serving from existing config dir %s/", dir)
+		golog.Printf("if urls above don't work, consider resetting by removing config dir")
+	} else {
+		golog.Printf("serving from newly created config dir %s/", dir)
+	}
 
 	ctlpath := mox.DataDirPath("ctl")
 	_ = os.Remove(ctlpath)
@@ -184,7 +197,7 @@ during those commands instead of during "data".
 	}
 }
 
-func writeLocalConfig(log *mlog.Log, dir string) (rerr error) {
+func writeLocalConfig(log *mlog.Log, dir, ip string) (rerr error) {
 	defer func() {
 		x := recover()
 		if x != nil {
@@ -260,9 +273,13 @@ func writeLocalConfig(log *mlog.Log, dir string) (rerr error) {
 	xcheck(err, "writing adminpasswd file")
 
 	// Write mox.conf.
+	ips := []string{"127.0.0.1", "::1"}
+	if ip != "" {
+		ips = []string{ip}
+	}
 
 	local := config.Listener{
-		IPs: []string{"127.0.0.1", "::1"},
+		IPs: ips,
 		TLS: &config.TLS{
 			KeyCerts: []config.KeyCert{
 				{
@@ -290,6 +307,12 @@ func writeLocalConfig(log *mlog.Log, dir string) (rerr error) {
 	local.AccountHTTPS.Enabled = true
 	local.AccountHTTPS.Port = 1443
 	local.AccountHTTPS.Path = "/account/"
+	local.WebmailHTTP.Enabled = true
+	local.WebmailHTTP.Port = 1080
+	local.WebmailHTTP.Path = "/webmail/"
+	local.WebmailHTTPS.Enabled = true
+	local.WebmailHTTPS.Port = 1443
+	local.WebmailHTTPS.Path = "/webmail/"
 	local.AdminHTTP.Enabled = true
 	local.AdminHTTP.Port = 1080
 	local.AdminHTTPS.Enabled = true
@@ -405,7 +428,7 @@ func writeLocalConfig(log *mlog.Log, dir string) (rerr error) {
 func localLoadConfig(log *mlog.Log, dir string) error {
 	mox.ConfigStaticPath = filepath.Join(dir, "mox.conf")
 	mox.ConfigDynamicPath = filepath.Join(dir, "domains.conf")
-	errs := mox.LoadConfig(context.Background(), false)
+	errs := mox.LoadConfig(context.Background(), true, false)
 	if len(errs) > 1 {
 		log.Error("loading config generated config file: multiple errors")
 		for _, err := range errs {

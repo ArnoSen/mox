@@ -141,7 +141,7 @@ describe-static" and "mox config describe-domains":
 				# Minimum TLS version. Default: TLSv1.2. (optional)
 				MinVersion:
 
-			# Maximum size in bytes accepted incoming and outgoing messages. Default is 100MB.
+			# Maximum size in bytes for incoming and outgoing messages. Default is 100MB.
 			# (optional)
 			SMTPMaxMessageSize: 0
 
@@ -169,6 +169,10 @@ describe-static" and "mox config describe-domains":
 				# bl.spamcop.net (optional)
 				DNSBLs:
 					-
+
+				# Delay before accepting a message from a first-time sender for the destination
+				# account. Default: 15s. (optional)
+				FirstTimeSenderDelay: 0s
 
 			# SMTP for submitting email, e.g. by email applications. Starts out in plain text,
 			# can be upgraded to TLS with the STARTTLS command. Prefer using Submissions which
@@ -261,6 +265,28 @@ describe-static" and "mox config describe-domains":
 				# resources. Default is /admin/. (optional)
 				Path:
 
+			# Webmail client, for reading email. (optional)
+			WebmailHTTP:
+				Enabled: false
+
+				# Default 80. (optional)
+				Port: 0
+
+				# Path to serve account requests on. Useful if domain serves other resources.
+				# Default is /webmail/. (optional)
+				Path:
+
+			# Webmail client, for reading email. (optional)
+			WebmailHTTPS:
+				Enabled: false
+
+				# Default 443. (optional)
+				Port: 0
+
+				# Path to serve account requests on. Useful if domain serves other resources.
+				# Default is /webmail/. (optional)
+				Path:
+
 			# Serve prometheus metrics, for monitoring. You should not enable this on a public
 			# IP. (optional)
 			MetricsHTTP:
@@ -333,11 +359,163 @@ describe-static" and "mox config describe-domains":
 		# E.g. Postmaster or Inbox.
 		Mailbox:
 
-	# Mailboxes to create when adding an account. Inbox is always created. If no
-	# mailboxes are specified, the following are automatically created: Sent, Archive,
-	# Trash, Drafts and Junk. (optional)
+	# Mailboxes to create for new accounts. Inbox is always created. Mailboxes can be
+	# given a 'special-use' role, which are understood by most mail clients. If
+	# absent/empty, the following mailboxes are created: Sent, Archive, Trash, Drafts
+	# and Junk. (optional)
+	InitialMailboxes:
+
+		# Special-use roles to mailbox to create. (optional)
+		SpecialUse:
+
+			# (optional)
+			Sent:
+
+			# (optional)
+			Archive:
+
+			# (optional)
+			Trash:
+
+			# (optional)
+			Draft:
+
+			# (optional)
+			Junk:
+
+		# Regular, non-special-use mailboxes to create. (optional)
+		Regular:
+			-
+
+	# Deprecated in favor of InitialMailboxes. Mailboxes to create when adding an
+	# account. Inbox is always created. If no mailboxes are specified, the following
+	# are automatically created: Sent, Archive, Trash, Drafts and Junk. (optional)
 	DefaultMailboxes:
 		-
+
+	# Transport are mechanisms for delivering messages. Transports can be referenced
+	# from Routes in accounts, domains and the global configuration. There is always
+	# an implicit/fallback delivery transport doing direct delivery with SMTP from the
+	# outgoing message queue. Transports are typically only configured when using
+	# smarthosts, i.e. when delivering through another SMTP server. Zero or one
+	# transport methods must be set in a transport, never multiple. When using an
+	# external party to send email for a domain, keep in mind you may have to add
+	# their IP address to your domain's SPF record, and possibly additional DKIM
+	# records. (optional)
+	Transports:
+		x:
+
+			# Submission SMTP over a TLS connection to submit email to a remote queue.
+			# (optional)
+			Submissions:
+
+				# Host name to connect to and for verifying its TLS certificate.
+				Host:
+
+				# If unset or 0, the default port for submission(s)/smtp is used: 25 for SMTP, 465
+				# for submissions (with TLS), 587 for submission (possibly with STARTTLS).
+				# (optional)
+				Port: 0
+
+				# If set an unverifiable remote TLS certificate during STARTTLS is accepted.
+				# (optional)
+				STARTTLSInsecureSkipVerify: false
+
+				# If set for submission or smtp transport, do not attempt STARTTLS on the
+				# connection. Authentication credentials and messages will be transferred in clear
+				# text. (optional)
+				NoSTARTTLS: false
+
+				# If set, authentication credentials for the remote server. (optional)
+				Auth:
+					Username:
+					Password:
+
+					# Allowed authentication mechanisms. Defaults to SCRAM-SHA-256, SCRAM-SHA-1,
+					# CRAM-MD5. Not included by default: PLAIN. (optional)
+					Mechanisms:
+						-
+
+			# Submission SMTP over a plain TCP connection (possibly with STARTTLS) to submit
+			# email to a remote queue. (optional)
+			Submission:
+
+				# Host name to connect to and for verifying its TLS certificate.
+				Host:
+
+				# If unset or 0, the default port for submission(s)/smtp is used: 25 for SMTP, 465
+				# for submissions (with TLS), 587 for submission (possibly with STARTTLS).
+				# (optional)
+				Port: 0
+
+				# If set an unverifiable remote TLS certificate during STARTTLS is accepted.
+				# (optional)
+				STARTTLSInsecureSkipVerify: false
+
+				# If set for submission or smtp transport, do not attempt STARTTLS on the
+				# connection. Authentication credentials and messages will be transferred in clear
+				# text. (optional)
+				NoSTARTTLS: false
+
+				# If set, authentication credentials for the remote server. (optional)
+				Auth:
+					Username:
+					Password:
+
+					# Allowed authentication mechanisms. Defaults to SCRAM-SHA-256, SCRAM-SHA-1,
+					# CRAM-MD5. Not included by default: PLAIN. (optional)
+					Mechanisms:
+						-
+
+			# SMTP over a plain connection (possibly with STARTTLS), typically for
+			# old-fashioned unauthenticated relaying to a remote queue. (optional)
+			SMTP:
+
+				# Host name to connect to and for verifying its TLS certificate.
+				Host:
+
+				# If unset or 0, the default port for submission(s)/smtp is used: 25 for SMTP, 465
+				# for submissions (with TLS), 587 for submission (possibly with STARTTLS).
+				# (optional)
+				Port: 0
+
+				# If set an unverifiable remote TLS certificate during STARTTLS is accepted.
+				# (optional)
+				STARTTLSInsecureSkipVerify: false
+
+				# If set for submission or smtp transport, do not attempt STARTTLS on the
+				# connection. Authentication credentials and messages will be transferred in clear
+				# text. (optional)
+				NoSTARTTLS: false
+
+				# If set, authentication credentials for the remote server. (optional)
+				Auth:
+					Username:
+					Password:
+
+					# Allowed authentication mechanisms. Defaults to SCRAM-SHA-256, SCRAM-SHA-1,
+					# CRAM-MD5. Not included by default: PLAIN. (optional)
+					Mechanisms:
+						-
+
+			# Like regular direct delivery, but makes outgoing connections through a SOCKS
+			# proxy. (optional)
+			Socks:
+
+				# Address of SOCKS proxy, of the form host:port or ip:port.
+				Address:
+
+				# IP addresses connections from the SOCKS server will originate from. This IP
+				# addresses should be configured in the SPF record (keep in mind DNS record time
+				# to live (TTL) when adding a SOCKS proxy). Reverse DNS should be set up for these
+				# address, resolving to RemoteHostname. These are typically the IPv4 and IPv6
+				# address for the host in the Address field.
+				RemoteIPs:
+					-
+
+				# Hostname belonging to RemoteIPs. This name is used during in SMTP EHLO. This is
+				# typically the hostname of the host in the Address field.
+				RemoteHostname:
 
 # domains.conf
 
@@ -461,6 +639,30 @@ describe-static" and "mox config describe-domains":
 				# Mailbox to deliver to, e.g. TLSRPT.
 				Mailbox:
 
+			# Routes for delivering outgoing messages through the queue. Each delivery attempt
+			# evaluates account routes, these domain routes and finally global routes. The
+			# transport of the first matching route is used in the delivery attempt. If no
+			# routes match, which is the default with no configured routes, messages are
+			# delivered directly from the queue. (optional)
+			Routes:
+				-
+
+					# Matches if the envelope from domain matches one of the configured domains, or if
+					# the list is empty. If a domain starts with a dot, prefixes of the domain also
+					# match. (optional)
+					FromDomain:
+						-
+
+					# Like FromDomain, but matching against the envelope to domain. (optional)
+					ToDomain:
+						-
+
+					# Matches if at least this many deliveries have already been attempted. This can
+					# be used to attempt sending through a smarthost when direct delivery has failed
+					# for several times. (optional)
+					MinimumAttempts: 0
+					Transport:
+
 	# Accounts to which email can be delivered. An account can accept email for
 	# multiple domains, for multiple localparts, and deliver to multiple mailboxes.
 	Accounts:
@@ -472,6 +674,10 @@ describe-static" and "mox config describe-domains":
 
 			# Free form description, e.g. full name or alternative contact info. (optional)
 			Description:
+
+			# Full name, to use in message From header when composing messages in webmail. Can
+			# be overridden per destination. (optional)
+			FullName:
 
 			# Destinations, keys are email addresses (with IDNA domains). If the address is of
 			# the form '@domain', i.e. with localpart missing, it serves as a catchall for the
@@ -492,7 +698,7 @@ describe-static" and "mox config describe-domains":
 						-
 
 							# Matches if this regular expression matches (a substring of) the SMTP MAIL FROM
-							# address (not the message From-header). E.g. user@example.org. (optional)
+							# address (not the message From-header). E.g. '^user@example\.org$'. (optional)
 							SMTPMailFromRegexp:
 
 							# Matches if this domain matches an SPF- and/or DKIM-verified (sub)domain.
@@ -509,18 +715,45 @@ describe-static" and "mox config describe-domains":
 							HeadersRegexp:
 								x:
 
-							# Influence the spam filtering, this does not change whether this ruleset applies
-							# to a message. If this domain matches an SPF- and/or DKIM-verified (sub)domain,
-							# the message is accepted without further spam checks, such as a junk filter or
-							# DMARC reject evaluation. DMARC rejects should not apply for mailing lists that
-							# are not configured to rewrite the From-header of messages that don't have a
-							# passing DKIM signature of the From-domain. Otherwise, by rejecting messages, you
-							# may be automatically unsubscribed from the mailing list. The assumption is that
-							# mailing lists do their own spam filtering/moderation. (optional)
+							# Influences spam filtering only, this option does not change whether a message
+							# matches this ruleset. Can only be used together with SMTPMailFromRegexp and
+							# VerifiedDomain. SMTPMailFromRegexp must be set to the address used to deliver
+							# the forwarded message, e.g. '^user(|\+.*)@forward\.example$'. Changes to junk
+							# analysis: 1. Messages are not rejects for failing a DMARC policy, because a
+							# legitimate forwarded message without valid/intact/aligned DKIM signature would
+							# be rejected because any verified SPF domain will be 'unaligned', of the
+							# forwarding mail server. 2. The sending mail server IP address, and sending EHLO
+							# and MAIL FROM domains and matching DKIM domain aren't used in future
+							# reputation-based spam classifications (but other verified DKIM domains are)
+							# because the forwarding server is not a useful spam signal for future messages.
+							# (optional)
+							IsForward: false
+
+							# Influences spam filtering only, this option does not change whether a message
+							# matches this ruleset. If this domain matches an SPF- and/or DKIM-verified
+							# (sub)domain, the message is accepted without further spam checks, such as a junk
+							# filter or DMARC reject evaluation. DMARC rejects should not apply for mailing
+							# lists that are not configured to rewrite the From-header of messages that don't
+							# have a passing DKIM signature of the From-domain. Otherwise, by rejecting
+							# messages, you may be automatically unsubscribed from the mailing list. The
+							# assumption is that mailing lists do their own spam filtering/moderation.
+							# (optional)
 							ListAllowDomain:
+
+							# Influences spam filtering only, this option does not change whether a message
+							# matches this ruleset. If a message is classified as spam, it isn't rejected
+							# during the SMTP transaction (the normal behaviour), but accepted during the SMTP
+							# transaction and delivered to the specified mailbox. The specified mailbox is not
+							# automatically cleaned up like the account global Rejects mailbox, unless set to
+							# that Rejects mailbox. (optional)
+							AcceptRejectsToMailbox:
 
 							# Mailbox to deliver to if this ruleset matches.
 							Mailbox:
+
+					# Full name to use in message From header when composing messages coming from this
+					# address with webmail. (optional)
+					FullName:
 
 			# If configured, messages classified as weakly spam are rejected with instructions
 			# to retry delivery, but this time with a signed token added to the subject.
@@ -539,6 +772,10 @@ describe-static" and "mox config describe-domains":
 			# Messages are automatically removed from this mailbox, so do not set it to a
 			# mailbox that has messages you want to keep. (optional)
 			RejectsMailbox:
+
+			# Don't automatically delete mail in the RejectsMailbox listed above. This can be
+			# useful, e.g. for future spam training. (optional)
+			KeepRejects: false
 
 			# Automatically set $Junk and $NotJunk flags based on mailbox messages are
 			# delivered/moved/copied to. Email clients typically have too limited
@@ -610,6 +847,30 @@ describe-static" and "mox config describe-domains":
 			# a 24 hour window. This limits the damage to recipients and the reputation of
 			# this mail server in case of account compromise. Default 200. (optional)
 			MaxFirstTimeRecipientsPerDay: 0
+
+			# Routes for delivering outgoing messages through the queue. Each delivery attempt
+			# evaluates these account routes, domain routes and finally global routes. The
+			# transport of the first matching route is used in the delivery attempt. If no
+			# routes match, which is the default with no configured routes, messages are
+			# delivered directly from the queue. (optional)
+			Routes:
+				-
+
+					# Matches if the envelope from domain matches one of the configured domains, or if
+					# the list is empty. If a domain starts with a dot, prefixes of the domain also
+					# match. (optional)
+					FromDomain:
+						-
+
+					# Like FromDomain, but matching against the envelope to domain. (optional)
+					ToDomain:
+						-
+
+					# Matches if at least this many deliveries have already been attempted. This can
+					# be used to attempt sending through a smarthost when direct delivery has failed
+					# for several times. (optional)
+					MinimumAttempts: 0
+					Transport:
 
 	# Redirect all requests from domain (key) to domain (value). Always redirects to
 	# HTTPS. For plain HTTP redirects, use a WebHandler with a WebRedirect. (optional)
@@ -728,6 +989,30 @@ describe-static" and "mox config describe-domains":
 				# headers. (optional)
 				ResponseHeaders:
 					x:
+
+	# Routes for delivering outgoing messages through the queue. Each delivery attempt
+	# evaluates account routes, domain routes and finally these global routes. The
+	# transport of the first matching route is used in the delivery attempt. If no
+	# routes match, which is the default with no configured routes, messages are
+	# delivered directly from the queue. (optional)
+	Routes:
+		-
+
+			# Matches if the envelope from domain matches one of the configured domains, or if
+			# the list is empty. If a domain starts with a dot, prefixes of the domain also
+			# match. (optional)
+			FromDomain:
+				-
+
+			# Like FromDomain, but matching against the envelope to domain. (optional)
+			ToDomain:
+				-
+
+			# Matches if at least this many deliveries have already been attempted. This can
+			# be used to attempt sending through a smarthost when direct delivery has failed
+			# for several times. (optional)
+			MinimumAttempts: 0
+			Transport:
 
 # Examples
 

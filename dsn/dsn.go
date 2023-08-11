@@ -45,6 +45,13 @@ type Message struct {
 	// Message subject header, e.g. describing mail delivery failure.
 	Subject string
 
+	// Set when message is composed.
+	MessageID string
+
+	// References header, with Message-ID of original message this DSN is about. So
+	// mail user-agents will thread the DSN with the original message.
+	References string
+
 	// Human-readable text explaining the failure. Line endings should be
 	// bare newlines, not \r\n. They are converted to \r\n when composing.
 	TextBody string
@@ -158,7 +165,11 @@ func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
 	header("From", fmt.Sprintf("<%s>", m.From.XString(smtputf8))) // todo: would be good to have a local ascii-only name for this address.
 	header("To", fmt.Sprintf("<%s>", m.To.XString(smtputf8)))     // todo: we could just leave this out if it has utf-8 and remote does not support utf-8.
 	header("Subject", m.Subject)
-	header("Message-Id", fmt.Sprintf("<%s>", mox.MessageIDGen(smtputf8)))
+	m.MessageID = mox.MessageIDGen(smtputf8)
+	header("Message-Id", fmt.Sprintf("<%s>", m.MessageID))
+	if m.References != "" {
+		header("References", m.References)
+	}
 	header("Date", time.Now().Format(message.RFC5322Z))
 	header("MIME-Version", "1.0")
 	mp := multipart.NewWriter(msgw)
@@ -262,7 +273,11 @@ func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
 		status("Status", statusLine) // ../rfc/3464:975
 		if !r.RemoteMTA.IsZero() {
 			// ../rfc/3464:1015
-			status("Remote-MTA", fmt.Sprintf("dns;%s (%s)", r.RemoteMTA.Name, smtp.AddressLiteral(r.RemoteMTA.IP)))
+			s := "dns;" + r.RemoteMTA.Name
+			if len(r.RemoteMTA.IP) > 0 {
+				s += " (" + smtp.AddressLiteral(r.RemoteMTA.IP) + ")"
+			}
+			status("Remote-MTA", s)
 		}
 		// Presence of Diagnostic-Code indicates the code is from Remote-MTA. ../rfc/3464:1053
 		if r.DiagnosticCode != "" {
@@ -295,10 +310,8 @@ func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
 			headers = m.Original
 		} else if err != nil {
 			return nil, err
-		} else {
-			// This is a whole message. We still only include the headers.
-			// todo: include the whole body.
 		}
+		// Else, this is a whole message. We still only include the headers. todo: include the whole body.
 
 		origHdr := textproto.MIMEHeader{}
 		if smtputf8 {

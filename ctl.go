@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -232,8 +233,6 @@ func (s *ctlreader) Read(buf []byte) (N int, Err error) {
 			return 0, s.err
 		}
 		s.npending = int(n)
-		_, err = fmt.Fprintln(s.conn, "ok")
-		s.xcheck(err, "writing ok after reading")
 	}
 	rn := len(buf)
 	if rn > s.npending {
@@ -242,6 +241,10 @@ func (s *ctlreader) Read(buf []byte) (N int, Err error) {
 	n, err := s.r.Read(buf[:rn])
 	s.xcheck(err, "read from ctl")
 	s.npending -= n
+	if s.npending == 0 {
+		_, err = fmt.Fprintln(s.conn, "ok")
+		s.xcheck(err, "writing ok after reading")
+	}
 	return n, err
 }
 
@@ -286,11 +289,12 @@ func servectl(ctx context.Context, log *mlog.Log, conn net.Conn, shutdown func()
 
 	ctl.xwrite("ctlv0")
 	for {
-		servectlcmd(ctx, log, ctl, shutdown)
+		servectlcmd(ctx, ctl, shutdown)
 	}
 }
 
-func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) {
+func servectlcmd(ctx context.Context, ctl *ctl, shutdown func()) {
+	log := ctl.log
 	cmd := ctl.xread()
 	ctl.cmd = cmd
 	log.Info("ctl command", mlog.Field("cmd", cmd))
@@ -404,9 +408,39 @@ func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) 
 		}
 		xw.xclose()
 
-	case "queuekick", "queuedrop":
+	case "queuekick":
 		/* protocol:
-		> "queuekick" or "queuedrop"
+		> "queuekick"
+		> id
+		> todomain
+		> recipient
+		> transport // if empty, transport is left unchanged; in future, we may want to differtiate between "leave unchanged" and "set to empty string".
+		< count
+		< "ok" or error
+		*/
+
+		idstr := ctl.xread()
+		todomain := ctl.xread()
+		recipient := ctl.xread()
+		transport := ctl.xread()
+		id, err := strconv.ParseInt(idstr, 10, 64)
+		if err != nil {
+			ctl.xwrite("0")
+			ctl.xcheck(err, "parsing id")
+		}
+
+		var xtransport *string
+		if transport != "" {
+			xtransport = &transport
+		}
+		count, err := queue.Kick(ctx, id, todomain, recipient, xtransport)
+		ctl.xcheck(err, "kicking queue")
+		ctl.xwrite(fmt.Sprintf("%d", count))
+		ctl.xwriteok()
+
+	case "queuedrop":
+		/* protocol:
+		> "queuedrop"
 		> id
 		> todomain
 		> recipient
@@ -423,14 +457,8 @@ func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) 
 			ctl.xcheck(err, "parsing id")
 		}
 
-		var count int
-		if cmd == "queuekick" {
-			count, err = queue.Kick(ctx, id, todomain, recipient)
-			ctl.xcheck(err, "kicking queue")
-		} else {
-			count, err = queue.Drop(ctx, id, todomain, recipient)
-			ctl.xcheck(err, "dropping messages from queue")
-		}
+		count, err := queue.Drop(ctx, id, todomain, recipient)
+		ctl.xcheck(err, "dropping messages from queue")
 		ctl.xwrite(fmt.Sprintf("%d", count))
 		ctl.xwriteok()
 
@@ -592,6 +620,12 @@ func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) 
 		account := ctl.xread()
 		acc, err := store.OpenAccount(account)
 		ctl.xcheck(err, "open account")
+		defer func() {
+			if acc != nil {
+				err := acc.Close()
+				log.Check(err, "closing account after retraining")
+			}
+		}()
 
 		acc.WithWLock(func() {
 			conf, _ := acc.Conf()
@@ -622,6 +656,7 @@ func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) 
 			// Read through messages with junk or nonjunk flag set, and train them.
 			var total, trained int
 			q := bstore.QueryDB[store.Message](ctx, acc.DB)
+			q.FilterEqual("Expunged", false)
 			err = q.ForEach(func(m store.Message) error {
 				total++
 				ok, err := acc.TrainMessage(ctx, ctl.log, jf, m)
@@ -638,8 +673,269 @@ func servectlcmd(ctx context.Context, log *mlog.Log, ctl *ctl, shutdown func()) 
 			jf = nil
 			ctl.xcheck(err, "closing junk filter")
 		})
-
 		ctl.xwriteok()
+
+	case "recalculatemailboxcounts":
+		/* protocol:
+		> "recalculatemailboxcounts"
+		> account
+		< "ok" or error
+		< stream
+		*/
+		account := ctl.xread()
+		acc, err := store.OpenAccount(account)
+		ctl.xcheck(err, "open account")
+		defer func() {
+			if acc != nil {
+				err := acc.Close()
+				log.Check(err, "closing account after recalculating mailbox counts")
+			}
+		}()
+		ctl.xwriteok()
+
+		w := ctl.writer()
+
+		acc.WithWLock(func() {
+			var changes []store.Change
+			err = acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+				return bstore.QueryTx[store.Mailbox](tx).ForEach(func(mb store.Mailbox) error {
+					mc, err := mb.CalculateCounts(tx)
+					if err != nil {
+						return fmt.Errorf("calculating counts for mailbox %q: %w", mb.Name, err)
+					}
+
+					if !mb.HaveCounts || mc != mb.MailboxCounts {
+						_, err := fmt.Fprintf(w, "for %s setting new counts %s (was %s)\n", mb.Name, mc, mb.MailboxCounts)
+						ctl.xcheck(err, "write")
+						mb.HaveCounts = true
+						mb.MailboxCounts = mc
+						if err := tx.Update(&mb); err != nil {
+							return fmt.Errorf("storing new counts for %q: %v", mb.Name, err)
+						}
+						changes = append(changes, mb.ChangeCounts())
+					}
+					return nil
+				})
+			})
+			ctl.xcheck(err, "write transaction for mailbox counts")
+
+			store.BroadcastChanges(acc, changes)
+		})
+		w.xclose()
+
+	case "fixmsgsize":
+		/* protocol:
+		> "fixmsgsize"
+		> account or empty
+		< "ok" or error
+		< stream
+		*/
+
+		accountOpt := ctl.xread()
+		ctl.xwriteok()
+		w := ctl.writer()
+
+		var foundProblem bool
+		const batchSize = 10000
+
+		xfixmsgsize := func(accName string) {
+			acc, err := store.OpenAccount(accName)
+			ctl.xcheck(err, "open account")
+			defer func() {
+				err := acc.Close()
+				log.Check(err, "closing account after fixing message sizes")
+			}()
+
+			total := 0
+			var lastID int64
+			for {
+				var n int
+
+				acc.WithRLock(func() {
+					mailboxCounts := map[int64]store.Mailbox{} // For broadcasting.
+
+					// Don't process all message in one transaction, we could block the account for too long.
+					err := acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+						q := bstore.QueryTx[store.Message](tx)
+						q.FilterEqual("Expunged", false)
+						q.FilterGreater("ID", lastID)
+						q.Limit(batchSize)
+						q.SortAsc("ID")
+						return q.ForEach(func(m store.Message) error {
+							lastID = m.ID
+
+							p := acc.MessagePath(m.ID)
+							st, err := os.Stat(p)
+							if err != nil {
+								mb := store.Mailbox{ID: m.MailboxID}
+								if xerr := tx.Get(&mb); xerr != nil {
+									_, werr := fmt.Fprintf(w, "get mailbox id %d for message with file error: %v\n", mb.ID, xerr)
+									ctl.xcheck(werr, "write")
+								}
+								_, werr := fmt.Fprintf(w, "checking file %s for message %d in mailbox %q (id %d): %v (continuing)\n", p, m.ID, mb.Name, mb.ID, err)
+								ctl.xcheck(werr, "write")
+								return nil
+							}
+							filesize := st.Size()
+							correctSize := int64(len(m.MsgPrefix)) + filesize
+							if m.Size == correctSize {
+								return nil
+							}
+
+							foundProblem = true
+
+							mb := store.Mailbox{ID: m.MailboxID}
+							if err := tx.Get(&mb); err != nil {
+								_, werr := fmt.Fprintf(w, "get mailbox id %d for message with file size mismatch: %v\n", mb.ID, err)
+								ctl.xcheck(werr, "write")
+							}
+							_, err = fmt.Fprintf(w, "fixing message %d in mailbox %q (id %d) with incorrect size %d, should be %d (len msg prefix %d + on-disk file %s size %d)\n", m.ID, mb.Name, mb.ID, m.Size, correctSize, len(m.MsgPrefix), p, filesize)
+							ctl.xcheck(err, "write")
+
+							// We assume that the original message size was accounted as stored in the mailbox
+							// total size. If this isn't correct, the user can always run
+							// recalculatemailboxcounts.
+							mb.Size -= m.Size
+							mb.Size += correctSize
+							if err := tx.Update(&mb); err != nil {
+								return fmt.Errorf("update mailbox counts: %v", err)
+							}
+							mailboxCounts[mb.ID] = mb
+
+							m.Size = correctSize
+
+							mr := acc.MessageReader(m)
+							part, err := message.EnsurePart(mr, m.Size)
+							if err != nil {
+								_, werr := fmt.Fprintf(w, "parsing message %d again: %v (continuing)\n", m.ID, err)
+								ctl.xcheck(werr, "write")
+							}
+							m.ParsedBuf, err = json.Marshal(part)
+							if err != nil {
+								return fmt.Errorf("marshal parsed message: %v", err)
+							}
+							total++
+							n++
+							if err := tx.Update(&m); err != nil {
+								return fmt.Errorf("update message: %v", err)
+							}
+							return nil
+						})
+
+					})
+					ctl.xcheck(err, "find and fix wrong message sizes")
+
+					var changes []store.Change
+					for _, mb := range mailboxCounts {
+						changes = append(changes, mb.ChangeCounts())
+					}
+					store.BroadcastChanges(acc, changes)
+				})
+				if n < batchSize {
+					break
+				}
+			}
+			_, err = fmt.Fprintf(w, "%d message size(s) fixed for account %s\n", total, accName)
+			ctl.xcheck(err, "write")
+		}
+
+		if accountOpt != "" {
+			xfixmsgsize(accountOpt)
+		} else {
+			for i, accName := range mox.Conf.Accounts() {
+				var line string
+				if i > 0 {
+					line = "\n"
+				}
+				_, err := fmt.Fprintf(w, "%sFixing message sizes in account %s...\n", line, accName)
+				ctl.xcheck(err, "write")
+				xfixmsgsize(accName)
+			}
+		}
+		if foundProblem {
+			_, err := fmt.Fprintf(w, "\nProblems were found and fixed. You should invalidate messages stored at imap clients with the \"mox bumpuidvalidity account [mailbox]\" command.\n")
+			ctl.xcheck(err, "write")
+		}
+
+		w.xclose()
+
+	case "reparse":
+		/* protocol:
+		> "reparse"
+		> account or empty
+		< "ok" or error
+		< stream
+		*/
+
+		accountOpt := ctl.xread()
+		ctl.xwriteok()
+		w := ctl.writer()
+
+		const batchSize = 100
+
+		xreparseAccount := func(accName string) {
+			acc, err := store.OpenAccount(accName)
+			ctl.xcheck(err, "open account")
+			defer func() {
+				err := acc.Close()
+				log.Check(err, "closing account after reparsing messages")
+			}()
+
+			total := 0
+			var lastID int64
+			for {
+				var n int
+				// Don't process all message in one transaction, we could block the account for too long.
+				err := acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+					q := bstore.QueryTx[store.Message](tx)
+					q.FilterEqual("Expunged", false)
+					q.FilterGreater("ID", lastID)
+					q.Limit(batchSize)
+					q.SortAsc("ID")
+					return q.ForEach(func(m store.Message) error {
+						lastID = m.ID
+						mr := acc.MessageReader(m)
+						p, err := message.EnsurePart(mr, m.Size)
+						if err != nil {
+							_, err := fmt.Fprintf(w, "parsing message %d: %v (continuing)\n", m.ID, err)
+							ctl.xcheck(err, "write")
+						}
+						m.ParsedBuf, err = json.Marshal(p)
+						if err != nil {
+							return fmt.Errorf("marshal parsed message: %v", err)
+						}
+						total++
+						n++
+						if err := tx.Update(&m); err != nil {
+							return fmt.Errorf("update message: %v", err)
+						}
+						return nil
+					})
+
+				})
+				ctl.xcheck(err, "update messages with parsed mime structure")
+				if n < batchSize {
+					break
+				}
+			}
+			_, err = fmt.Fprintf(w, "%d message(s) reparsed for account %s\n", total, accName)
+			ctl.xcheck(err, "write")
+		}
+
+		if accountOpt != "" {
+			xreparseAccount(accountOpt)
+		} else {
+			for i, accName := range mox.Conf.Accounts() {
+				var line string
+				if i > 0 {
+					line = "\n"
+				}
+				_, err := fmt.Fprintf(w, "%sReparsing account %s...\n", line, accName)
+				ctl.xcheck(err, "write")
+				xreparseAccount(accName)
+			}
+		}
+		w.xclose()
 
 	case "backup":
 		backupctl(ctx, ctl)

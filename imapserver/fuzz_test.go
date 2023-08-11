@@ -1,7 +1,6 @@
 package imapserver
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -58,9 +57,9 @@ func FuzzServer(f *testing.F) {
 		f.Add(tag + cmd)
 	}
 
-	mox.Context = context.Background()
+	mox.Context = ctxbg
 	mox.ConfigStaticPath = "../testdata/imapserverfuzz/mox.conf"
-	mox.MustLoadConfig(false)
+	mox.MustLoadConfig(true, false)
 	dataDir := mox.ConfigDirPath(mox.Conf.Static.DataDir)
 	os.RemoveAll(dataDir)
 	acc, err := store.OpenAccount("mjl")
@@ -72,8 +71,7 @@ func FuzzServer(f *testing.F) {
 	if err != nil {
 		f.Fatalf("set password: %v", err)
 	}
-	done := store.Switchboard()
-	defer close(done)
+	defer store.Switchboard()()
 
 	comm := store.RegisterComm(acc)
 	defer comm.Unregister()
