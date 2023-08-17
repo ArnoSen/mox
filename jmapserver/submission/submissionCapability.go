@@ -1,24 +1,24 @@
 package submission
 
 import (
-	"github.com/mjl-/mox/jmapserver/capabilitier"
+	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/datatyper"
 )
 
 type SubmissionCapabilitySettings struct {
-	MaxDelayedSend       datatyper.Uint `json:"maxDelayedSend"`
+	MaxDelayedSend       basetypes.Uint `json:"maxDelayedSend"`
 	SubmissionExtensions [][]string     `json:"submissionExtensions"`
 }
 
 type Submission struct {
 	settings  SubmissionCapabilitySettings
-	datatypes []capabilitier.Datatyper
+	datatypes []datatyper.Datatyper
 }
 
 func NewSubmissionCapability(settings SubmissionCapabilitySettings) *Submission {
 	return &Submission{
 		settings: settings,
-		datatypes: []capabilitier.Datatyper{
+		datatypes: []datatyper.Datatyper{
 			NewIdentities(),
 			NewEmailSubmission(),
 		},
@@ -33,6 +33,6 @@ func (c *Submission) SessionObjectInfo() interface{} {
 	return c.settings
 }
 
-func (c *Submission) Datatypes() []capabilitier.Datatyper {
+func (c *Submission) Datatypes() []datatyper.Datatyper {
 	return c.datatypes
 }
