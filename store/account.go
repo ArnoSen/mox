@@ -187,6 +187,9 @@ type SyncState struct {
 	HighestDeletedModSeq ModSeq
 }
 
+// MailboxHierarchySeperator is the delimiter that indicates hierarchy in mailbox names
+const MailboxHierarchyDelimiter = "/"
+
 // Mailbox is collection of messages, e.g. Inbox or Sent.
 type Mailbox struct {
 	ID int64
@@ -213,6 +216,10 @@ type Mailbox struct {
 
 	HaveCounts    bool // Whether MailboxCounts have been initialized.
 	MailboxCounts      // Statistics about messages, kept up to date whenever a change happens.
+
+	//SortOrder (JMAP) is order of this mailbox in comparison to the rest. The lower the number the higer it will be on the list
+	//The lowest value is 1. The value 0 indicates the SortOrder has not been set yet
+	SortOrder uint
 }
 
 // MailboxCounts tracks statistics about messages for a mailbox.

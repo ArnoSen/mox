@@ -3,7 +3,6 @@ package jaccount
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/mjl-/bstore"
@@ -40,13 +39,11 @@ func (ja *JAccount) GetMailboxes(ctx context.Context, ids []basetypes.Id) (resul
 	}
 
 	//put in a structure so we can do sorting
-	jmbs := NewJMailboxes()
+	jmbs := NewJMailboxes(store.MailboxHierarchyDelimiter)
 
 	for _, mb := range mbs {
 		jmbs.AddMailbox(NewJMailbox(mb))
 	}
-
-	sort.Sort(jmbs)
 
 	for i, jmb := range jmbs.Mbs {
 
@@ -60,9 +57,10 @@ func (ja *JAccount) GetMailboxes(ctx context.Context, ids []basetypes.Id) (resul
 		}
 
 		resultItem := Mailbox{
-			Id:            basetypes.Id(jmb.ID()),
-			Name:          jmb.Name(),
-			SortOrder:     basetypes.Uint(uint(i)),
+			Id:   basetypes.Id(jmb.ID()),
+			Name: jmb.Name(),
+			//FIXME this should be persistent and come from db
+			SortOrder:     basetypes.Uint(uint(i + 1)),
 			TotalThreads:  0, //FIXME
 			UnreadThreads: 0, //FIXME
 			Role:          jmb.Role(),
@@ -183,14 +181,15 @@ func (mb JMailbox) UnreadEmails() uint {
 }
 
 type JMailboxes struct {
-	Mbs       []JMailbox
-	Seperator string
+	Mbs                []JMailbox
+	HierarchyDelimiter string
 }
 
-func NewJMailboxes(mbs ...JMailbox) JMailboxes {
+func NewJMailboxes(hierarchyDelimiter string, mbs ...JMailbox) JMailboxes {
 	return JMailboxes{
-		Mbs:       mbs,
-		Seperator: "|",
+		Mbs: mbs,
+		//AO: I cannot find a constant in the code describing the hierarchy. I got this from a comment
+		HierarchyDelimiter: hierarchyDelimiter,
 	}
 }
 
@@ -202,14 +201,14 @@ func (jmbs JMailboxes) AddMailbox(mb JMailbox) {
 func (jmbs JMailboxes) ParentID(mb JMailbox) *string {
 	//mailboxes have names like Inbox|Keep|2022
 
-	parts := strings.Split(mb.Mb.Name, jmbs.Seperator)
+	parts := strings.Split(mb.Mb.Name, jmbs.HierarchyDelimiter)
 	if len(parts) == 1 {
 		//no seperator so we are at the top level
 		return nil
 	}
 
 	//remove the last element to get the parent name
-	parentName := strings.Join(parts[:len(parts)-1], jmbs.Seperator)
+	parentName := strings.Join(parts[:len(parts)-1], jmbs.HierarchyDelimiter)
 
 	for _, mb := range jmbs.Mbs {
 		if mb.Mb.Name == parentName {
@@ -218,89 +217,4 @@ func (jmbs JMailboxes) ParentID(mb JMailbox) *string {
 		}
 	}
 	return nil
-}
-
-func (jmbs JMailboxes) IsTopLevel(mb1 JMailbox) bool {
-	return !strings.Contains(mb1.Name(), jmbs.Seperator)
-}
-
-func (jmbs JMailboxes) ShareAncestor(mb1, mb2 JMailbox) bool {
-	if mb1.Name() == "" || mb2.Name() == "" {
-		panic("mailbox with empty name!")
-	}
-
-	mb1NameParts := strings.Split(mb1.Name(), jmbs.Seperator)
-	mb2NameParts := strings.Split(mb2.Name(), jmbs.Seperator)
-
-	if len(mb1NameParts) == 1 && len(mb2NameParts) == 1 {
-		//two top level elements
-		return false
-	}
-
-	return mb1NameParts[0] == mb2NameParts[0]
-}
-
-// GetMailboxByID returns a mailbox by ID. If not found, nil is returned
-func (jmbs JMailboxes) GetMailboxByID(id string) *JMailbox {
-	for _, jmb := range jmbs.Mbs {
-		if jmb.ID() == id {
-			return &jmb
-		}
-	}
-	return nil
-}
-
-func (jmbs JMailboxes) HasSpecialParent(mb1 JMailbox) bool {
-
-	parentID := jmbs.ParentID(mb1)
-	if parentID == nil {
-		return false
-	}
-
-	parent := jmbs.GetMailboxByID(*parentID)
-	if parent == nil {
-		panic(fmt.Sprintf("mailbox with id %s is missing", *parentID))
-	}
-	if parent.Role() != "" {
-		return true
-	}
-	return jmbs.HasSpecialParent(*parent)
-}
-
-func (jmbs JMailboxes) IsParent(son, father JMailbox) bool {
-	parentID := jmbs.ParentID(son)
-	if parentID == nil {
-		return false
-	}
-	return *parentID == father.ID()
-}
-
-// Len is the number of elements in the collection.
-func (jmb JMailboxes) Len() int {
-	return len(jmb.Mbs)
-}
-
-// Less reports whether the element with index i
-// must sort before the element with index j.
-//
-// If both Less(i, j) and Less(j, i) are false,
-// then the elements at index i and j are considered equal.
-// Sort may place equal elements in any order in the final result,
-// while Stable preserves the original input order of equal elements.
-//
-// Less must describe a transitive ordering:
-//   - if both Less(i, j) and Less(j, k) are true, then Less(i, k) must be true as well.
-//   - if both Less(i, j) and Less(j, k) are false, then Less(i, k) must be false as well.
-//
-// Note that floating-point comparison (the < operator on float32 or float64 values)
-// is not a transitive ordering when not-a-number (NaN) values are involved.
-// See Float64Slice.Less for a correct implementation for floating-point values.
-func (jmbs JMailboxes) Less(i int, j int) (result bool) {
-	//FIXME this assumes that special mailboxes are created as first entries in the DB and that the user cannot remove those. Needs a fix for existing users
-	return jmbs.Mbs[i].Mb.Name < jmbs.Mbs[j].Mb.Name
-}
-
-// Swap swaps the elements with indexes i and j.
-func (jmb JMailboxes) Swap(i int, j int) {
-	jmb.Mbs[i], jmb.Mbs[j] = jmb.Mbs[j], jmb.Mbs[i]
 }
