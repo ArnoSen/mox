@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -122,17 +123,21 @@ func TestAccount(t *testing.T) {
 	loop:
 		for {
 			e := <-l.Events
+			if e.Event == nil {
+				continue
+			}
 			switch x := e.Event.(type) {
 			case importCount:
 				count += x.Count
 			case importProblem:
 				t.Fatalf("unexpected problem: %q", x.Message)
+			case importStep:
 			case importDone:
 				break loop
 			case importAborted:
 				t.Fatalf("unexpected aborted import")
 			default:
-				panic("missing case")
+				panic(fmt.Sprintf("missing case for Event %#v", e))
 			}
 		}
 		if count != expect {

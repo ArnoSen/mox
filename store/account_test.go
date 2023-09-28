@@ -45,7 +45,7 @@ func TestMailbox(t *testing.T) {
 		t.Fatalf("creating temp msg file: %s", err)
 	}
 	defer msgFile.Close()
-	msgWriter := &message.Writer{Writer: msgFile}
+	msgWriter := message.NewWriter(msgFile)
 	if _, err := msgWriter.Write([]byte(" message")); err != nil {
 		t.Fatalf("writing to temp message: %s", err)
 	}
@@ -58,6 +58,8 @@ func TestMailbox(t *testing.T) {
 		MsgPrefix: msgPrefix,
 	}
 	msent := m
+	m.ThreadMuted = true
+	m.ThreadCollapsed = true
 	var mbsent Mailbox
 	mbrejects := Mailbox{Name: "Rejects", UIDValidity: 1, UIDNext: 1, HaveCounts: true}
 	mreject := m
@@ -68,7 +70,7 @@ func TestMailbox(t *testing.T) {
 	}
 	acc.WithWLock(func() {
 		conf, _ := acc.Conf()
-		err := acc.Deliver(xlog, conf.Destinations["mjl"], &m, msgFile, false)
+		err := acc.DeliverDestination(xlog, conf.Destinations["mjl"], &m, msgFile, false)
 		tcheck(t, err, "deliver without consume")
 
 		err = acc.DB.Write(ctxbg, func(tx *bstore.Tx) error {
@@ -77,8 +79,11 @@ func TestMailbox(t *testing.T) {
 			tcheck(t, err, "sent mailbox")
 			msent.MailboxID = mbsent.ID
 			msent.MailboxOrigID = mbsent.ID
-			err = acc.DeliverMessage(xlog, tx, &msent, msgFile, false, true, false)
+			err = acc.DeliverMessage(xlog, tx, &msent, msgFile, false, true, false, false)
 			tcheck(t, err, "deliver message")
+			if !msent.ThreadMuted || !msent.ThreadCollapsed {
+				t.Fatalf("thread muted & collapsed should have been copied from parent (duplicate message-id) m")
+			}
 
 			err = tx.Get(&mbsent)
 			tcheck(t, err, "get mbsent")
@@ -90,7 +95,7 @@ func TestMailbox(t *testing.T) {
 			tcheck(t, err, "insert rejects mailbox")
 			mreject.MailboxID = mbrejects.ID
 			mreject.MailboxOrigID = mbrejects.ID
-			err = acc.DeliverMessage(xlog, tx, &mreject, msgFile, false, true, false)
+			err = acc.DeliverMessage(xlog, tx, &mreject, msgFile, false, true, false, false)
 			tcheck(t, err, "deliver message")
 
 			err = tx.Get(&mbrejects)
@@ -103,7 +108,7 @@ func TestMailbox(t *testing.T) {
 		})
 		tcheck(t, err, "deliver as sent and rejects")
 
-		err = acc.Deliver(xlog, conf.Destinations["mjl"], &mconsumed, msgFile, true)
+		err = acc.DeliverDestination(xlog, conf.Destinations["mjl"], &mconsumed, msgFile, true)
 		tcheck(t, err, "deliver with consume")
 
 		err = acc.DB.Write(ctxbg, func(tx *bstore.Tx) error {

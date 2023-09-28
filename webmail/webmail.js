@@ -17,6 +17,12 @@ var api;
 		Validation[Validation["ValidationSoftfail"] = 9] = "ValidationSoftfail";
 		Validation[Validation["ValidationNone"] = 10] = "ValidationNone";
 	})(Validation = api.Validation || (api.Validation = {}));
+	let ThreadMode;
+	(function (ThreadMode) {
+		ThreadMode["ThreadOff"] = "off";
+		ThreadMode["ThreadOn"] = "on";
+		ThreadMode["ThreadUnread"] = "unread";
+	})(ThreadMode = api.ThreadMode || (api.ThreadMode = {}));
 	// AttachmentType is for filtering by attachment type.
 	let AttachmentType;
 	(function (AttachmentType) {
@@ -30,12 +36,12 @@ var api;
 		AttachmentType["AttachmentDocument"] = "document";
 		AttachmentType["AttachmentPresentation"] = "presentation";
 	})(AttachmentType = api.AttachmentType || (api.AttachmentType = {}));
-	api.structTypes = { "Address": true, "Attachment": true, "ChangeMailboxAdd": true, "ChangeMailboxCounts": true, "ChangeMailboxKeywords": true, "ChangeMailboxRemove": true, "ChangeMailboxRename": true, "ChangeMailboxSpecialUse": true, "ChangeMsgAdd": true, "ChangeMsgFlags": true, "ChangeMsgRemove": true, "Domain": true, "DomainAddressConfig": true, "Envelope": true, "EventStart": true, "EventViewChanges": true, "EventViewErr": true, "EventViewMsgs": true, "EventViewReset": true, "File": true, "Filter": true, "Flags": true, "ForwardAttachments": true, "Mailbox": true, "Message": true, "MessageAddress": true, "MessageEnvelope": true, "MessageItem": true, "NotFilter": true, "Page": true, "ParsedMessage": true, "Part": true, "Query": true, "Request": true, "SpecialUse": true, "SubmitMessage": true };
-	api.stringsTypes = { "AttachmentType": true, "Localpart": true };
+	api.structTypes = { "Address": true, "Attachment": true, "ChangeMailboxAdd": true, "ChangeMailboxCounts": true, "ChangeMailboxKeywords": true, "ChangeMailboxRemove": true, "ChangeMailboxRename": true, "ChangeMailboxSpecialUse": true, "ChangeMsgAdd": true, "ChangeMsgFlags": true, "ChangeMsgRemove": true, "ChangeMsgThread": true, "Domain": true, "DomainAddressConfig": true, "Envelope": true, "EventStart": true, "EventViewChanges": true, "EventViewErr": true, "EventViewMsgs": true, "EventViewReset": true, "File": true, "Filter": true, "Flags": true, "ForwardAttachments": true, "Mailbox": true, "Message": true, "MessageAddress": true, "MessageEnvelope": true, "MessageItem": true, "NotFilter": true, "Page": true, "ParsedMessage": true, "Part": true, "Query": true, "Request": true, "SpecialUse": true, "SubmitMessage": true };
+	api.stringsTypes = { "AttachmentType": true, "Localpart": true, "ThreadMode": true };
 	api.intsTypes = { "ModSeq": true, "UID": true, "Validation": true };
 	api.types = {
 		"Request": { "Name": "Request", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "SSEID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Cancel", "Docs": "", "Typewords": ["bool"] }, { "Name": "Query", "Docs": "", "Typewords": ["Query"] }, { "Name": "Page", "Docs": "", "Typewords": ["Page"] }] },
-		"Query": { "Name": "Query", "Docs": "", "Fields": [{ "Name": "OrderAsc", "Docs": "", "Typewords": ["bool"] }, { "Name": "Filter", "Docs": "", "Typewords": ["Filter"] }, { "Name": "NotFilter", "Docs": "", "Typewords": ["NotFilter"] }] },
+		"Query": { "Name": "Query", "Docs": "", "Fields": [{ "Name": "OrderAsc", "Docs": "", "Typewords": ["bool"] }, { "Name": "Threading", "Docs": "", "Typewords": ["ThreadMode"] }, { "Name": "Filter", "Docs": "", "Typewords": ["Filter"] }, { "Name": "NotFilter", "Docs": "", "Typewords": ["NotFilter"] }] },
 		"Filter": { "Name": "Filter", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MailboxChildrenIncluded", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailboxName", "Docs": "", "Typewords": ["string"] }, { "Name": "Words", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "From", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Oldest", "Docs": "", "Typewords": ["nullable", "timestamp"] }, { "Name": "Newest", "Docs": "", "Typewords": ["nullable", "timestamp"] }, { "Name": "Subject", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["AttachmentType"] }, { "Name": "Labels", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Headers", "Docs": "", "Typewords": ["[]", "[]", "string"] }, { "Name": "SizeMin", "Docs": "", "Typewords": ["int64"] }, { "Name": "SizeMax", "Docs": "", "Typewords": ["int64"] }] },
 		"NotFilter": { "Name": "NotFilter", "Docs": "", "Fields": [{ "Name": "Words", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "From", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Subject", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["AttachmentType"] }, { "Name": "Labels", "Docs": "", "Typewords": ["[]", "string"] }] },
 		"Page": { "Name": "Page", "Docs": "", "Fields": [{ "Name": "AnchorMessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Count", "Docs": "", "Typewords": ["int32"] }, { "Name": "DestMessageID", "Docs": "", "Typewords": ["int64"] }] },
@@ -53,16 +59,17 @@ var api;
 		"DomainAddressConfig": { "Name": "DomainAddressConfig", "Docs": "", "Fields": [{ "Name": "LocalpartCatchallSeparator", "Docs": "", "Typewords": ["string"] }, { "Name": "LocalpartCaseSensitive", "Docs": "", "Typewords": ["bool"] }] },
 		"EventViewErr": { "Name": "EventViewErr", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Err", "Docs": "", "Typewords": ["string"] }] },
 		"EventViewReset": { "Name": "EventViewReset", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }] },
-		"EventViewMsgs": { "Name": "EventViewMsgs", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MessageItems", "Docs": "", "Typewords": ["[]", "MessageItem"] }, { "Name": "ParsedMessage", "Docs": "", "Typewords": ["nullable", "ParsedMessage"] }, { "Name": "ViewEnd", "Docs": "", "Typewords": ["bool"] }] },
-		"MessageItem": { "Name": "MessageItem", "Docs": "", "Fields": [{ "Name": "Message", "Docs": "", "Typewords": ["Message"] }, { "Name": "Envelope", "Docs": "", "Typewords": ["MessageEnvelope"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "Attachment"] }, { "Name": "IsSigned", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsEncrypted", "Docs": "", "Typewords": ["bool"] }, { "Name": "FirstLine", "Docs": "", "Typewords": ["string"] }] },
-		"Message": { "Name": "Message", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "CreateSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Expunged", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsReject", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailboxOrigID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MailboxDestinedID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Received", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "RemoteIP", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked1", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked2", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked3", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFrom", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MailFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "RcptToLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "RcptToDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MsgFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromOrgDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLOValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MsgFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "EHLOValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MailFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MsgFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "DKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "OrigEHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "OrigDKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageHash", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "Seen", "Docs": "", "Typewords": ["bool"] }, { "Name": "Answered", "Docs": "", "Typewords": ["bool"] }, { "Name": "Flagged", "Docs": "", "Typewords": ["bool"] }, { "Name": "Forwarded", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Notjunk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Phishing", "Docs": "", "Typewords": ["bool"] }, { "Name": "MDNSent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }, { "Name": "TrainedJunk", "Docs": "", "Typewords": ["nullable", "bool"] }, { "Name": "MsgPrefix", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ParsedBuf", "Docs": "", "Typewords": ["nullable", "string"] }] },
+		"EventViewMsgs": { "Name": "EventViewMsgs", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MessageItems", "Docs": "", "Typewords": ["[]", "[]", "MessageItem"] }, { "Name": "ParsedMessage", "Docs": "", "Typewords": ["nullable", "ParsedMessage"] }, { "Name": "ViewEnd", "Docs": "", "Typewords": ["bool"] }] },
+		"MessageItem": { "Name": "MessageItem", "Docs": "", "Fields": [{ "Name": "Message", "Docs": "", "Typewords": ["Message"] }, { "Name": "Envelope", "Docs": "", "Typewords": ["MessageEnvelope"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "Attachment"] }, { "Name": "IsSigned", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsEncrypted", "Docs": "", "Typewords": ["bool"] }, { "Name": "FirstLine", "Docs": "", "Typewords": ["string"] }, { "Name": "MatchQuery", "Docs": "", "Typewords": ["bool"] }] },
+		"Message": { "Name": "Message", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "CreateSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Expunged", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsReject", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailboxOrigID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MailboxDestinedID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Received", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "RemoteIP", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked1", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked2", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked3", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFrom", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MailFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "RcptToLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "RcptToDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MsgFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromOrgDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLOValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MsgFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "EHLOValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MailFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MsgFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "DKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "OrigEHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "OrigDKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }, { "Name": "SubjectBase", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageHash", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ThreadID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ThreadParentIDs", "Docs": "", "Typewords": ["[]", "int64"] }, { "Name": "ThreadMissingLink", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadMuted", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadCollapsed", "Docs": "", "Typewords": ["bool"] }, { "Name": "Seen", "Docs": "", "Typewords": ["bool"] }, { "Name": "Answered", "Docs": "", "Typewords": ["bool"] }, { "Name": "Flagged", "Docs": "", "Typewords": ["bool"] }, { "Name": "Forwarded", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Notjunk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Phishing", "Docs": "", "Typewords": ["bool"] }, { "Name": "MDNSent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }, { "Name": "TrainedJunk", "Docs": "", "Typewords": ["nullable", "bool"] }, { "Name": "MsgPrefix", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ParsedBuf", "Docs": "", "Typewords": ["nullable", "string"] }] },
 		"MessageEnvelope": { "Name": "MessageEnvelope", "Docs": "", "Fields": [{ "Name": "Date", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "From", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "Sender", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "CC", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "BCC", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "InReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }] },
 		"Attachment": { "Name": "Attachment", "Docs": "", "Fields": [{ "Name": "Path", "Docs": "", "Typewords": ["[]", "int32"] }, { "Name": "Filename", "Docs": "", "Typewords": ["string"] }, { "Name": "Part", "Docs": "", "Typewords": ["Part"] }] },
 		"EventViewChanges": { "Name": "EventViewChanges", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Changes", "Docs": "", "Typewords": ["[]", "[]", "any"] }] },
-		"ChangeMsgAdd": { "Name": "ChangeMsgAdd", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Flags", "Docs": "", "Typewords": ["Flags"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageItem", "Docs": "", "Typewords": ["MessageItem"] }] },
+		"ChangeMsgAdd": { "Name": "ChangeMsgAdd", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Flags", "Docs": "", "Typewords": ["Flags"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageItems", "Docs": "", "Typewords": ["[]", "MessageItem"] }] },
 		"Flags": { "Name": "Flags", "Docs": "", "Fields": [{ "Name": "Seen", "Docs": "", "Typewords": ["bool"] }, { "Name": "Answered", "Docs": "", "Typewords": ["bool"] }, { "Name": "Flagged", "Docs": "", "Typewords": ["bool"] }, { "Name": "Forwarded", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Notjunk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Phishing", "Docs": "", "Typewords": ["bool"] }, { "Name": "MDNSent", "Docs": "", "Typewords": ["bool"] }] },
 		"ChangeMsgRemove": { "Name": "ChangeMsgRemove", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UIDs", "Docs": "", "Typewords": ["[]", "UID"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }] },
 		"ChangeMsgFlags": { "Name": "ChangeMsgFlags", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Mask", "Docs": "", "Typewords": ["Flags"] }, { "Name": "Flags", "Docs": "", "Typewords": ["Flags"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }] },
+		"ChangeMsgThread": { "Name": "ChangeMsgThread", "Docs": "", "Fields": [{ "Name": "MessageIDs", "Docs": "", "Typewords": ["[]", "int64"] }, { "Name": "Muted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Collapsed", "Docs": "", "Typewords": ["bool"] }] },
 		"ChangeMailboxRemove": { "Name": "ChangeMailboxRemove", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Name", "Docs": "", "Typewords": ["string"] }] },
 		"ChangeMailboxAdd": { "Name": "ChangeMailboxAdd", "Docs": "", "Fields": [{ "Name": "Mailbox", "Docs": "", "Typewords": ["Mailbox"] }] },
 		"ChangeMailboxRename": { "Name": "ChangeMailboxRename", "Docs": "", "Fields": [{ "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "OldName", "Docs": "", "Typewords": ["string"] }, { "Name": "NewName", "Docs": "", "Typewords": ["string"] }, { "Name": "Flags", "Docs": "", "Typewords": ["[]", "string"] }] },
@@ -73,6 +80,7 @@ var api;
 		"UID": { "Name": "UID", "Docs": "", "Values": null },
 		"ModSeq": { "Name": "ModSeq", "Docs": "", "Values": null },
 		"Validation": { "Name": "Validation", "Docs": "", "Values": [{ "Name": "ValidationUnknown", "Value": 0, "Docs": "" }, { "Name": "ValidationStrict", "Value": 1, "Docs": "" }, { "Name": "ValidationDMARC", "Value": 2, "Docs": "" }, { "Name": "ValidationRelaxed", "Value": 3, "Docs": "" }, { "Name": "ValidationPass", "Value": 4, "Docs": "" }, { "Name": "ValidationNeutral", "Value": 5, "Docs": "" }, { "Name": "ValidationTemperror", "Value": 6, "Docs": "" }, { "Name": "ValidationPermerror", "Value": 7, "Docs": "" }, { "Name": "ValidationFail", "Value": 8, "Docs": "" }, { "Name": "ValidationSoftfail", "Value": 9, "Docs": "" }, { "Name": "ValidationNone", "Value": 10, "Docs": "" }] },
+		"ThreadMode": { "Name": "ThreadMode", "Docs": "", "Values": [{ "Name": "ThreadOff", "Value": "off", "Docs": "" }, { "Name": "ThreadOn", "Value": "on", "Docs": "" }, { "Name": "ThreadUnread", "Value": "unread", "Docs": "" }] },
 		"AttachmentType": { "Name": "AttachmentType", "Docs": "", "Values": [{ "Name": "AttachmentIndifferent", "Value": "", "Docs": "" }, { "Name": "AttachmentNone", "Value": "none", "Docs": "" }, { "Name": "AttachmentAny", "Value": "any", "Docs": "" }, { "Name": "AttachmentImage", "Value": "image", "Docs": "" }, { "Name": "AttachmentPDF", "Value": "pdf", "Docs": "" }, { "Name": "AttachmentArchive", "Value": "archive", "Docs": "" }, { "Name": "AttachmentSpreadsheet", "Value": "spreadsheet", "Docs": "" }, { "Name": "AttachmentDocument", "Value": "document", "Docs": "" }, { "Name": "AttachmentPresentation", "Value": "presentation", "Docs": "" }] },
 		"Localpart": { "Name": "Localpart", "Docs": "", "Values": null },
 	};
@@ -106,6 +114,7 @@ var api;
 		Flags: (v) => api.parse("Flags", v),
 		ChangeMsgRemove: (v) => api.parse("ChangeMsgRemove", v),
 		ChangeMsgFlags: (v) => api.parse("ChangeMsgFlags", v),
+		ChangeMsgThread: (v) => api.parse("ChangeMsgThread", v),
 		ChangeMailboxRemove: (v) => api.parse("ChangeMailboxRemove", v),
 		ChangeMailboxAdd: (v) => api.parse("ChangeMailboxAdd", v),
 		ChangeMailboxRename: (v) => api.parse("ChangeMailboxRename", v),
@@ -116,6 +125,7 @@ var api;
 		UID: (v) => api.parse("UID", v),
 		ModSeq: (v) => api.parse("ModSeq", v),
 		Validation: (v) => api.parse("Validation", v),
+		ThreadMode: (v) => api.parse("ThreadMode", v),
 		AttachmentType: (v) => api.parse("AttachmentType", v),
 		Localpart: (v) => api.parse("Localpart", v),
 	};
@@ -261,11 +271,30 @@ var api;
 			const params = [mb];
 			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
 		}
+		// ThreadCollapse saves the ThreadCollapse field for the messages and its
+		// children. The messageIDs are typically thread roots. But not all roots
+		// (without parent) of a thread need to have the same collapsed state.
+		async ThreadCollapse(messageIDs, collapse) {
+			const fn = "ThreadCollapse";
+			const paramTypes = [["[]", "int64"], ["bool"]];
+			const returnTypes = [];
+			const params = [messageIDs, collapse];
+			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
+		}
+		// ThreadMute saves the ThreadMute field for the messages and their children.
+		// If messages are muted, they are also marked collapsed.
+		async ThreadMute(messageIDs, mute) {
+			const fn = "ThreadMute";
+			const paramTypes = [["[]", "int64"], ["bool"]];
+			const returnTypes = [];
+			const params = [messageIDs, mute];
+			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
+		}
 		// SSETypes exists to ensure the generated API contains the types, for use in SSE events.
 		async SSETypes() {
 			const fn = "SSETypes";
 			const paramTypes = [];
-			const returnTypes = [["EventStart"], ["EventViewErr"], ["EventViewReset"], ["EventViewMsgs"], ["EventViewChanges"], ["ChangeMsgAdd"], ["ChangeMsgRemove"], ["ChangeMsgFlags"], ["ChangeMailboxRemove"], ["ChangeMailboxAdd"], ["ChangeMailboxRename"], ["ChangeMailboxCounts"], ["ChangeMailboxSpecialUse"], ["ChangeMailboxKeywords"], ["Flags"]];
+			const returnTypes = [["EventStart"], ["EventViewErr"], ["EventViewReset"], ["EventViewMsgs"], ["EventViewChanges"], ["ChangeMsgAdd"], ["ChangeMsgRemove"], ["ChangeMsgFlags"], ["ChangeMsgThread"], ["ChangeMailboxRemove"], ["ChangeMailboxAdd"], ["ChangeMailboxRename"], ["ChangeMailboxCounts"], ["ChangeMailboxSpecialUse"], ["ChangeMailboxKeywords"], ["Flags"]];
 			const params = [];
 			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
 		}
@@ -835,9 +864,15 @@ const addLinks = (text) => {
 		r.push(s);
 		// If URL ends with interpunction, and next character is whitespace or end, don't
 		// include the interpunction in the URL.
-		if (/[!),.:;>?]$/.test(url) && (!text || /^[ \t\r\n]/.test(text))) {
-			text = url.substring(url.length - 1) + text;
-			url = url.substring(0, url.length - 1);
+		if (!text || /^[ \t\r\n]/.test(text)) {
+			if (/[)>][!,.:;?]$/.test(url)) {
+				text = url.substring(url.length - 2) + text;
+				url = url.substring(0, url.length - 2);
+			}
+			else if (/[)>!,.:;?]$/.test(url)) {
+				text = url.substring(url.length - 1) + text;
+				url = url.substring(0, url.length - 1);
+			}
 		}
 		r.push(dom.a(url, attr.href(url), attr.target('_blank'), attr.rel('noopener noreferrer')));
 	}
@@ -912,7 +947,7 @@ const equalAddress = (a, b) => {
 // loadMsgheaderView loads the common message headers into msgheaderelem.
 // if refineKeyword is set, labels are shown and a click causes a call to
 // refineKeyword.
-const loadMsgheaderView = (msgheaderelem, mi, refineKeyword) => {
+const loadMsgheaderView = (msgheaderelem, mi, moreHeaders, refineKeyword) => {
 	const msgenv = mi.Envelope;
 	const received = mi.Message.Received;
 	const receivedlocal = new Date(received.getTime() - received.getTimezoneOffset() * 60 * 1000);
@@ -920,7 +955,7 @@ const loadMsgheaderView = (msgheaderelem, mi, refineKeyword) => {
 	// todo: make addresses clickable, start search (keep current mailbox if any)
 	dom.tr(dom.td('From:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(style({ width: '100%' }), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(join((msgenv.From || []).map(a => formatAddressFull(a)), () => ', ')), dom.div(attr.title('Received: ' + received.toString() + ';\nDate header in message: ' + (msgenv.Date ? msgenv.Date.toString() : '(missing/invalid)')), receivedlocal.toDateString() + ' ' + receivedlocal.toTimeString().split(' ')[0])))), (msgenv.ReplyTo || []).length === 0 ? [] : dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.ReplyTo || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.To || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.CC || []).length === 0 ? [] : dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.CC || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.BCC || []).length === 0 ? [] : dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.BCC || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(msgenv.Subject || ''), dom.div(mi.IsSigned ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message has a signature') : [], mi.IsEncrypted ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message is encrypted') : [], refineKeyword ? (mi.Message.Keywords || []).map(kw => dom.clickbutton(dom._class('keyword'), kw, async function click() {
 		await refineKeyword(kw);
-	})) : [])))));
+	})) : [])))), moreHeaders.map(k => dom.tr(dom.td(k + ':', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td())));
 };
 // Javascript is generated from typescript, do not modify generated javascript because changes will be overwritten.
 /*
@@ -970,12 +1005,21 @@ different color.
 Browsers to test with: Firefox, Chromium, Safari, Edge.
 
 To simulate slow API calls and SSE events:
-window.localStorage.setItem('sherpats-debug', JSON.stringify({waitMinMsec: 2000, waitMaxMsec: 4000}))
+
+	localStorage.setItem('sherpats-debug', JSON.stringify({waitMinMsec: 2000, waitMaxMsec: 4000}))
 
 Show additional headers of messages:
-settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id']})
 
-- todo: threading (needs support in mox first)
+	settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id', 'List-Id', 'List-Post', 'X-Mox-Reason']})
+
+Enable logging and reload afterwards:
+
+	localStorage.setItem('log', 'yes')
+
+Enable consistency checking in UI updates:
+
+	settingsPut({...settings, checkConsistency: true})
+
 - todo: in msglistView, show names of people we have sent to, and address otherwise.
 - todo: implement settings stored in the server, such as mailboxCollapsed, keyboard shortcuts. also new settings for displaying email as html by default for configured sender address or domain. name to use for "From", optional default Reply-To and Bcc addresses, signatures (per address), configured labels/keywords with human-readable name, colors and toggling with shortcut keys 1-9.
 - todo: in msglist, if our address is in the from header, list addresses in the to/cc/bcc, it's likely a sent folder
@@ -991,7 +1035,6 @@ settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id']}
 - todo: only show orange underline where it could be a problem? in addresses and anchor texts. we may be lighting up a christmas tree now, desensitizing users.
 - todo: saved searches that are displayed below list of mailboxes, for quick access to preset view
 - todo: when search on free-form text is active, highlight the searched text in the message view.
-- todo: when reconnecting, request only the changes to the current state/msglist, passing modseq query string parameter
 - todo: composeView: save as draft, periodically and when closing.
 - todo: forwarding of html parts, including inline attachments, so the html version can be rendered like the original by the receiver.
 - todo: buttons/mechanism to operate on all messages in a mailbox/search query, without having to list and select all messages. e.g. clearing flags/labels.
@@ -1002,14 +1045,15 @@ settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id']}
 - todo: nicer address input fields like other mail clients do. with tab to autocomplete and turn input into a box and delete removing of the entire address.
 - todo: consider composing messages with bcc headers that are kept as message Bcc headers, optionally with checkbox.
 - todo: improve accessibility
+- todo: threading mode where we don't show messages in Trash/Sent in thread?
 - todo: msglistView: preload next message?
 - todo: previews of zip files
 - todo: undo?
-- todo: mute threads?
 - todo: mobile-friendly version. should perhaps be a completely different app, because it is so different.
-- todo: msglistView: for mailbox views (which are fast to list the results of), should we ask the full number of messages, set the height of the scroll div based on the number of messages, then request messages when user scrolls, putting the messages in place. not sure if worth the trouble.
 - todo: basic vim key bindings in textarea/input. or just let users use a browser plugin.
 */
+class ConsistencyError extends Error {
+}
 const zindexes = {
 	splitter: '1',
 	compose: '2',
@@ -1023,7 +1067,7 @@ const zindexes = {
 // All logging goes through log() instead of console.log, except "should not happen" logging.
 let log = () => { };
 try {
-	if (localStorage.getItem('log')) {
+	if (localStorage.getItem('log') || location.hostname === 'localhost') {
 		log = console.log;
 	}
 }
@@ -1043,7 +1087,9 @@ const defaultSettings = {
 	showHTML: false,
 	mailboxCollapsed: {},
 	showAllHeaders: false,
-	showHeaders: [], // Additional message headers to show.
+	showHeaders: [],
+	threading: api.ThreadMode.ThreadOn,
+	checkConsistency: location.hostname === 'localhost', // Enable UI update consistency checks, default only for local development.
 };
 const parseSettings = () => {
 	try {
@@ -1095,6 +1141,8 @@ const parseSettings = () => {
 			mailboxCollapsed: mailboxCollapsed,
 			showAllHeaders: getBool('showAllHeaders'),
 			showHeaders: getStringArray('showHeaders'),
+			threading: getString('threading', api.ThreadMode.ThreadOff, api.ThreadMode.ThreadOn, api.ThreadMode.ThreadUnread),
+			checkConsistency: getBool('checkConsistency'),
 		};
 	}
 	catch (err) {
@@ -1157,7 +1205,7 @@ const showShortcut = (c) => {
 const shortcutCmd = async (cmdfn, shortcuts) => {
 	let shortcut = '';
 	for (const k in shortcuts) {
-		if (shortcuts[k] == cmdfn) {
+		if (shortcuts[k] === cmdfn) {
 			shortcut = k;
 			break;
 		}
@@ -1297,7 +1345,7 @@ const parseSearchTokens = (s) => {
 				add();
 			}
 		}
-		else if (quoted && c == '"') {
+		else if (quoted && c === '"') {
 			quoteend = true;
 		}
 		else if (c === '"') {
@@ -1361,7 +1409,7 @@ const parseSearch = (searchquery, mailboxlistView) => {
 				}
 				return;
 			}
-			else if (tag == 'submb') {
+			else if (tag === 'submb') {
 				fpos.MailboxChildrenIncluded = true;
 				return;
 			}
@@ -1486,34 +1534,41 @@ const newAddressComplete = () => {
 		}
 	};
 };
-// Characters we display in the message list for flags set for a message.
-// todo: icons would be nice to have instead.
-const flagchars = {
-	Replied: 'r',
-	Flagged: '!',
-	Forwarded: 'f',
-	Junk: 'j',
-	Deleted: 'D',
-	Draft: 'd',
-	Phishing: 'p',
-};
-const flagList = (m, mi) => {
-	let l = [];
+const flagList = (miv) => {
+	const msgflags = []; // Flags for message in miv.
+	const othermsgflags = []; // Flags for descendant messages if miv is collapsed. Only flags not in msgflags.
+	let l = msgflags;
+	const seen = new Set();
 	const flag = (v, char, name) => {
-		if (v) {
+		if (v && !seen.has(name)) {
 			l.push([name, char]);
+			seen.add(name);
 		}
 	};
-	flag(m.Answered, 'r', 'Replied/answered');
-	flag(m.Flagged, '!', 'Flagged');
-	flag(m.Forwarded, 'f', 'Forwarded');
-	flag(m.Junk, 'j', 'Junk');
-	flag(m.Deleted, 'D', 'Deleted, used in IMAP, message will likely be removed soon.');
-	flag(m.Draft, 'd', 'Draft');
-	flag(m.Phishing, 'p', 'Phishing');
-	flag(!m.Junk && !m.Notjunk, '?', 'Unclassified, neither junk nor not junk: message does not contribute to spam classification of new incoming messages');
-	flag(mi.Attachments && mi.Attachments.length > 0 ? true : false, 'a', 'Has at least one attachment');
-	return l.map(t => dom.span(dom._class('msgitemflag'), t[1], attr.title(t[0])));
+	const addFlags = (mi) => {
+		const m = mi.Message;
+		flag(m.Answered, 'r', 'Replied/answered');
+		flag(m.Flagged, '!', 'Flagged');
+		flag(m.Forwarded, 'f', 'Forwarded');
+		flag(m.Junk, 'j', 'Junk');
+		flag(m.Deleted, 'D', 'Deleted, used in IMAP, message will likely be removed soon.');
+		flag(m.Draft, 'd', 'Draft');
+		flag(m.Phishing, 'p', 'Phishing');
+		flag(!m.Junk && !m.Notjunk, '?', 'Unclassified, neither junk nor not junk: message does not contribute to spam classification of new incoming messages');
+		flag(mi.Attachments && mi.Attachments.length > 0 ? true : false, 'a', 'Has at least one attachment');
+		if (m.ThreadMuted) {
+			flag(true, 'm', 'Muted, new messages are automatically marked as read.');
+		}
+	};
+	addFlags(miv.messageitem);
+	if (miv.isCollapsedThreadRoot()) {
+		l = othermsgflags;
+		for (miv of miv.descendants()) {
+			addFlags(miv.messageitem);
+		}
+	}
+	return msgflags.map(t => dom.span(dom._class('msgitemflag'), t[1], attr.title(t[0])))
+		.concat(othermsgflags.map(t => dom.span(dom._class('msgitemflag'), dom._class('msgitemflagcollapsed'), t[1], attr.title(t[0]))));
 };
 // Turn filters from the search bar into filters with the refine filters (buttons
 // above message list) applied, to send to the server in a request. The original
@@ -1778,7 +1833,7 @@ const cmdHelp = async () => {
 		['i', 'open inbox'],
 		['?', 'help'],
 		['ctrl ?', 'tooltip for focused element'],
-		['M', 'focus message'],
+		['ctrl m', 'focus message'],
 	].map(t => dom.tr(dom.td(t[0]), dom.td(t[1]))), dom.tr(dom.td(attr.colspan('2'), dom.h2('Mailbox', style({ margin: '0' })))), [
 		['←', 'collapse'],
 		['→', 'expand'],
@@ -1795,26 +1850,34 @@ const cmdHelp = async () => {
 		['d, Delete', 'move to trash folder'],
 		['D', 'delete permanently'],
 		['q', 'move to junk folder'],
-		['n', 'mark not junk'],
+		['Q', 'mark not junk'],
 		['a', 'move to archive folder'],
-		['u', 'mark unread'],
+		['M', 'mark unread'],
 		['m', 'mark read'],
-	].map(t => dom.tr(dom.td(t[0]), dom.td(t[1]))), dom.tr(dom.td(attr.colspan('2'), dom.h2('Compose', style({ margin: '1ex 0 0 0' })))), [
+		['u', 'to next unread message'],
+		['p', 'to root of thread or previous thread'],
+		['n', 'to root of next thread'],
+		['S', 'select thread messages'],
+		['C', 'toggle thread collapse'],
+		['X', 'toggle thread mute, automatically marking new messages as read'],
+		['←', 'collapse thread'],
+		['→', 'expand thread'],
+	].map(t => dom.tr(dom.td(t[0]), dom.td(t[1]))))), dom.div(style({ width: '40em' }), dom.table(dom.tr(dom.td(attr.colspan('2'), dom.h2('Compose', style({ margin: '0' })))), [
 		['ctrl Enter', 'send message'],
 		['ctrl w', 'cancel message'],
-		['ctlr O', 'add To'],
+		['ctrl O', 'add To'],
 		['ctrl C', 'add Cc'],
 		['ctrl B', 'add Bcc'],
 		['ctrl Y', 'add Reply-To'],
 		['ctrl -', 'remove current address'],
 		['ctrl +', 'add address of same type'],
-	].map(t => dom.tr(dom.td(t[0]), dom.td(t[1]))))), dom.div(style({ width: '40em' }), dom.table(dom.tr(dom.td(attr.colspan('2'), dom.h2('Message', style({ margin: '0' })))), [
+	].map(t => dom.tr(dom.td(t[0]), dom.td(t[1]))), dom.tr(dom.td(attr.colspan('2'), dom.h2('Message', style({ margin: '1ex 0 0 0' })))), [
 		['r', 'reply or list reply'],
 		['R', 'reply all'],
 		['f', 'forward message'],
 		['v', 'view attachments'],
-		['T', 'view text version'],
-		['X', 'view HTML version'],
+		['t', 'view text version'],
+		['T', 'view HTML version'],
 		['o', 'open message in new tab'],
 		['O', 'show raw message'],
 		['ctrl p', 'print message'],
@@ -1914,7 +1977,7 @@ const compose = (opts) => {
 				const fr = new window.FileReader();
 				fr.addEventListener('load', () => {
 					l.push({ Filename: f.name, DataURI: fr.result });
-					if (attachments.files && l.length == attachments.files.length) {
+					if (attachments.files && l.length === attachments.files.length) {
 						resolve(l);
 					}
 				});
@@ -2050,7 +2113,7 @@ const compose = (opts) => {
 	// Find own address matching the specified address, taking wildcards, localpart
 	// separators and case-sensitivity into account.
 	const addressSelf = (addr) => {
-		return accountAddresses.find(a => a.Domain.ASCII === addr.Domain.ASCII && (a.User === '' || normalizeUser(a) == normalizeUser(addr)));
+		return accountAddresses.find(a => a.Domain.ASCII === addr.Domain.ASCII && (a.User === '' || normalizeUser(a) === normalizeUser(addr)));
 	};
 	let haveFrom = false;
 	const fromOptions = accountAddresses.map(a => {
@@ -2168,10 +2231,9 @@ const movePopover = (e, mailboxes, msgs) => {
 		remove();
 	})))));
 };
-// Make new MsgitemView, to be added to the list. othermb is set when this msgitem
-// is displayed in a msglistView for other/multiple mailboxes, the mailbox name
-// should be shown.
-const newMsgitemView = (mi, msglistView, othermb) => {
+// Make new MsgitemView, to be added to the list.
+const newMsgitemView = (mi, msglistView, otherMailbox, listMailboxes, receivedTime, initialCollapsed) => {
+	// note: mi may be replaced.
 	// Timer to update the age of the message.
 	let ageTimer = 0;
 	// Show with a tag if we are in the cc/bcc headers, or - if none.
@@ -2189,41 +2251,6 @@ const newMsgitemView = (mi, msglistView, othermb) => {
 			identityHeader.push(identityTag('-', 'You are not in any To, From, CC, BCC header. Could message to a mailing list or Bcc without Bcc message header.'));
 		}
 	}
-	// If mailbox of message is not specified in filter (i.e. for mailbox list or
-	// search on the mailbox), we show it on the right-side of the subject.
-	const mailboxtag = [];
-	if (othermb) {
-		let name = othermb.Name;
-		if (name.length > 8 + 1 + 3 + 1 + 8 + 4) {
-			const t = name.split('/');
-			const first = t[0];
-			const last = t[t.length - 1];
-			if (first.length + last.length <= 8 + 8) {
-				name = first + '/.../' + last;
-			}
-			else {
-				name = first.substring(0, 8) + '/.../' + last.substring(0, 8);
-			}
-		}
-		const e = dom.span(dom._class('msgitemmailbox'), name === othermb.Name ? [] : attr.title(othermb.Name), name);
-		mailboxtag.push(e);
-	}
-	const updateFlags = (modseq, mask, flags, keywords) => {
-		msgitemView.messageitem.Message.ModSeq = modseq;
-		const maskobj = mask;
-		const flagsobj = flags;
-		const mobj = msgitemView.messageitem.Message;
-		for (const k in maskobj) {
-			if (maskobj[k]) {
-				mobj[k] = flagsobj[k];
-			}
-		}
-		msgitemView.messageitem.Message.Keywords = keywords;
-		const elem = render();
-		msgitemView.root.replaceWith(elem);
-		msgitemView.root = elem;
-		msglistView.redraw(msgitemView);
-	};
 	const remove = () => {
 		msgitemView.root.remove();
 		if (ageTimer) {
@@ -2252,7 +2279,7 @@ const newMsgitemView = (mi, msglistView, othermb) => {
 			let nextSecs = 0;
 			for (let i = 0; i < periods.length; i++) {
 				const p = periods[i];
-				if (t >= 2 * p || i == periods.length - 1) {
+				if (t >= 2 * p || i === periods.length - 1) {
 					const n = Math.round(t / p);
 					s = '' + n + suffix[i];
 					const prev = Math.floor(t / p);
@@ -2278,28 +2305,244 @@ const newMsgitemView = (mi, msglistView, othermb) => {
 		return r;
 	};
 	const render = () => {
+		const mi = msgitemView.messageitem;
+		const m = mi.Message;
 		// Set by calling age().
 		if (ageTimer) {
 			window.clearTimeout(ageTimer);
 			ageTimer = 0;
 		}
-		const m = msgitemView.messageitem.Message;
+		// Keywords are normally shown per message. For collapsed threads, we show the
+		// keywords of the thread root message as normal, and any additional keywords from
+		// children in a way that draws less attention.
 		const keywords = (m.Keywords || []).map(kw => dom.span(dom._class('keyword'), kw));
-		return dom.div(dom._class('msgitem'), attr.draggable('true'), function dragstart(e) {
-			e.dataTransfer.setData('application/vnd.mox.messages', JSON.stringify(msglistView.selected().map(miv => miv.messageitem.Message.ID)));
-		}, m.Seen ? [] : style({ fontWeight: 'bold' }), dom.div(dom._class('msgitemcell', 'msgitemflags'), flagList(m, msgitemView.messageitem)), dom.div(dom._class('msgitemcell', 'msgitemfrom'), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(dom._class('msgitemfromtext', 'silenttitle'), attr.title((mi.Envelope.From || []).map(a => formatAddressFull(a)).join(', ')), join((mi.Envelope.From || []).map(a => formatAddressShort(a)), () => ', ')), identityHeader)), dom.div(dom._class('msgitemcell', 'msgitemsubject'), dom.div(style({ display: 'flex', justifyContent: 'space-between', position: 'relative' }), dom.div(dom._class('msgitemsubjecttext'), mi.Envelope.Subject || '(no subject)', dom.span(dom._class('msgitemsubjectsnippet'), ' ' + mi.FirstLine)), dom.div(keywords, mailboxtag))), dom.div(dom._class('msgitemcell', 'msgitemage'), age(m.Received)), function click(e) {
+		if (msgitemView.isCollapsedThreadRoot()) {
+			const keywordsSeen = new Set();
+			for (const kw of (m.Keywords || [])) {
+				keywordsSeen.add(kw);
+			}
+			for (const miv of msgitemView.descendants()) {
+				for (const kw of (miv.messageitem.Message.Keywords || [])) {
+					if (!keywordsSeen.has(kw)) {
+						keywordsSeen.add(kw);
+						keywords.push(dom.span(dom._class('keyword'), dom._class('keywordcollapsed'), kw));
+					}
+				}
+			}
+		}
+		let threadIndent = 0;
+		for (let miv = msgitemView; miv.parent; miv = miv.parent) {
+			threadIndent++;
+		}
+		// For threaded messages, we draw the subject/first-line indented, and with a
+		// charactering indicating the relationship.
+		// todo: show different arrow is message is a forward? we can tell by the message flag, it will likely be a message the user sent.
+		let threadChar = '';
+		let threadCharTitle = '';
+		if (msgitemView.parent) {
+			threadChar = '↳'; // Down-right arrow for direct response (reply/forward).
+			if (msgitemView.parent.messageitem.Message.MessageID === mi.Message.MessageID) {
+				// Approximately equal, for duplicate message-id, typically in Sent and incoming
+				// from mailing list or when sending to self.
+				threadChar = '≈';
+				threadCharTitle = 'Same Message-ID.';
+			}
+			else if (mi.Message.ThreadMissingLink || (mi.Message.ThreadParentIDs || []).length > 0 && (mi.Message.ThreadParentIDs || [])[0] !== msgitemView.parent.messageitem.Message.ID) {
+				// Zigzag arrow, e.g. if immediate parent is missing, or when matching was done
+				// based on subject.
+				threadChar = '↯';
+				threadCharTitle = 'Immediate parent message is missing.';
+			}
+		}
+		// Message is unread if it itself is unread, or it is collapsed and has an unread child message.
+		const isUnread = () => !mi.Message.Seen || msgitemView.isCollapsedThreadRoot() && !!msgitemView.findDescendant(miv => !miv.messageitem.Message.Seen);
+		const isRelevant = () => !mi.Message.ThreadMuted && mi.MatchQuery || (msgitemView.isCollapsedThreadRoot() && msgitemView.findDescendant(miv => !miv.messageitem.Message.ThreadMuted && miv.messageitem.MatchQuery));
+		// Effective receive time to display. For collapsed thread roots, we show the time
+		// of the newest or oldest message, depending on whether you're viewing
+		// newest-first or oldest-first messages.
+		const received = () => {
+			let r = mi.Message.Received;
+			if (!msgitemView.isCollapsedThreadRoot()) {
+				return r;
+			}
+			msgitemView.descendants().forEach(dmiv => {
+				if (settings.orderAsc && dmiv.messageitem.Message.Received.getTime() < r.getTime()) {
+					r = dmiv.messageitem.Message.Received;
+				}
+				else if (!settings.orderAsc && dmiv.messageitem.Message.Received.getTime() > r.getTime()) {
+					r = dmiv.messageitem.Message.Received;
+				}
+			});
+			return r;
+		};
+		// For drawing half a thread bar for the last message in the thread.
+		const isThreadLast = () => {
+			let miv = msgitemView.threadRoot();
+			while (miv.kids.length > 0) {
+				miv = miv.kids[miv.kids.length - 1];
+			}
+			return miv === msgitemView;
+		};
+		// If mailbox of message is not specified in filter (i.e. for a regular mailbox
+		// view, or search on a mailbox), we show it on the right-side of the subject. For
+		// collapsed thread roots, we show all additional mailboxes of descendants with
+		// different style.
+		const mailboxtags = [];
+		const mailboxIDs = new Set();
+		const addMailboxTag = (mb, isCollapsedKid) => {
+			let name = mb.Name;
+			mailboxIDs.add(mb.ID);
+			if (name.length > 8 + 1 + 3 + 1 + 8 + 4) {
+				const t = name.split('/');
+				const first = t[0];
+				const last = t[t.length - 1];
+				if (first.length + last.length <= 8 + 8) {
+					name = first + '/.../' + last;
+				}
+				else {
+					name = first.substring(0, 8) + '/.../' + last.substring(0, 8);
+				}
+			}
+			const e = dom.span(dom._class('msgitemmailbox'), isCollapsedKid ? dom._class('msgitemmailboxcollapsed') : [], name === mb.Name ? [] : attr.title(mb.Name), name);
+			mailboxtags.push(e);
+		};
+		const othermb = otherMailbox(m.MailboxID);
+		if (othermb) {
+			addMailboxTag(othermb, false);
+		}
+		if (msgitemView.isCollapsedThreadRoot()) {
+			for (const miv of msgitemView.descendants()) {
+				const m = miv.messageitem.Message;
+				if (!mailboxIDs.has(m.MailboxID) && otherMailbox(m.MailboxID)) {
+					const mb = listMailboxes().find(mb => mb.ID === m.MailboxID);
+					if (!mb) {
+						throw new ConsistencyError('missing mailbox for message in thread');
+					}
+					addMailboxTag(mb, true);
+				}
+			}
+		}
+		// When rerendering, we remember active & focus states. So we don't have to make
+		// the caller also call redraw on MsglistView.
+		const active = msgitemView.root && msgitemView.root.classList.contains('active');
+		const focus = msgitemView.root && msgitemView.root.classList.contains('focus');
+		const elem = dom.div(dom._class('msgitem'), active ? dom._class('active') : [], focus ? dom._class('focus') : [], attr.draggable('true'), function dragstart(e) {
+			if (!msglistView.selected().includes(msgitemView)) {
+				e.preventDefault();
+				window.alert('Can only drag items in selection.');
+				return;
+			}
+			// We send the Message.ID and MailboxID, so we can decide based on the destination
+			// mailbox whether to move. We don't move messages already in the destination
+			// mailbox, and also skip messages in the Sent mailbox when there are also messages
+			// from other mailboxes.
+			e.dataTransfer.setData('application/vnd.mox.messages', JSON.stringify(msglistView.selected().map(miv => [miv.messageitem.Message.MailboxID, miv.messageitem.Message.ID])));
+		}, 
+		// Thread root with kids can be collapsed/expanded with double click.
+		settings.threading !== api.ThreadMode.ThreadOff && !msgitemView.parent && msgitemView.kids.length > 0 ?
+			function dblclick(e) {
+				e.stopPropagation(); // Prevent selection.
+				if (settings.threading === api.ThreadMode.ThreadOn) {
+					// No await, we don't wait for the result.
+					withStatus('Saving thread expand/collapse', client.ThreadCollapse([msgitemView.messageitem.Message.ID], !msgitemView.collapsed));
+				}
+				if (msgitemView.collapsed) {
+					msglistView.threadExpand(msgitemView);
+				}
+				else {
+					msglistView.threadCollapse(msgitemView);
+					msglistView.viewportEnsureMessages();
+				}
+			} : [], isUnread() ? style({ fontWeight: 'bold' }) : [], 
+		// Relevant means not muted and matching the query.
+		isRelevant() ? [] : style({ opacity: '.4' }), dom.div(dom._class('msgitemcell', 'msgitemflags'), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(flagList(msgitemView)), !msgitemView.parent && msgitemView.kids.length > 0 && msgitemView.collapsed ?
+			dom.clickbutton('' + (1 + msgitemView.descendants().length), attr.tabindex('-1'), attr.title('Expand thread.'), attr.arialabel('Expand thread.'), function click(e) {
+				e.stopPropagation(); // Prevent selection.
+				if (settings.threading === api.ThreadMode.ThreadOn) {
+					withStatus('Saving thread expanded', client.ThreadCollapse([msgitemView.messageitem.Message.ID], false));
+				}
+				msglistView.threadExpand(msgitemView);
+			}) : [], !msgitemView.parent && msgitemView.kids.length > 0 && !msgitemView.collapsed ?
+			dom.clickbutton('-', style({ width: '1em' }), attr.tabindex('-1'), attr.title('Collapse thread.'), attr.arialabel('Collapse thread.'), function click(e) {
+				e.stopPropagation(); // Prevent selection.
+				if (settings.threading === api.ThreadMode.ThreadOn) {
+					withStatus('Saving thread expanded', client.ThreadCollapse([msgitemView.messageitem.Message.ID], true));
+				}
+				msglistView.threadCollapse(msgitemView);
+				msglistView.viewportEnsureMessages();
+			}) : [])), dom.div(dom._class('msgitemcell', 'msgitemfrom'), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(dom._class('msgitemfromtext', 'silenttitle'), 
+		// todo: for collapsed messages, show all participants in thread?
+		attr.title((mi.Envelope.From || []).map(a => formatAddressFull(a)).join(', ')), join((mi.Envelope.From || []).map(a => formatAddressShort(a)), () => ', ')), identityHeader), 
+		// Thread messages are connected by a vertical bar. The first and last message are
+		// only half the height of the item, to indicate start/end, and so it stands out
+		// from any thread above/below.
+		((msgitemView.parent || msgitemView.kids.length > 0) && !msgitemView.threadRoot().collapsed) ?
+			dom.div(dom._class('msgitemfromthreadbar'), !msgitemView.parent ? style({ top: '50%', bottom: '-1px' }) : (isThreadLast() ?
+				style({ top: '-1px', bottom: '50%' }) :
+				style({ top: '-1px', bottom: '-1px' }))) : []), dom.div(dom._class('msgitemcell', 'msgitemsubject'), dom.div(style({ display: 'flex', justifyContent: 'space-between', position: 'relative' }), dom.div(dom._class('msgitemsubjecttext'), threadIndent > 0 ? dom.span(threadChar, style({ paddingLeft: (threadIndent / 2) + 'em', color: '#444', fontWeight: 'normal' }), threadCharTitle ? attr.title(threadCharTitle) : []) : [], msgitemView.parent ? [] : mi.Envelope.Subject || '(no subject)', dom.span(dom._class('msgitemsubjectsnippet'), ' ' + mi.FirstLine)), dom.div(keywords, mailboxtags))), dom.div(dom._class('msgitemcell', 'msgitemage'), age(received())), function click(e) {
 			e.preventDefault();
 			e.stopPropagation();
 			msglistView.click(msgitemView, e.ctrlKey, e.shiftKey);
 		});
+		msgitemView.root.replaceWith(elem);
+		msgitemView.root = elem;
 	};
 	const msgitemView = {
 		root: dom.div(),
 		messageitem: mi,
-		updateFlags: updateFlags,
+		receivedTime: receivedTime,
+		kids: [],
+		parent: null,
+		collapsed: initialCollapsed,
+		threadRoot: () => {
+			let miv = msgitemView;
+			while (miv.parent) {
+				miv = miv.parent;
+			}
+			return miv;
+		},
+		isCollapsedThreadRoot: () => !msgitemView.parent && msgitemView.collapsed && msgitemView.kids.length > 0,
+		descendants: () => {
+			let l = [];
+			const walk = (miv) => {
+				for (const kmiv of miv.kids) {
+					l.push(kmiv);
+					walk(kmiv);
+				}
+			};
+			walk(msgitemView);
+			return l;
+		},
+		// We often just need to know if a descendant with certain properties exist. No
+		// need to create an array, then call find on it.
+		findDescendant: (matchfn) => {
+			const walk = (miv) => {
+				if (matchfn(miv)) {
+					return miv;
+				}
+				for (const kmiv of miv.kids) {
+					const r = walk(kmiv);
+					if (r) {
+						return r;
+					}
+				}
+				return null;
+			};
+			return walk(msgitemView);
+		},
+		lastDescendant: () => {
+			let l = msgitemView;
+			if (l.kids.length === 0) {
+				return null;
+			}
+			while (l.kids.length > 0) {
+				l = l.kids[l.kids.length - 1];
+			}
+			return l;
+		},
 		remove: remove,
+		render: render,
 	};
-	msgitemView.root = render();
 	return msgitemView;
 };
 // If attachmentView is open, keyboard shortcuts go there.
@@ -2392,7 +2635,8 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 	};
 	const cmdToggleHeaders = async () => {
 		settingsPut({ ...settings, showAllHeaders: !settings.showAllHeaders });
-		loadHeaderDetails(await parsedMessagePromise);
+		const pm = await parsedMessagePromise;
+		loadHeaderDetails(pm);
 	};
 	let textbtn, htmlbtn, htmlextbtn;
 	const activeBtn = (b) => {
@@ -2450,8 +2694,8 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		r: cmdReply,
 		R: cmdReplyAll,
 		v: cmdViewAttachments,
-		T: cmdShowText,
-		X: cmdShowHTMLCycle,
+		t: cmdShowText,
+		T: cmdShowHTMLCycle,
 		'ctrl I': cmdToggleHeaders,
 		'alt j': cmdDown,
 		'alt k': cmdUp,
@@ -2464,9 +2708,9 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		d: msglistView.cmdTrash,
 		D: msglistView.cmdDelete,
 		q: msglistView.cmdJunk,
-		n: msglistView.cmdMarkNotJunk,
-		u: msglistView.cmdMarkUnread,
+		Q: msglistView.cmdMarkNotJunk,
 		m: msglistView.cmdMarkRead,
+		M: msglistView.cmdMarkUnread,
 	};
 	let urlType; // text, html, htmlexternal; for opening in new tab/print
 	let msgbuttonElem, msgheaderElem, msgattachmentElem, msgmodeElem;
@@ -2488,8 +2732,10 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 			popover(e.target, { transparent: true }, dom.div(style({ display: 'flex', flexDirection: 'column', gap: '.5ex', textAlign: 'right' }), [
 				dom.clickbutton('Print', attr.title('Print message, opens in new tab and opens print dialog.'), clickCmd(cmdPrint, shortcuts)),
 				dom.clickbutton('Mark Not Junk', attr.title('Mark as not junk, causing this message to be used in spam classification of new incoming messages.'), clickCmd(msglistView.cmdMarkNotJunk, shortcuts)),
-				dom.clickbutton('Mark as read', clickCmd(msglistView.cmdMarkRead, shortcuts)),
-				dom.clickbutton('Mark as unread', clickCmd(msglistView.cmdMarkUnread, shortcuts)),
+				dom.clickbutton('Mark Read', clickCmd(msglistView.cmdMarkRead, shortcuts)),
+				dom.clickbutton('Mark Unread', clickCmd(msglistView.cmdMarkUnread, shortcuts)),
+				dom.clickbutton('Mute thread', clickCmd(msglistView.cmdMute, shortcuts)),
+				dom.clickbutton('Unmute thread', clickCmd(msglistView.cmdUnmute, shortcuts)),
 				dom.clickbutton('Open in new tab', clickCmd(cmdOpenNewTab, shortcuts)),
 				dom.clickbutton('Show raw original message in new tab', clickCmd(cmdOpenRaw, shortcuts)),
 				dom.clickbutton('Show internals in popup', clickCmd(cmdShowInternals, shortcuts)),
@@ -2497,7 +2743,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		})));
 	};
 	loadButtons(parsedMessageOpt || null);
-	loadMsgheaderView(msgheaderElem, miv.messageitem, refineKeyword);
+	loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword);
 	const loadHeaderDetails = (pm) => {
 		if (msgheaderdetailsElem) {
 			msgheaderdetailsElem.remove();
@@ -2519,9 +2765,10 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		'image/apng',
 		'image/svg+xml',
 	];
+	const isText = (a) => a.Part.MediaType.toLowerCase() === 'text';
 	const isImage = (a) => imageTypes.includes((a.Part.MediaType + '/' + a.Part.MediaSubType).toLowerCase());
 	const isPDF = (a) => (a.Part.MediaType + '/' + a.Part.MediaSubType).toLowerCase() === 'application/pdf';
-	const isViewable = (a) => isImage(a) || isPDF(a);
+	const isViewable = (a) => isText(a) || isImage(a) || isPDF(a);
 	const attachments = (mi.Attachments || []);
 	let beforeViewFocus;
 	const view = (a) => {
@@ -2574,13 +2821,14 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		}, attr.tabindex('0'), !(index > 0) ? [] : dom.div(style({ position: 'absolute', left: '1em', top: 0, bottom: 0, fontSize: '1.5em', width: '2em', display: 'flex', alignItems: 'center', cursor: 'pointer' }), dom.div(dom._class('silenttitle'), style({ backgroundColor: 'rgba(0, 0, 0, .8)', color: 'white', width: '2em', height: '2em', borderRadius: '1em', lineHeight: '2em', textAlign: 'center', fontWeight: 'bold' }), attr.title('To previous viewable attachment.'), '←'), attr.tabindex('0'), clickCmd(cmdViewPrev, attachShortcuts), enterCmd(cmdViewPrev, attachShortcuts)), dom.div(style({ textAlign: 'center', paddingBottom: '30px' }), dom.span(dom._class('pad'), function click(e) {
 			e.stopPropagation();
 		}, style({ backgroundColor: 'white', borderRadius: '.25em', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', border: '1px solid #ddd' }), a.Filename || '(unnamed)', ' - ', formatSize(a.Part.DecodedSize), ' - ', dom.a('Download', attr.download(''), attr.href('msg/' + m.ID + '/download/' + pathStr), function click(e) { e.stopPropagation(); }))), isImage(a) ?
-			dom.div(style({ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 5em' }), dom.img(attr.src('msg/' + m.ID + '/view/' + pathStr), style({ backgroundColor: 'white', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', margin: '0 30px' }))) : (isPDF(a) ?
+			dom.div(style({ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 5em' }), dom.img(attr.src('msg/' + m.ID + '/view/' + pathStr), style({ backgroundColor: 'white', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', margin: '0 30px' }))) : (isText(a) ?
+			dom.iframe(attr.title('Attachment shown as text.'), style({ flexGrow: 1, boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em' }), attr.src('msg/' + m.ID + '/viewtext/' + pathStr)) : (isPDF(a) ?
 			dom.iframe(style({ flexGrow: 1, boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em' }), attr.title('Attachment as PDF.'), attr.src('msg/' + m.ID + '/view/' + pathStr)) :
 			content = dom.div(function click(e) {
 				e.stopPropagation();
 			}, style({ minWidth: '30em', padding: '2ex', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em', textAlign: 'center' }), dom.div(style({ marginBottom: '2ex' }), 'Attachment could be a binary file.'), dom.clickbutton('View as text', function click() {
 				content.replaceWith(dom.iframe(attr.title('Attachment shown as text, though it could be a binary file.'), style({ flexGrow: 1, boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em' }), attr.src('msg/' + m.ID + '/viewtext/' + pathStr)));
-			}))), !(index < attachments.length - 1) ? [] : dom.div(style({ position: 'absolute', right: '1em', top: 0, bottom: 0, fontSize: '1.5em', width: '2em', display: 'flex', alignItems: 'center', cursor: 'pointer' }), dom.div(dom._class('silenttitle'), style({ backgroundColor: 'rgba(0, 0, 0, .8)', color: 'white', width: '2em', height: '2em', borderRadius: '1em', lineHeight: '2em', textAlign: 'center', fontWeight: 'bold' }), attr.title('To next viewable attachment.'), '→'), attr.tabindex('0'), clickCmd(cmdViewNext, attachShortcuts), enterCmd(cmdViewNext, attachShortcuts)));
+			})))), !(index < attachments.length - 1) ? [] : dom.div(style({ position: 'absolute', right: '1em', top: 0, bottom: 0, fontSize: '1.5em', width: '2em', display: 'flex', alignItems: 'center', cursor: 'pointer' }), dom.div(dom._class('silenttitle'), style({ backgroundColor: 'rgba(0, 0, 0, .8)', color: 'white', width: '2em', height: '2em', borderRadius: '1em', lineHeight: '2em', textAlign: 'center', fontWeight: 'bold' }), attr.title('To next viewable attachment.'), '→'), attr.tabindex('0'), clickCmd(cmdViewNext, attachShortcuts), enterCmd(cmdViewNext, attachShortcuts)));
 		document.body.appendChild(popupRoot);
 		popupRoot.focus();
 		attachmentView = { key: keyHandler(attachShortcuts) };
@@ -2621,15 +2869,34 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		urlType = 'htmlexternal';
 		dom._kids(msgcontentElem, dom.iframe(attr.tabindex('0'), attr.title('HTML version of message with images inlined and with external resources loaded.'), attr.src('msg/' + m.ID + '/' + urlType), style({ border: '0', position: 'absolute', width: '100%', height: '100%', backgroundColor: 'white' })));
 	};
+	const loadMoreHeaders = (pm) => {
+		if (settings.showHeaders.length === 0) {
+			return;
+		}
+		for (let i = 0; i < settings.showHeaders.length; i++) {
+			msgheaderElem.children[msgheaderElem.children.length - 1].remove();
+		}
+		settings.showHeaders.forEach(k => {
+			const vl = pm.Headers?.[k];
+			if (!vl || vl.length === 0) {
+				return;
+			}
+			vl.forEach(v => {
+				const e = dom.tr(dom.td(k + ':', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(v));
+				msgheaderElem.appendChild(e);
+			});
+		});
+	};
 	const mv = {
 		root: root,
 		messageitem: mi,
 		key: keyHandler(shortcuts),
 		aborter: { abort: () => { } },
-		updateKeywords: (modseq, keywords) => {
+		updateKeywords: async (modseq, keywords) => {
 			mi.Message.ModSeq = modseq;
 			mi.Message.Keywords = keywords;
-			loadMsgheaderView(msgheaderElem, miv.messageitem, refineKeyword);
+			loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword);
+			loadMoreHeaders(await parsedMessagePromise);
 		},
 	};
 	(async () => {
@@ -2656,18 +2923,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		}
 		loadButtons(pm);
 		loadHeaderDetails(pm);
-		if (settings.showHeaders.length > 0) {
-			settings.showHeaders.forEach(k => {
-				const vl = pm.Headers?.[k];
-				if (!vl || vl.length === 0) {
-					return;
-				}
-				vl.forEach(v => {
-					const e = dom.tr(dom.td(k + ':', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(v));
-					msgheaderElem.appendChild(e);
-				});
-			});
-		}
+		loadMoreHeaders(pm);
 		const htmlNote = 'In the HTML viewer, the following potentially dangerous functionality is disabled: submitting forms, starting a download from a link, navigating away from this page by clicking a link. If a link does not work, try explicitly opening it in a new tab.';
 		const haveText = pm.Texts && pm.Texts.length > 0;
 		if (!haveText && !pm.HasHTML) {
@@ -2682,7 +2938,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 			const text = haveText && !settings.showHTML;
 			dom._kids(msgmodeElem, dom.div(dom._class('pad'), style({ borderTop: '1px solid #ccc' }), !haveText ? dom.span('HTML-only message', attr.title(htmlNote), style({ backgroundColor: '#ffca91', padding: '0 .15em', marginRight: '.25em' })) : [], dom.span(dom._class('btngroup'), haveText ? textbtn = dom.clickbutton(text ? dom._class('active') : [], 'Text', clickCmd(cmdShowText, shortcuts)) : [], htmlbtn = dom.clickbutton(text ? [] : dom._class('active'), 'HTML', attr.title(htmlNote), async function click() {
 				// Shortcuts has a function that cycles through html and htmlexternal.
-				showShortcut('X');
+				showShortcut('T');
 				await cmdShowHTML();
 			}), htmlextbtn = dom.clickbutton('HTML with external resources', attr.title(htmlNote), clickCmd(cmdShowHTMLExternal, shortcuts)))));
 			if (text) {
@@ -2710,23 +2966,48 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 	})();
 	return mv;
 };
-const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, possibleLabels, scrollElemHeight, refineKeyword) => {
-	// These contain one msgitemView or an array of them.
-	// Zero or more selected msgitemViews. If there is a single message, its content is
-	// shown. If there are multiple, just the count is shown. These are in order of
-	// being added, not in order of how they are shown in the list. This is needed to
-	// handle selection changes with the shift key.
+const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, possibleLabels, scrollElemHeight, refineKeyword, viewportEnsureMessages) => {
+	// msgitemViews holds all visible item views: All thread roots, and kids only if
+	// the thread is expanded, in order of descendants. All descendants of a collapsed
+	// root are in collapsedMsgitemViews, unsorted. Having msgitemViews as a list is
+	// convenient for reasoning about the visible items, and handling changes to the
+	// selected messages.
+	// When messages for a thread are all non-matching the query, we no longer show it
+	// (e.g. when moving a thread to Archive), but we keep the messages around in
+	// oldThreadMessageItems, so an update to the thread (e.g. new delivery) can
+	// resurrect the messages.
+	let msgitemViews = []; // Only visible msgitems, in order on screen.
+	let collapsedMsgitemViews = []; // Invisible messages because collapsed, unsorted.
+	let oldThreadMessageItems = []; // Messages from threads removed from view.
+	// selected holds the messages that are selected, zero or more. If there is a
+	// single message, its content is shown. If there are multiple, just the count is
+	// shown. These are in order of being added, not in order of how they are shown in
+	// the list. This is needed to handle selection changes with the shift key. For
+	// collapsed thread roots, only that root will be in this list. The effective
+	// selection must always expand descendants, use mlv.selected() to gather all.
 	let selected = [];
-	// MsgitemView last interacted with, or the first when messages are loaded. Always
-	// set when there is a message. Used for shift+click to expand selection.
+	// Focus is the message last interacted with, or the first when messages are
+	// loaded. Always set when there is a message. Used for shift+click to expand
+	// selection.
 	let focus = null;
-	let msgitemViews = [];
 	let msgView = null;
+	// Messages for actions like "archive", "trash", "move to...". We skip messages
+	// that are (already) in skipMBID. And we skip messages that are in the designated
+	// Sent mailbox, unless there is only one selected message or the view is for the
+	// Sent mailbox, then it must be intentional.
+	const moveActionMsgIDs = (skipMBID) => {
+		const sentMailboxID = listMailboxes().find(mb => mb.Sent)?.ID;
+		const effselected = mlv.selected();
+		return effselected
+			.filter(miv => miv.messageitem.Message.MailboxID !== skipMBID)
+			.map(miv => miv.messageitem.Message)
+			.filter(m => effselected.length === 1 || !sentMailboxID || m.MailboxID !== sentMailboxID || !otherMailbox(sentMailboxID))
+			.map(m => m.ID);
+	};
 	const cmdArchive = async () => {
 		const mb = listMailboxes().find(mb => mb.Archive);
 		if (mb) {
-			const msgIDs = selected.filter(miv => miv.messageitem.Message.MailboxID !== mb.ID).map(miv => miv.messageitem.Message.ID);
-			await withStatus('Moving to archive mailbox', client.MessageMove(msgIDs, mb.ID));
+			await withStatus('Moving to archive mailbox', client.MessageMove(moveActionMsgIDs(mb.ID), mb.ID));
 		}
 		else {
 			window.alert('No mailbox configured for archiving yet.');
@@ -2736,13 +3017,12 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 		if (!confirm('Are you sure you want to permanently delete?')) {
 			return;
 		}
-		await withStatus('Permanently deleting messages', client.MessageDelete(selected.map(miv => miv.messageitem.Message.ID)));
+		await withStatus('Permanently deleting messages', client.MessageDelete(mlv.selected().map(miv => miv.messageitem.Message.ID)));
 	};
 	const cmdTrash = async () => {
 		const mb = listMailboxes().find(mb => mb.Trash);
 		if (mb) {
-			const msgIDs = selected.filter(miv => miv.messageitem.Message.MailboxID !== mb.ID).map(miv => miv.messageitem.Message.ID);
-			await withStatus('Moving to trash mailbox', client.MessageMove(msgIDs, mb.ID));
+			await withStatus('Moving to trash mailbox', client.MessageMove(moveActionMsgIDs(mb.ID), mb.ID));
 		}
 		else {
 			window.alert('No mailbox configured for trash yet.');
@@ -2751,30 +3031,245 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 	const cmdJunk = async () => {
 		const mb = listMailboxes().find(mb => mb.Junk);
 		if (mb) {
-			const msgIDs = selected.filter(miv => miv.messageitem.Message.MailboxID !== mb.ID).map(miv => miv.messageitem.Message.ID);
-			await withStatus('Moving to junk mailbox', client.MessageMove(msgIDs, mb.ID));
+			await withStatus('Moving to junk mailbox', client.MessageMove(moveActionMsgIDs(mb.ID), mb.ID));
 		}
 		else {
 			window.alert('No mailbox configured for junk yet.');
 		}
 	};
-	const cmdMarkNotJunk = async () => { await withStatus('Marking as not junk', client.FlagsAdd(selected.map(miv => miv.messageitem.Message.ID), ['$notjunk'])); };
-	const cmdMarkRead = async () => { await withStatus('Marking as read', client.FlagsAdd(selected.map(miv => miv.messageitem.Message.ID), ['\\seen'])); };
-	const cmdMarkUnread = async () => { await withStatus('Marking as not read', client.FlagsClear(selected.map(miv => miv.messageitem.Message.ID), ['\\seen'])); };
+	const cmdMarkNotJunk = async () => { await withStatus('Marking as not junk', client.FlagsAdd(mlv.selected().map(miv => miv.messageitem.Message.ID), ['$notjunk'])); };
+	const cmdMarkRead = async () => { await withStatus('Marking as read', client.FlagsAdd(mlv.selected().map(miv => miv.messageitem.Message.ID), ['\\seen'])); };
+	const cmdMarkUnread = async () => { await withStatus('Marking as not read', client.FlagsClear(mlv.selected().map(miv => miv.messageitem.Message.ID), ['\\seen'])); };
+	const cmdMute = async () => {
+		const l = mlv.selected();
+		await withStatus('Muting thread', client.ThreadMute(l.map(miv => miv.messageitem.Message.ID), true));
+		const oldstate = state();
+		for (const miv of l) {
+			if (!miv.parent && miv.kids.length > 0 && !miv.collapsed) {
+				threadCollapse(miv, false);
+			}
+		}
+		updateState(oldstate);
+		viewportEnsureMessages();
+	};
+	const cmdUnmute = async () => { await withStatus('Unmuting thread', client.ThreadMute(mlv.selected().map(miv => miv.messageitem.Message.ID), false)); };
+	const seletedRoots = () => {
+		const mivs = [];
+		mlv.selected().forEach(miv => {
+			const mivroot = miv.threadRoot();
+			if (!mivs.includes(mivroot)) {
+				mivs.push(mivroot);
+			}
+		});
+		return mivs;
+	};
+	const cmdToggleMute = async () => {
+		if (settings.threading === api.ThreadMode.ThreadOff) {
+			alert('Toggle muting threads is only available when threading is enabled.');
+			return;
+		}
+		const rootmivs = seletedRoots();
+		const unmuted = !!rootmivs.find(miv => !miv.messageitem.Message.ThreadMuted);
+		await withStatus(unmuted ? 'Muting' : 'Unmuting', client.ThreadMute(rootmivs.map(miv => miv.messageitem.Message.ID), unmuted ? true : false));
+		if (unmuted) {
+			const oldstate = state();
+			rootmivs.forEach(miv => {
+				if (!miv.collapsed) {
+					threadCollapse(miv, false);
+				}
+			});
+			updateState(oldstate);
+			viewportEnsureMessages();
+		}
+	};
+	const cmdToggleCollapse = async () => {
+		if (settings.threading === api.ThreadMode.ThreadOff) {
+			alert('Toggling thread collapse/expand is only available when threading is enabled.');
+			return;
+		}
+		const rootmivs = seletedRoots();
+		const collapse = !!rootmivs.find(miv => !miv.collapsed);
+		const oldstate = state();
+		if (collapse) {
+			rootmivs.forEach(miv => {
+				if (!miv.collapsed) {
+					threadCollapse(miv, false);
+				}
+			});
+			selected = rootmivs;
+			if (focus) {
+				focus = focus.threadRoot();
+			}
+			viewportEnsureMessages();
+		}
+		else {
+			rootmivs.forEach(miv => {
+				if (miv.collapsed) {
+					threadExpand(miv, false);
+				}
+			});
+		}
+		updateState(oldstate);
+		if (settings.threading === api.ThreadMode.ThreadOn) {
+			const action = collapse ? 'Collapsing' : 'Expanding';
+			await withStatus(action, client.ThreadCollapse(rootmivs.map(miv => miv.messageitem.Message.ID), collapse));
+		}
+	};
+	const cmdSelectThread = async () => {
+		if (!focus) {
+			return;
+		}
+		const oldstate = state();
+		selected = msgitemViews.filter(miv => miv.messageitem.Message.ThreadID === focus.messageitem.Message.ThreadID);
+		updateState(oldstate);
+	};
+	const cmdCollapseExpand = async (collapse) => {
+		if (settings.threading === api.ThreadMode.ThreadOff) {
+			alert('Toggling thread collapse/expand is only available when threading is enabled.');
+			return;
+		}
+		const oldstate = state();
+		const rootmivs = seletedRoots();
+		rootmivs.forEach(miv => {
+			if (miv.collapsed !== collapse) {
+				if (collapse) {
+					threadCollapse(miv, false);
+				}
+				else {
+					threadExpand(miv, false);
+				}
+			}
+		});
+		if (collapse) {
+			selected = rootmivs;
+			if (focus) {
+				focus = focus.threadRoot();
+			}
+		}
+		viewportEnsureMessages();
+		updateState(oldstate);
+		if (settings.threading === api.ThreadMode.ThreadOn) {
+			const action = collapse ? 'Collapsing' : 'Expanding';
+			await withStatus(action, client.ThreadCollapse(rootmivs.map(miv => miv.messageitem.Message.ID), collapse));
+		}
+	};
+	const cmdCollapse = async () => cmdCollapseExpand(true);
+	const cmdExpand = async () => cmdCollapseExpand(false);
 	const shortcuts = {
 		d: cmdTrash,
 		Delete: cmdTrash,
 		D: cmdDelete,
-		q: cmdJunk,
 		a: cmdArchive,
-		n: cmdMarkNotJunk,
-		u: cmdMarkUnread,
+		q: cmdJunk,
+		Q: cmdMarkNotJunk,
 		m: cmdMarkRead,
+		M: cmdMarkUnread,
+		X: cmdToggleMute,
+		C: cmdToggleCollapse,
+		S: cmdSelectThread,
+		ArrowLeft: cmdCollapse,
+		ArrowRight: cmdExpand,
+	};
+	// After making changes, this function looks through the data structure for
+	// inconsistencies. Useful during development.
+	const checkConsistency = (checkSelection) => {
+		if (!settings.checkConsistency) {
+			return;
+		}
+		// Check for duplicates in msgitemViews.
+		const mivseen = new Set();
+		const threadActive = new Set();
+		for (const miv of msgitemViews) {
+			const id = miv.messageitem.Message.ID;
+			if (mivseen.has(id)) {
+				log('duplicate Message.ID', { id: id, mivseenSize: mivseen.size });
+				throw new ConsistencyError('duplicate Message.ID in msgitemViews');
+			}
+			mivseen.add(id);
+			if (!miv.root.parentNode) {
+				throw new ConsistencyError('msgitemView.root not in dom');
+			}
+			threadActive.add(miv.messageitem.Message.ThreadID);
+		}
+		// Check for duplicates in collapsedMsgitemViews, and whether also in msgitemViews.
+		const colseen = new Set();
+		for (const miv of collapsedMsgitemViews) {
+			const id = miv.messageitem.Message.ID;
+			if (colseen.has(id)) {
+				throw new ConsistencyError('duplicate Message.ID in collapsedMsgitemViews');
+			}
+			colseen.add(id);
+			if (mivseen.has(id)) {
+				throw new ConsistencyError('Message.ID in both collapsedMsgitemViews and msgitemViews');
+			}
+			threadActive.add(miv.messageitem.Message.ThreadID);
+		}
+		if (settings.threading !== api.ThreadMode.ThreadOff) {
+			const oldseen = new Set();
+			for (const mi of oldThreadMessageItems) {
+				const id = mi.Message.ID;
+				if (oldseen.has(id)) {
+					throw new ConsistencyError('duplicate Message.ID in oldThreadMessageItems');
+				}
+				oldseen.add(id);
+				if (mivseen.has(id)) {
+					throw new ConsistencyError('Message.ID in both msgitemViews and oldThreadMessageItems');
+				}
+				if (colseen.has(id)) {
+					throw new ConsistencyError('Message.ID in both collapsedMsgitemViews and oldThreadMessageItems');
+				}
+				if (threadActive.has(mi.Message.ThreadID)) {
+					throw new ConsistencyError('threadid both in active and in old thread list');
+				}
+			}
+		}
+		// Walk all (collapsed) msgitemViews, check each and their descendants are in
+		// msgitemViews at the correct position, or in collapsedmsgitemViews.
+		msgitemViews.forEach((miv, i) => {
+			if (miv.collapsed) {
+				for (const dmiv of miv.descendants()) {
+					if (!colseen.has(dmiv.messageitem.Message.ID)) {
+						throw new ConsistencyError('descendant message id missing from collapsedMsgitemViews');
+					}
+				}
+				return;
+			}
+			for (const dmiv of miv.descendants()) {
+				i++;
+				if (!mivseen.has(dmiv.messageitem.Message.ID)) {
+					throw new ConsistencyError('descendant missing from msgitemViews');
+				}
+				if (msgitemViews[i] !== dmiv) {
+					throw new ConsistencyError('descendant not at expected position in msgitemViews');
+				}
+			}
+		});
+		if (!checkSelection) {
+			return;
+		}
+		// Check all selected & focus exists.
+		const selseen = new Set();
+		for (const miv of selected) {
+			const id = miv.messageitem.Message.ID;
+			if (selseen.has(id)) {
+				throw new ConsistencyError('duplicate miv in selected');
+			}
+			selseen.add(id);
+			if (!mivseen.has(id)) {
+				throw new ConsistencyError('selected id not in msgitemViews');
+			}
+		}
+		if (focus) {
+			const id = focus.messageitem.Message.ID;
+			if (!mivseen.has(id)) {
+				throw new ConsistencyError('focus set to unknown miv');
+			}
+		}
 	};
 	// Return active & focus state, and update the UI after changing state.
 	const state = () => {
 		const active = {};
-		for (const miv of selected) {
+		for (const miv of mlv.selected()) {
 			active[miv.messageitem.Message.ID] = miv;
 		}
 		return { active: active, focus: focus };
@@ -2804,38 +3299,40 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 				activeChanged = true;
 			}
 		}
-		if (initial && selected.length === 1) {
-			mlv.redraw(selected[0]);
+		const effselected = mlv.selected();
+		if (initial && effselected.length === 1) {
+			mlv.redraw(effselected[0]);
 		}
-		if (activeChanged) {
-			if (msgView) {
-				msgView.aborter.abort();
-			}
-			msgView = null;
-			if (selected.length === 0) {
-				dom._kids(msgElem);
-			}
-			else if (selected.length === 1) {
-				msgElem.classList.toggle('loading', true);
-				const loaded = () => { msgElem.classList.toggle('loading', false); };
-				msgView = newMsgView(selected[0], mlv, listMailboxes, possibleLabels, loaded, refineKeyword, parsedMessageOpt);
-				dom._kids(msgElem, msgView);
-			}
-			else {
-				const trashMailboxID = listMailboxes().find(mb => mb.Trash)?.ID;
-				const allTrash = trashMailboxID && !selected.find(miv => miv.messageitem.Message.MailboxID !== trashMailboxID);
-				dom._kids(msgElem, dom.div(attr.role('region'), attr.arialabel('Buttons for multiple messages'), style({ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }), dom.div(style({ padding: '4ex', backgroundColor: 'white', borderRadius: '.25em', border: '1px solid #ccc' }), dom.div(style({ textAlign: 'center', marginBottom: '4ex' }), '' + selected.length + ' messages selected'), dom.div(dom.clickbutton('Archive', attr.title('Move to the Archive mailbox.'), clickCmd(cmdArchive, shortcuts)), ' ', allTrash ?
-					dom.clickbutton('Delete', attr.title('Permanently delete messages.'), clickCmd(cmdDelete, shortcuts)) :
-					dom.clickbutton('Trash', attr.title('Move to the Trash mailbox.'), clickCmd(cmdTrash, shortcuts)), ' ', dom.clickbutton('Junk', attr.title('Move to Junk mailbox, marking as junk and causing this message to be used in spam classification of new incoming messages.'), clickCmd(cmdJunk, shortcuts)), ' ', dom.clickbutton('Move to...', function click(e) {
-					movePopover(e, listMailboxes(), selected.map(miv => miv.messageitem.Message));
-				}), ' ', dom.clickbutton('Labels...', attr.title('Add/remove labels ...'), function click(e) {
-					labelsPopover(e, selected.map(miv => miv.messageitem.Message), possibleLabels);
-				}), ' ', dom.clickbutton('Mark Not Junk', attr.title('Mark as not junk, causing this message to be used in spam classification of new incoming messages.'), clickCmd(cmdMarkNotJunk, shortcuts)), ' ', dom.clickbutton('Mark read', clickCmd(cmdMarkRead, shortcuts)), ' ', dom.clickbutton('Mark unread', clickCmd(cmdMarkUnread, shortcuts))))));
-			}
+		checkConsistency(true);
+		if (!activeChanged) {
+			return;
 		}
-		if (activeChanged) {
-			setLocationHash();
+		if (msgView) {
+			msgView.aborter.abort();
 		}
+		msgView = null;
+		if (effselected.length === 0) {
+			dom._kids(msgElem);
+		}
+		else if (effselected.length === 1) {
+			msgElem.classList.toggle('loading', true);
+			const loaded = () => { msgElem.classList.toggle('loading', false); };
+			msgView = newMsgView(effselected[0], mlv, listMailboxes, possibleLabels, loaded, refineKeyword, parsedMessageOpt);
+			dom._kids(msgElem, msgView);
+		}
+		else {
+			const trashMailboxID = listMailboxes().find(mb => mb.Trash)?.ID;
+			const allTrash = trashMailboxID && !effselected.find(miv => miv.messageitem.Message.MailboxID !== trashMailboxID);
+			dom._kids(msgElem, dom.div(attr.role('region'), attr.arialabel('Buttons for multiple messages'), style({ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }), dom.div(style({ padding: '4ex', backgroundColor: 'white', borderRadius: '.25em', border: '1px solid #ccc' }), dom.div(style({ textAlign: 'center', marginBottom: '4ex' }), '' + effselected.length + ' messages selected'), dom.div(dom.clickbutton('Archive', attr.title('Move to the Archive mailbox. Messages in the designated Sent mailbox are only moved if a single message is selected, or the current mailbox is the Sent mailbox.'), clickCmd(cmdArchive, shortcuts)), ' ', allTrash ?
+				dom.clickbutton('Delete', attr.title('Permanently delete messages.'), clickCmd(cmdDelete, shortcuts)) :
+				dom.clickbutton('Trash', attr.title('Move to the Trash mailbox. Messages in the designated Sent mailbox are only moved if a single message is selected, or the current mailbox is the Sent mailbox.'), clickCmd(cmdTrash, shortcuts)), ' ', dom.clickbutton('Junk', attr.title('Move to Junk mailbox, marking as junk and causing this message to be used in spam classification of new incoming messages. Messages in the designated Sent mailbox are only moved if a single message is selected, or the current mailbox is the Sent mailbox.'), clickCmd(cmdJunk, shortcuts)), ' ', dom.clickbutton('Move to...', function click(e) {
+				const sentMailboxID = listMailboxes().find(mb => mb.Sent)?.ID;
+				movePopover(e, listMailboxes(), effselected.map(miv => miv.messageitem.Message).filter(m => effselected.length === 1 || !sentMailboxID || m.MailboxID !== sentMailboxID || !otherMailbox(sentMailboxID)));
+			}), ' ', dom.clickbutton('Labels...', attr.title('Add/remove labels ...'), function click(e) {
+				labelsPopover(e, effselected.map(miv => miv.messageitem.Message), possibleLabels);
+			}), ' ', dom.clickbutton('Mark Not Junk', attr.title('Mark as not junk, causing this message to be used in spam classification of new incoming messages.'), clickCmd(cmdMarkNotJunk, shortcuts)), ' ', dom.clickbutton('Mark Read', clickCmd(cmdMarkRead, shortcuts)), ' ', dom.clickbutton('Mark Unread', clickCmd(cmdMarkUnread, shortcuts)), ' ', dom.clickbutton('Mute thread', clickCmd(cmdMute, shortcuts)), ' ', dom.clickbutton('Unmute thread', clickCmd(cmdUnmute, shortcuts))))));
+		}
+		setLocationHash();
 	};
 	// Moves the currently focused msgitemView, without changing selection.
 	const moveFocus = (miv) => {
@@ -2843,95 +3340,682 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 		focus = miv;
 		updateState(oldstate);
 	};
+	const threadExpand = (miv, changeState) => {
+		if (miv.parent) {
+			throw new ConsistencyError('cannot expand non-root');
+		}
+		const oldstate = state();
+		miv.collapsed = false;
+		const mivl = miv.descendants();
+		miv.render();
+		mivl.forEach(dmiv => dmiv.render());
+		for (const miv of mivl) {
+			collapsedMsgitemViews.splice(collapsedMsgitemViews.indexOf(miv), 1);
+		}
+		const pi = msgitemViews.indexOf(miv);
+		msgitemViews.splice(pi + 1, 0, ...mivl);
+		const next = miv.root.nextSibling;
+		for (const miv of mivl) {
+			mlv.root.insertBefore(miv.root, next);
+		}
+		if (changeState) {
+			updateState(oldstate);
+		}
+	};
+	const threadCollapse = (miv, changeState) => {
+		if (miv.parent) {
+			throw new ConsistencyError('cannot expand non-root');
+		}
+		const oldstate = state();
+		miv.collapsed = true;
+		const mivl = miv.descendants();
+		collapsedMsgitemViews.push(...mivl);
+		// If miv or any child was selected, ensure collapsed thread root is also selected.
+		let select = [miv, ...mivl].find(xmiv => selected.indexOf(xmiv) >= 0);
+		let seli = selected.length; // Track first index of already selected miv, which is where we insert the thread root if needed, to keep order.
+		msgitemViews.splice(msgitemViews.indexOf(miv) + 1, mivl.length);
+		for (const dmiv of mivl) {
+			dmiv.remove();
+			if (focus === dmiv) {
+				focus = miv;
+			}
+			const si = selected.indexOf(dmiv);
+			if (si >= 0) {
+				if (si < seli) {
+					seli = si;
+				}
+				selected.splice(si, 1);
+			}
+		}
+		if (select) {
+			const si = selected.indexOf(miv);
+			if (si < 0) {
+				selected.splice(seli, 0, miv);
+			}
+		}
+		// Selected messages may have changed.
+		if (changeState) {
+			updateState(oldstate);
+		}
+		// Render remaining thread root, with tree size, effective received age/unread state.
+		miv.render();
+	};
+	const threadToggle = () => {
+		const oldstate = state();
+		const roots = msgitemViews.filter(miv => !miv.parent && miv.kids.length > 0);
+		roots.forEach(miv => {
+			let wantCollapsed = miv.messageitem.Message.ThreadCollapsed;
+			if (settings.threading === api.ThreadMode.ThreadUnread) {
+				wantCollapsed = !miv.messageitem.Message.Seen && !miv.findDescendant(miv => !miv.messageitem.Message.Seen);
+			}
+			if (miv.collapsed === wantCollapsed) {
+				return;
+			}
+			if (wantCollapsed) {
+				threadCollapse(miv, false);
+			}
+			else {
+				threadExpand(miv, false);
+			}
+		});
+		updateState(oldstate);
+		viewportEnsureMessages();
+	};
+	const removeSelected = (miv) => {
+		const si = selected.indexOf(miv);
+		if (si >= 0) {
+			selected.splice(si, 1);
+		}
+		if (focus === miv) {
+			const i = msgitemViews.indexOf(miv);
+			if (i > 0) {
+				focus = msgitemViews[i - 1];
+			}
+			else if (i + 1 < msgitemViews.length) {
+				focus = msgitemViews[i + 1];
+			}
+			else {
+				focus = null;
+			}
+		}
+	};
+	// Removes message from either msgitemViews, collapsedMsgitemViews,
+	// oldThreadMessageItems, and updates UI.
+	// Returns ThreadID of removed message if active (expanded or collapsed), or 0 otherwise.
+	const removeUID = (mailboxID, uid) => {
+		const match = (miv) => miv.messageitem.Message.MailboxID === mailboxID && miv.messageitem.Message.UID === uid;
+		const ci = collapsedMsgitemViews.findIndex(match);
+		if (ci >= 0) {
+			const miv = collapsedMsgitemViews[ci];
+			removeCollapsed(ci);
+			return miv.messageitem.Message.ThreadID;
+		}
+		const i = msgitemViews.findIndex(match);
+		if (i >= 0) {
+			const miv = msgitemViews[i];
+			removeExpanded(i);
+			return miv.messageitem.Message.ThreadID;
+		}
+		const ti = oldThreadMessageItems.findIndex(mi => mi.Message.MailboxID === mailboxID && mi.Message.UID === uid);
+		if (ti >= 0) {
+			oldThreadMessageItems.splice(ti, 1);
+		}
+		return 0;
+	};
+	// Removes message from collapsedMsgitemView and UI at given index, placing
+	// messages in oldThreadMessageItems.
+	const removeCollapsed = (ci) => {
+		// Message is collapsed. That means it isn't visible, and neither are its children,
+		// and it has a parent. So we just merge the kids with those of the parent.
+		const miv = collapsedMsgitemViews[ci];
+		collapsedMsgitemViews.splice(ci, 1);
+		removeSelected(miv);
+		const trmiv = miv.threadRoot(); // To rerender, below.
+		const pmiv = miv.parent;
+		if (!pmiv) {
+			throw new ConsistencyError('removing collapsed miv, but has no parent');
+		}
+		miv.parent = null; // Strict cleanup.
+		const pki = pmiv.kids.indexOf(miv);
+		if (pki < 0) {
+			throw new ConsistencyError('miv not in parent.kids');
+		}
+		pmiv.kids.splice(pki, 1, ...miv.kids); // In parent, replace miv with its kids.
+		miv.kids.forEach(kmiv => kmiv.parent = pmiv); // Give kids their new parent.
+		miv.kids = []; // Strict cleanup.
+		pmiv.kids.sort((miva, mivb) => miva.messageitem.Message.Received.getTime() - mivb.messageitem.Message.Received.getTime()); // Sort new list of kids.
+		trmiv.render(); // For count, unread state.
+		return;
+	};
+	// Remove message from msgitemViews and UI at the index i.
+	const removeExpanded = (i) => {
+		log('removeExpanded', { i });
+		// Note: If we remove a message we may be left with only messages from another
+		// mailbox. We'll leave it, new messages could be delivered for that thread. It
+		// would be strange to see the remaining messages of the thread disappear.
+		const miv = msgitemViews[i];
+		removeSelected(miv);
+		const pmiv = miv.parent;
+		miv.parent = null;
+		if (miv.kids.length === 0) {
+			// No kids, easy case, just remove this leaf message.
+			miv.remove();
+			msgitemViews.splice(i, 1);
+			if (pmiv) {
+				const pki = pmiv.kids.indexOf(miv);
+				if (pki < 0) {
+					throw new ConsistencyError('miv not in parent.kids');
+				}
+				pmiv.kids.splice(pki, 1); // Remove miv from parent's kids.
+				miv.parent = null; // Strict cleanup.
+				pmiv.render(); // Update counts.
+			}
+			return;
+		}
+		if (!pmiv) {
+			// If the kids no longer have a parent and become thread roots we leave them in
+			// their original location.
+			const next = miv.root.nextSibling;
+			miv.remove();
+			msgitemViews.splice(i, 1);
+			if (miv.collapsed) {
+				msgitemViews.splice(i, 0, ...miv.kids);
+				for (const kmiv of miv.kids) {
+					const pki = collapsedMsgitemViews.indexOf(kmiv);
+					if (pki < 0) {
+						throw new ConsistencyError('cannot find collapsed kid in collapsedMsgitemViews');
+					}
+					collapsedMsgitemViews.splice(pki, 1);
+					kmiv.collapsed = true;
+					kmiv.parent = null;
+					kmiv.render();
+					mlv.root.insertBefore(kmiv.root, next);
+				}
+			}
+			else {
+				// Note: if not collapsed, we leave the kids in the original position in msgitemViews.
+				miv.kids.forEach(kmiv => {
+					kmiv.collapsed = false;
+					kmiv.parent = null;
+					kmiv.render();
+					const lastDesc = kmiv.lastDescendant();
+					if (lastDesc) {
+						// Update end of thread bar.
+						lastDesc.render();
+					}
+				});
+			}
+			miv.kids = []; // Strict cleanup.
+			return;
+		}
+		// If the kids will have a parent, we insert them at the expected location in
+		// between parent's existing kids. It is easiest just to take out all kids, add the
+		// new ones, sort kids, and add back the subtree.
+		const odmivs = pmiv.descendants(); // Old direct descendants of parent. This includes miv and kids, and other kids, and miv siblings.
+		const pi = msgitemViews.indexOf(pmiv);
+		if (pi < 0) {
+			throw new ConsistencyError('cannot find parent of removed miv');
+		}
+		msgitemViews.splice(pi + 1, odmivs.length); // Remove all old descendants, we'll add an updated list later.
+		const pki = pmiv.kids.indexOf(miv);
+		if (pki < 0) {
+			throw new Error('did not find miv in parent.kids');
+		}
+		pmiv.kids.splice(pki, 1); // Remove miv from parent's kids.
+		pmiv.kids.push(...miv.kids); // Add miv.kids to parent's kids.
+		miv.kids.forEach(kmiv => { kmiv.parent = pmiv; }); // Set new parent for miv kids.
+		miv.kids = []; // Strict cleanup.
+		pmiv.kids.sort((miva, mivb) => miva.messageitem.Message.Received.getTime() - mivb.messageitem.Message.Received.getTime());
+		const ndmivs = pmiv.descendants(); // Excludes miv, that we are removing.
+		if (ndmivs.length !== odmivs.length - 1) {
+			throw new ConsistencyError('unexpected new descendants counts during remove');
+		}
+		msgitemViews.splice(pi + 1, 0, ...ndmivs); // Add all new/current descedants. There is one less than in odmivs.
+		odmivs.forEach(ndimv => ndimv.remove());
+		const next = pmiv.root.nextSibling;
+		for (const ndmiv of ndmivs) {
+			mlv.root.insertBefore(ndmiv.root, next);
+		}
+		pmiv.render();
+		ndmivs.forEach(dmiv => dmiv.render());
+	};
+	// If there are no query-matching messages left for this thread, remove the
+	// remaining messages from view and keep them around for future deliveries for the
+	// thread.
+	const possiblyTakeoutOldThreads = (threadIDs) => {
+		const hasMatch = (mivs, threadID) => mivs.find(miv => miv.messageitem.Message.ThreadID === threadID && miv.messageitem.MatchQuery);
+		const takeoutOldThread = (mivs, threadID, visible) => {
+			let i = 0;
+			while (i < mivs.length) {
+				const miv = mivs[i];
+				const mi = miv.messageitem;
+				const m = mi.Message;
+				if (threadID !== m.ThreadID) {
+					i++;
+					continue;
+				}
+				mivs.splice(i, 1);
+				if (visible) {
+					miv.remove();
+				}
+				if (focus === miv) {
+					focus = null;
+					if (i < mivs.length) {
+						focus = mivs[i];
+					}
+					else if (i > 0) {
+						focus = mivs[i - 1];
+					}
+				}
+				const si = selected.indexOf(miv);
+				if (si >= 0) {
+					selected.splice(si, 1);
+				}
+				// Strict cleanup.
+				miv.parent = null;
+				miv.kids = [];
+				oldThreadMessageItems.push(mi);
+				log('took out old thread message', { mi });
+			}
+		};
+		for (const threadID of threadIDs) {
+			if (hasMatch(msgitemViews, threadID) || hasMatch(collapsedMsgitemViews, threadID)) {
+				log('still have query-matching message for thread', { threadID });
+				continue;
+			}
+			takeoutOldThread(msgitemViews, threadID, true);
+			takeoutOldThread(collapsedMsgitemViews, threadID, false);
+		}
+	};
 	const mlv = {
 		root: dom.div(),
 		updateFlags: (mailboxID, uid, modseq, mask, flags, keywords) => {
+			const updateMessageFlags = (m) => {
+				m.ModSeq = modseq;
+				const maskobj = mask;
+				const flagsobj = flags;
+				const mobj = m;
+				for (const k in maskobj) {
+					if (maskobj[k]) {
+						mobj[k] = flagsobj[k];
+					}
+				}
+				m.Keywords = keywords;
+			};
 			// todo optimize: keep mapping of uid to msgitemView for performance. instead of using Array.find
-			const miv = msgitemViews.find(miv => miv.messageitem.Message.MailboxID === mailboxID && miv.messageitem.Message.UID === uid);
+			let miv = msgitemViews.find(miv => miv.messageitem.Message.MailboxID === mailboxID && miv.messageitem.Message.UID === uid);
 			if (!miv) {
-				// Happens for messages outside of view.
-				log('could not find msgitemView for uid', uid);
+				miv = collapsedMsgitemViews.find(miv => miv.messageitem.Message.MailboxID === mailboxID && miv.messageitem.Message.UID === uid);
+			}
+			if (miv) {
+				updateMessageFlags(miv.messageitem.Message);
+				miv.render();
+				if (miv.parent) {
+					const tr = miv.threadRoot();
+					if (tr.collapsed) {
+						tr.render();
+					}
+				}
+				if (msgView && msgView.messageitem.Message.ID === miv.messageitem.Message.ID) {
+					msgView.updateKeywords(modseq, keywords);
+				}
 				return;
 			}
-			miv.updateFlags(modseq, mask, flags, keywords);
-			if (msgView && msgView.messageitem.Message.ID === miv.messageitem.Message.ID) {
-				msgView.updateKeywords(modseq, keywords);
+			const mi = oldThreadMessageItems.find(mi => mi.Message.MailboxID === mailboxID && mi.Message.UID === uid);
+			if (mi) {
+				updateMessageFlags(mi.Message);
+			}
+			else {
+				// Happens for messages outside of view.
+				log('could not find msgitemView for uid', uid);
 			}
 		},
-		addMessageItems: (messageItems) => {
+		// Add messages to view, either messages to fill the view with complete threads, or
+		// individual messages delivered later.
+		addMessageItems: (messageItems, isChange, requestMsgID) => {
 			if (messageItems.length === 0) {
 				return;
 			}
-			messageItems.forEach(mi => {
-				const miv = newMsgitemView(mi, mlv, otherMailbox(mi.Message.MailboxID));
-				const orderNewest = !settings.orderAsc;
-				const tm = mi.Message.Received.getTime();
-				const nextmivindex = msgitemViews.findIndex(miv => {
-					const vtm = miv.messageitem.Message.Received.getTime();
-					return orderNewest && vtm <= tm || !orderNewest && tm <= vtm;
-				});
-				if (nextmivindex < 0) {
-					mlv.root.appendChild(miv.root);
-					msgitemViews.push(miv);
+			// Each "mil" is a thread, possibly with multiple thread roots. The thread may
+			// already be present.
+			messageItems.forEach(mil => {
+				if (!mil) {
+					return; // For types, should not happen.
+				}
+				const threadID = mil[0].Message.ThreadID;
+				const hasMatch = !!mil.find(mi => mi.MatchQuery);
+				if (hasMatch) {
+					// This may be a message for a thread that had query-matching matches at some
+					// point, but then no longer, causing its messages to have been moved to
+					// oldThreadMessageItems. We add back those messages.
+					let i = 0;
+					while (i < oldThreadMessageItems.length) {
+						const omi = oldThreadMessageItems[i];
+						if (omi.Message.ThreadID === threadID) {
+							oldThreadMessageItems.splice(i, 1);
+							if (!mil.find(mi => mi.Message.ID === omi.Message.ID)) {
+								mil.push(omi);
+								log('resurrected old message');
+							}
+							else {
+								log('dropped old thread message');
+							}
+						}
+						else {
+							i++;
+						}
+					}
 				}
 				else {
-					mlv.root.insertBefore(miv.root, msgitemViews[nextmivindex].root);
-					msgitemViews.splice(nextmivindex, 0, miv);
+					// New message(s) are not matching query. If there are no "active" messages for
+					// this thread, update/add oldThreadMessageItems.
+					const match = (miv) => miv.messageitem.Message.ThreadID === threadID;
+					if (!msgitemViews.find(match) && !collapsedMsgitemViews.find(match)) {
+						log('adding new message(s) to oldTheadMessageItems');
+						for (const mi of mil) {
+							const ti = oldThreadMessageItems.findIndex(tmi => tmi.Message.ID === mi.Message.ID);
+							if (ti) {
+								oldThreadMessageItems[ti] = mi;
+							}
+							else {
+								oldThreadMessageItems.push(mi);
+							}
+						}
+						return;
+					}
+				}
+				if (isChange) {
+					// This could be an "add" for a message from another mailbox that we are already
+					// displaying because of threads. If so, it may have new properties such as the
+					// mailbox, so update it.
+					const threadIDs = new Set();
+					let i = 0;
+					while (i < mil.length) {
+						const mi = mil[i];
+						let miv = msgitemViews.find(miv => miv.messageitem.Message.ID === mi.Message.ID);
+						if (!miv) {
+							miv = collapsedMsgitemViews.find(miv => miv.messageitem.Message.ID === mi.Message.ID);
+						}
+						if (miv) {
+							miv.messageitem = mi;
+							miv.render();
+							mil.splice(i, 1);
+							miv.threadRoot().render();
+							threadIDs.add(mi.Message.ThreadID);
+						}
+						else {
+							i++;
+						}
+					}
+					log('processed changes for messages with thread', { threadIDs, mil });
+					if (mil.length === 0) {
+						const oldstate = state();
+						possiblyTakeoutOldThreads(threadIDs);
+						updateState(oldstate);
+						return;
+					}
+				}
+				// Find effective receive time for messages. We'll insert at that point.
+				let receivedTime = mil[0].Message.Received.getTime();
+				const tmiv = msgitemViews.find(miv => miv.messageitem.Message.ThreadID === mil[0].Message.ThreadID);
+				if (tmiv) {
+					receivedTime = tmiv.receivedTime;
+				}
+				else {
+					for (const mi of mil) {
+						const t = mi.Message.Received.getTime();
+						if (settings.orderAsc && t < receivedTime || !settings.orderAsc && t > receivedTime) {
+							receivedTime = t;
+						}
+					}
+				}
+				// Create new MsgitemViews.
+				const m = new Map();
+				for (const mi of mil) {
+					m.set(mi.Message.ID, newMsgitemView(mi, mlv, otherMailbox, listMailboxes, receivedTime, false));
+				}
+				// Assign miv's to parents or add them to the potential roots.
+				let roots = [];
+				if (settings.threading === api.ThreadMode.ThreadOff) {
+					roots = [...m.values()];
+				}
+				else {
+					nextmiv: for (const [_, miv] of m) {
+						for (const pid of (miv.messageitem.Message.ThreadParentIDs || [])) {
+							const pmiv = m.get(pid);
+							if (pmiv) {
+								pmiv.kids.push(miv);
+								miv.parent = pmiv;
+								continue nextmiv;
+							}
+						}
+						roots.push(miv);
+					}
+				}
+				// Ensure all kids are properly sorted, always ascending by time received.
+				for (const [_, miv] of m) {
+					miv.kids.sort((miva, mivb) => miva.messageitem.Message.Received.getTime() - mivb.messageitem.Message.Received.getTime());
+				}
+				// Add the potential roots as kids to existing parents, if they exist. Only with threading enabled.
+				if (settings.threading !== api.ThreadMode.ThreadOff) {
+					nextroot: for (let i = 0; i < roots.length;) {
+						const miv = roots[i];
+						for (const pid of (miv.messageitem.Message.ThreadParentIDs || [])) {
+							const pi = msgitemViews.findIndex(xmiv => xmiv.messageitem.Message.ID === pid);
+							let parentmiv;
+							let collapsed;
+							if (pi >= 0) {
+								parentmiv = msgitemViews[pi];
+								collapsed = parentmiv.collapsed;
+								log('found parent', { pi });
+							}
+							else {
+								parentmiv = collapsedMsgitemViews.find(xmiv => xmiv.messageitem.Message.ID === pid);
+								collapsed = true;
+							}
+							if (!parentmiv) {
+								log('no parentmiv', pid);
+								continue;
+							}
+							const trmiv = parentmiv.threadRoot();
+							if (collapsed !== trmiv.collapsed) {
+								log('collapsed mismatch', { collapsed: collapsed, 'trmiv.collapsed': trmiv.collapsed, trmiv: trmiv });
+								throw new ConsistencyError('mismatch between msgitemViews/collapsedMsgitemViews and threadroot collapsed');
+							}
+							let prevLastDesc = null;
+							if (!trmiv.collapsed) {
+								// Remove current parent, we'll insert again after linking parent/kids.
+								const ndesc = parentmiv.descendants().length;
+								log('removing descendants temporarily', { ndesc });
+								prevLastDesc = parentmiv.lastDescendant();
+								msgitemViews.splice(pi + 1, ndesc);
+							}
+							// Link parent & kid, sort kids.
+							miv.parent = parentmiv;
+							parentmiv.kids.push(miv);
+							parentmiv.kids.sort((miva, mivb) => miva.messageitem.Message.Received.getTime() - mivb.messageitem.Message.Received.getTime());
+							if (trmiv.collapsed) {
+								// Thread root is collapsed.
+								collapsedMsgitemViews.push(miv, ...miv.descendants());
+								// Ensure mivs have a root.
+								miv.render();
+								miv.descendants().forEach(miv => miv.render());
+								// Update count/unread status.
+								trmiv.render();
+							}
+							else {
+								const desc = parentmiv.descendants();
+								log('inserting parent descendants again', { pi, desc });
+								msgitemViews.splice(pi + 1, 0, ...desc); // We had removed the old tree, now adding the updated tree.
+								// Insert at correct position in dom.
+								const i = msgitemViews.indexOf(miv);
+								if (i < 0) {
+									throw new ConsistencyError('cannot find miv just inserted');
+								}
+								const l = [miv, ...miv.descendants()];
+								// Ensure mivs have valid root.
+								l.forEach(miv => miv.render());
+								const next = i + 1 < msgitemViews.length ? msgitemViews[i + 1].root : null;
+								log('inserting l before next, or appending', { next, l });
+								if (next) {
+									for (const miv of l) {
+										log('inserting miv', { root: miv.root, before: next });
+										mlv.root.insertBefore(miv.root, next);
+									}
+								}
+								else {
+									mlv.root.append(...l.map(e => e.root));
+								}
+								// For beginning/end of thread bar.
+								msgitemViews[i - 1].render();
+								if (prevLastDesc) {
+									prevLastDesc.render();
+								}
+							}
+							roots.splice(i, 1);
+							continue nextroot;
+						}
+						i++;
+					}
+				}
+				// Sort the remaining new roots by their receive times.
+				const sign = settings.threading === api.ThreadMode.ThreadOff && settings.orderAsc ? -1 : 1;
+				roots.sort((miva, mivb) => sign * (mivb.messageitem.Message.Received.getTime() - miva.messageitem.Message.Received.getTime()));
+				// Find place to insert, based on thread receive time.
+				let nextmivindex;
+				if (tmiv) {
+					nextmivindex = msgitemViews.indexOf(tmiv.threadRoot());
+				}
+				else {
+					nextmivindex = msgitemViews.findIndex(miv => !settings.orderAsc && miv.receivedTime <= receivedTime || settings.orderAsc && receivedTime <= miv.receivedTime);
+				}
+				for (const miv of roots) {
+					miv.collapsed = settings.threading === api.ThreadMode.ThreadOn && miv.messageitem.Message.ThreadCollapsed;
+					if (settings.threading === api.ThreadMode.ThreadUnread) {
+						miv.collapsed = miv.messageitem.Message.Seen && !miv.findDescendant(dmiv => !dmiv.messageitem.Message.Seen);
+					}
+					if (requestMsgID > 0 && miv.collapsed) {
+						miv.collapsed = !miv.findDescendant(dmiv => dmiv.messageitem.Message.ID === requestMsgID);
+					}
+					const takeThreadRoot = (xmiv) => {
+						log('taking threadRoot', { id: xmiv.messageitem.Message.ID });
+						// Remove subtree from dom.
+						const xdmiv = xmiv.descendants();
+						xdmiv.forEach(xdmiv => xdmiv.remove());
+						xmiv.remove();
+						// Link to new parent.
+						miv.kids.push(xmiv);
+						xmiv.parent = miv;
+						miv.kids.sort((miva, mivb) => miva.messageitem.Message.Received.getTime() - mivb.messageitem.Message.Received.getTime());
+						return 1 + xdmiv.length;
+					};
+					if (settings.threading !== api.ThreadMode.ThreadOff) {
+						// We may have to take out existing threadroots and place them under this new root.
+						// Because when we move a threadroot, we first remove it, then add it again.
+						for (let i = 0; i < msgitemViews.length;) {
+							const xmiv = msgitemViews[i];
+							if (!xmiv.parent && xmiv.messageitem.Message.ThreadID === miv.messageitem.Message.ThreadID && (xmiv.messageitem.Message.ThreadParentIDs || []).includes(miv.messageitem.Message.ID)) {
+								msgitemViews.splice(i, takeThreadRoot(xmiv));
+								nextmivindex = i;
+							}
+							else {
+								i++;
+							}
+						}
+						for (let i = 0; i < collapsedMsgitemViews.length;) {
+							const xmiv = collapsedMsgitemViews[i];
+							if (!xmiv.parent && xmiv.messageitem.Message.ThreadID === miv.messageitem.Message.ThreadID && (xmiv.messageitem.Message.ThreadParentIDs || []).includes(miv.messageitem.Message.ID)) {
+								takeThreadRoot(xmiv);
+								collapsedMsgitemViews.splice(i, 1);
+							}
+							else {
+								i++;
+							}
+						}
+					}
+					let l = miv.descendants();
+					miv.render();
+					l.forEach(kmiv => kmiv.render());
+					if (miv.collapsed) {
+						collapsedMsgitemViews.push(...l);
+						l = [miv];
+					}
+					else {
+						l = [miv, ...l];
+					}
+					if (nextmivindex < 0) {
+						mlv.root.append(...l.map(miv => miv.root));
+						msgitemViews.push(...l);
+					}
+					else {
+						const next = msgitemViews[nextmivindex].root;
+						for (const miv of l) {
+							mlv.root.insertBefore(miv.root, next);
+						}
+						msgitemViews.splice(nextmivindex, 0, ...l);
+					}
 				}
 			});
+			if (!isChange) {
+				return;
+			}
 			const oldstate = state();
 			if (!focus) {
 				focus = msgitemViews[0];
 			}
 			if (selected.length === 0) {
-				selected = [msgitemViews[0]];
+				if (focus) {
+					selected = [focus];
+				}
+				else if (msgitemViews.length > 0) {
+					selected = [msgitemViews[0]];
+				}
 			}
 			updateState(oldstate);
 		},
+		// Remove messages, they can be in different threads.
 		removeUIDs: (mailboxID, uids) => {
-			const uidmap = {};
-			uids.forEach(uid => uidmap['' + mailboxID + ',' + uid] = true); // todo: we would like messageID here.
-			const key = (miv) => '' + miv.messageitem.Message.MailboxID + ',' + miv.messageitem.Message.UID;
 			const oldstate = state();
-			selected = selected.filter(miv => !uidmap[key(miv)]);
-			if (focus && uidmap[key(focus)]) {
-				const index = msgitemViews.indexOf(focus);
-				var nextmiv;
-				for (let i = index + 1; i < msgitemViews.length; i++) {
-					if (!uidmap[key(msgitemViews[i])]) {
-						nextmiv = msgitemViews[i];
-						break;
-					}
+			const hadSelected = selected.length > 0;
+			const threadIDs = new Set();
+			uids.forEach(uid => {
+				const threadID = removeUID(mailboxID, uid);
+				log('removed message with thread', { threadID });
+				if (threadID) {
+					threadIDs.add(threadID);
 				}
-				if (!nextmiv) {
-					for (let i = index - 1; i >= 0; i--) {
-						if (!uidmap[key(msgitemViews[i])]) {
-							nextmiv = msgitemViews[i];
-							break;
-						}
-					}
-				}
-				if (nextmiv) {
-					focus = nextmiv;
-				}
-				else {
-					focus = null;
-				}
-			}
-			if (selected.length === 0 && focus) {
+			});
+			possiblyTakeoutOldThreads(threadIDs);
+			if (hadSelected && focus && selected.length === 0) {
 				selected = [focus];
 			}
 			updateState(oldstate);
-			let i = 0;
-			while (i < msgitemViews.length) {
-				const miv = msgitemViews[i];
-				const k = '' + miv.messageitem.Message.MailboxID + ',' + miv.messageitem.Message.UID;
-				if (!uidmap[k]) {
-					i++;
-					continue;
+		},
+		// Set new muted/collapsed flags for messages in thread.
+		updateMessageThreadFields: (messageIDs, muted, collapsed) => {
+			for (const id of messageIDs) {
+				let miv = msgitemViews.find(miv => miv.messageitem.Message.ID === id);
+				if (!miv) {
+					miv = collapsedMsgitemViews.find(miv => miv.messageitem.Message.ID === id);
 				}
-				miv.remove();
-				msgitemViews.splice(i, 1);
+				if (miv) {
+					miv.messageitem.Message.ThreadMuted = muted;
+					miv.messageitem.Message.ThreadCollapsed = collapsed;
+					const mivthr = miv.threadRoot();
+					if (mivthr.collapsed) {
+						mivthr.render();
+					}
+					else {
+						miv.render();
+					}
+				}
+				else {
+					const mi = oldThreadMessageItems.find(mi => mi.Message.ID === id);
+					if (mi) {
+						mi.Message.ThreadMuted = muted;
+						mi.Message.ThreadCollapsed = collapsed;
+					}
+				}
 			}
 		},
 		// For location hash.
@@ -2940,15 +4024,12 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 			miv.root.classList.toggle('focus', miv === focus);
 			miv.root.classList.toggle('active', selected.indexOf(miv) >= 0);
 		},
-		anchorMessageID: () => msgitemViews[msgitemViews.length - 1].messageitem.Message.ID,
-		addMsgitemViews: (mivs) => {
-			mlv.root.append(...mivs.map(v => v.root));
-			msgitemViews.push(...mivs);
-		},
 		clear: () => {
 			dom._kids(mlv.root);
 			msgitemViews.forEach(miv => miv.remove());
 			msgitemViews = [];
+			collapsedMsgitemViews = [];
+			oldThreadMessageItems = [];
 			focus = null;
 			selected = [];
 			dom._kids(msgElem);
@@ -2965,12 +4046,27 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 			selected = [miv];
 			updateState(oldstate);
 		},
-		selected: () => selected,
-		openMessage: (miv, initial, parsedMessageOpt) => {
+		selected: () => {
+			const l = [];
+			for (const miv of selected) {
+				l.push(miv);
+				if (miv.collapsed) {
+					l.push(...miv.descendants());
+				}
+			}
+			return l;
+		},
+		openMessage: (parsedMessage) => {
+			let miv = msgitemViews.find(miv => miv.messageitem.Message.ID === parsedMessage.ID);
+			if (!miv) {
+				// todo: could move focus to the nearest expanded message in this thread, if any?
+				return false;
+			}
 			const oldstate = state();
 			focus = miv;
 			selected = [miv];
-			updateState(oldstate, initial, parsedMessageOpt);
+			updateState(oldstate, true, parsedMessage);
+			return true;
 		},
 		click: (miv, ctrl, shift) => {
 			if (msgitemViews.length === 0) {
@@ -3036,6 +4132,9 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 				'k', 'K',
 				'Home', ',', '<',
 				'End', '.', '>',
+				'n', 'N',
+				'p', 'P',
+				'u', 'U',
 			];
 			if (!e.altKey && moveKeys.includes(e.key)) {
 				const moveclick = (index, clip) => {
@@ -3067,7 +4166,7 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 				else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'J') {
 					moveclick(i + 1, e.key === 'J');
 				}
-				else if (e.key === 'PageUp' || e.key === 'h' || e.key == 'H' || e.key === 'PageDown' || e.key === 'l' || e.key === 'L') {
+				else if (e.key === 'PageUp' || e.key === 'h' || e.key === 'H' || e.key === 'PageDown' || e.key === 'l' || e.key === 'L') {
 					if (msgitemViews.length > 0) {
 						let n = Math.max(1, Math.floor(scrollElemHeight() / mlv.itemHeight()) - 1);
 						if (e.key === 'PageUp' || e.key === 'h' || e.key === 'H') {
@@ -3081,6 +4180,42 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 				}
 				else if (e.key === 'End' || e.key === '.' || e.key === '>') {
 					moveclick(msgitemViews.length - 1, true);
+				}
+				else if (e.key === 'n' || e.key === 'N') {
+					if (i < 0) {
+						moveclick(0, true);
+					}
+					else {
+						const tid = msgitemViews[i].messageitem.Message.ThreadID;
+						for (; i < msgitemViews.length; i++) {
+							if (msgitemViews[i].messageitem.Message.ThreadID !== tid) {
+								moveclick(i, true);
+								break;
+							}
+						}
+					}
+				}
+				else if (e.key === 'p' || e.key === 'P') {
+					if (i < 0) {
+						moveclick(0, true);
+					}
+					else {
+						let thrmiv = msgitemViews[i].threadRoot();
+						if (thrmiv === msgitemViews[i]) {
+							if (i - 1 >= 0) {
+								thrmiv = msgitemViews[i - 1].threadRoot();
+							}
+						}
+						moveclick(msgitemViews.indexOf(thrmiv), true);
+					}
+				}
+				else if (e.key === 'u' || e.key === 'U') {
+					for (i = i < 0 ? 0 : i + 1; i < msgitemViews.length; i += 1) {
+						if (!msgitemViews[i].messageitem.Message.Seen || msgitemViews[i].collapsed && msgitemViews[i].findDescendant(miv => !miv.messageitem.Message.Seen)) {
+							moveclick(i, true);
+							break;
+						}
+					}
 				}
 				e.preventDefault();
 				e.stopPropagation();
@@ -3101,6 +4236,10 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 		},
 		mailboxes: () => listMailboxes(),
 		itemHeight: () => msgitemViews.length > 0 ? msgitemViews[0].root.getBoundingClientRect().height : 25,
+		threadExpand: (miv) => threadExpand(miv, true),
+		threadCollapse: (miv) => threadCollapse(miv, true),
+		threadToggle: threadToggle,
+		viewportEnsureMessages: viewportEnsureMessages,
 		cmdArchive: cmdArchive,
 		cmdTrash: cmdTrash,
 		cmdDelete: cmdDelete,
@@ -3108,10 +4247,12 @@ const newMsglistView = (msgElem, listMailboxes, setLocationHash, otherMailbox, p
 		cmdMarkNotJunk: cmdMarkNotJunk,
 		cmdMarkRead: cmdMarkRead,
 		cmdMarkUnread: cmdMarkUnread,
+		cmdMute: cmdMute,
+		cmdUnmute: cmdUnmute,
 	};
 	return mlv;
 };
-const newMailboxView = (xmb, mailboxlistView) => {
+const newMailboxView = (xmb, mailboxlistView, otherMailbox) => {
 	const plusbox = '⊞';
 	const minusbox = '⊟';
 	const cmdCollapse = async () => {
@@ -3202,6 +4343,16 @@ const newMailboxView = (xmb, mailboxlistView) => {
 		else if (e.key === 'b') {
 			cmdOpenActions();
 		}
+	}, async function dblclick() {
+		if (mailboxlistView.mailboxLeaf(mbv)) {
+			return;
+		}
+		if (settings.mailboxCollapsed[mbv.mailbox.ID]) {
+			cmdExpand();
+		}
+		else {
+			cmdCollapse();
+		}
 	}, async function click() {
 		mbv.root.focus();
 		await withStatus('Opening mailbox', mbv.open(true));
@@ -3221,7 +4372,12 @@ const newMailboxView = (xmb, mailboxlistView) => {
 	}, async function drop(e) {
 		e.preventDefault();
 		mbv.root.classList.toggle('dropping', false);
-		const msgIDs = JSON.parse(e.dataTransfer.getData('application/vnd.mox.messages'));
+		const sentMailboxID = mailboxlistView.mailboxes().find(mb => mb.Sent)?.ID;
+		const mailboxMsgIDs = JSON.parse(e.dataTransfer.getData('application/vnd.mox.messages'));
+		const msgIDs = mailboxMsgIDs
+			.filter(mbMsgID => mbMsgID[0] !== xmb.ID)
+			.filter(mbMsgID => mailboxMsgIDs.length === 1 || !sentMailboxID || mbMsgID[0] !== sentMailboxID || !otherMailbox(sentMailboxID))
+			.map(mbMsgID => mbMsgID[1]);
 		await withStatus('Moving to ' + xmb.Name, client.MessageMove(msgIDs, xmb.ID));
 	}, dom.div(dom._class('mailbox'), style({ display: 'flex', justifyContent: 'space-between' }), name = dom.div(style({ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' })), dom.div(style({ whiteSpace: 'nowrap' }), actionBtn = dom.clickbutton(dom._class('mailboxhoveronly'), '...', attr.tabindex('-1'), // Without, tab breaks because this disappears when mailbox loses focus.
 	attr.arialabel('Mailbox actions'), attr.title('Actions on mailbox, like deleting, emptying, renaming.'), function click(e) {
@@ -3281,7 +4437,7 @@ const newMailboxView = (xmb, mailboxlistView) => {
 	};
 	return mbv;
 };
-const newMailboxlistView = (msglistView, requestNewView, updatePageTitle, setLocationHash, unloadSearch) => {
+const newMailboxlistView = (msglistView, requestNewView, updatePageTitle, setLocationHash, unloadSearch, otherMailbox) => {
 	let mailboxViews = [];
 	let mailboxViewActive;
 	// Reorder mailboxes and assign new short names and indenting. Called after changing the list.
@@ -3311,6 +4467,15 @@ const newMailboxlistView = (msglistView, requestNewView, updatePageTitle, setLoc
 			}
 			else if (ai >= 0 && bi >= 0 && ai !== bi) {
 				return ai < bi ? -1 : 1;
+			}
+			const la = mbva.mailbox.Name.split('/');
+			const lb = mbvb.mailbox.Name.split('/');
+			let n = Math.min(la.length, lb.length);
+			for (let i = 0; i < n; i++) {
+				if (la[i] === lb[i]) {
+					continue;
+				}
+				return la[i] < lb[i] ? -1 : 1;
 			}
 			return mbva.mailbox.Name < mbvb.mailbox.Name ? -1 : 1;
 		});
@@ -3380,7 +4545,7 @@ const newMailboxlistView = (msglistView, requestNewView, updatePageTitle, setLoc
 		}, fieldset = dom.fieldset(dom.label('Name ', name = dom.input(attr.required('yes'), focusPlaceholder('Lists/Go/Nuts'))), ' ', dom.submitbutton('Create'))));
 	})), mailboxesElem));
 	const loadMailboxes = (mailboxes, mbnameOpt) => {
-		mailboxViews = mailboxes.map(mb => newMailboxView(mb, mblv));
+		mailboxViews = mailboxes.map(mb => newMailboxView(mb, mblv, otherMailbox));
 		updateMailboxNames();
 		if (mbnameOpt) {
 			const mbv = mailboxViews.find(mbv => mbv.mailbox.Name === mbnameOpt);
@@ -3442,7 +4607,7 @@ const newMailboxlistView = (msglistView, requestNewView, updatePageTitle, setLoc
 			}
 		},
 		addMailbox: (mb) => {
-			const mbv = newMailboxView(mb, mblv);
+			const mbv = newMailboxView(mb, mblv, otherMailbox);
 			mailboxViews.push(mbv);
 			updateMailboxNames();
 		},
@@ -3742,7 +4907,7 @@ const newSearchView = (searchbarElem, mailboxlistView, startSearch, searchViewCl
 	}, 
 	// This is a separate form, inside the form with the overall search field because
 	// when updating the form based on the parsed searchbar, we first need to reset it.
-	form = dom.form(dom.table(dom._class('search'), style({ width: '100%' }), dom.tr(dom.td(dom.label('Mailbox', attr.for('searchMailbox')), attr.title('Filter by mailbox, including children of the mailbox.')), dom.td(mailbox = dom.select(attr.id('searchMailbox'), style({ width: '100%' }), dom.option('All mailboxes except Trash/Junk/Rejects', attr.value('-1')), dom.option('All mailboxes', attr.value('0')), changeHandlers), dom.div(style({ paddingTop: '.5ex' }), dom.label(mailboxkids = dom.input(attr.type('checkbox'), changeHandlers), ' Also search in mailboxes below the selected mailbox.')))), dom.tr(dom.td(dom.label('Text', attr.for('searchWords'))), dom.td(words = dom.input(attr.id('searchWords'), attr.title('Filter by text, case-insensitive, substring match, not necessarily whole words.'), focusPlaceholder('word "exact match" -notword'), style({ width: '100%' }), changeHandlers))), dom.tr(dom.td(dom.label('From', attr.for('searchFrom'))), dom.td(from = dom.input(attr.id('searchFrom'), style({ width: '100%' }), focusPlaceholder('Address or name'), newAddressComplete(), changeHandlers))), dom.tr(dom.td(dom.label('To', attr.for('searchTo')), attr.title('Search on addressee, including Cc and Bcc headers.')), dom.td(to = dom.input(attr.id('searchTo'), focusPlaceholder('Address or name, also matches Cc and Bcc addresses'), style({ width: '100%' }), newAddressComplete(), changeHandlers))), dom.tr(dom.td(dom.label('Search', attr.for('searchSubject'))), dom.td(subject = dom.input(attr.id('searchSubject'), style({ width: '100%' }), focusPlaceholder('"exact match"'), changeHandlers))), dom.tr(dom.td('Received between', style({ whiteSpace: 'nowrap' })), dom.td(style({ lineHeight: 2 }), dom.div(oldestDate = dom.input(attr.type('date'), focusPlaceholder('2023-07-20'), changeHandlers), oldestTime = dom.input(attr.type('time'), focusPlaceholder('23:10'), changeHandlers), ' ', dom.clickbutton('x', style({ padding: '0 .3em' }), attr.arialabel('Clear start date.'), attr.title('Clear start date.'), function click() {
+	form = dom.form(dom.table(dom._class('search'), style({ width: '100%' }), dom.tr(dom.td(dom.label('Mailbox', attr.for('searchMailbox')), attr.title('Filter by mailbox, including children of the mailbox.')), dom.td(mailbox = dom.select(attr.id('searchMailbox'), style({ width: '100%' }), dom.option('All mailboxes except Trash/Junk/Rejects', attr.value('-1')), dom.option('All mailboxes', attr.value('0')), changeHandlers), dom.div(style({ paddingTop: '.5ex' }), dom.label(mailboxkids = dom.input(attr.type('checkbox'), changeHandlers), ' Also search in mailboxes below the selected mailbox.')))), dom.tr(dom.td(dom.label('Text', attr.for('searchWords'))), dom.td(words = dom.input(attr.id('searchWords'), attr.title('Filter by text, case-insensitive, substring match, not necessarily whole words.'), focusPlaceholder('word "exact match" -notword'), style({ width: '100%' }), changeHandlers))), dom.tr(dom.td(dom.label('From', attr.for('searchFrom'))), dom.td(from = dom.input(attr.id('searchFrom'), style({ width: '100%' }), focusPlaceholder('Address or name'), newAddressComplete(), changeHandlers))), dom.tr(dom.td(dom.label('To', attr.for('searchTo')), attr.title('Search on addressee, including Cc and Bcc headers.')), dom.td(to = dom.input(attr.id('searchTo'), focusPlaceholder('Address or name, also matches Cc and Bcc addresses'), style({ width: '100%' }), newAddressComplete(), changeHandlers))), dom.tr(dom.td(dom.label('Subject', attr.for('searchSubject'))), dom.td(subject = dom.input(attr.id('searchSubject'), style({ width: '100%' }), focusPlaceholder('"exact match"'), changeHandlers))), dom.tr(dom.td('Received between', style({ whiteSpace: 'nowrap' })), dom.td(style({ lineHeight: 2 }), dom.div(oldestDate = dom.input(attr.type('date'), focusPlaceholder('2023-07-20'), changeHandlers), oldestTime = dom.input(attr.type('time'), focusPlaceholder('23:10'), changeHandlers), ' ', dom.clickbutton('x', style({ padding: '0 .3em' }), attr.arialabel('Clear start date.'), attr.title('Clear start date.'), function click() {
 		oldestDate.value = '';
 		oldestTime.value = '';
 		updateSearchbar();
@@ -3823,6 +4988,7 @@ const init = async () => {
 	};
 	let requestSequence = 0; // Counter for assigning requestID.
 	let requestID = 0; // Current request, server will mirror it in SSE data. If we get data for a different id, we ignore it.
+	let requestAnchorMessageID = 0; // For pagination.
 	let requestViewEnd = false; // If true, there is no more data to fetch, no more page needed for this view.
 	let requestFilter = newFilter();
 	let requestNotFilter = newNotFilter();
@@ -3892,14 +5058,15 @@ const init = async () => {
 			requestFilter = filterOpt;
 			requestNotFilter = notFilterOpt || newNotFilter();
 		}
+		requestAnchorMessageID = 0;
 		requestViewEnd = false;
 		const bounds = msglistscrollElem.getBoundingClientRect();
-		await requestMessages(bounds, 0, requestMsgID);
+		await requestMessages(bounds, requestMsgID);
 	};
-	const requestMessages = async (scrollBounds, anchorMessageID, destMessageID) => {
+	const requestMessages = async (scrollBounds, destMessageID) => {
 		const fetchCount = Math.max(50, 3 * Math.ceil(scrollBounds.height / msglistView.itemHeight()));
 		const page = {
-			AnchorMessageID: anchorMessageID,
+			AnchorMessageID: requestAnchorMessageID,
 			Count: fetchCount,
 			DestMessageID: destMessageID,
 		};
@@ -3908,6 +5075,7 @@ const init = async () => {
 		const [f, notf] = refineFilters(requestFilter, requestNotFilter);
 		const query = {
 			OrderAsc: settings.orderAsc,
+			Threading: settings.threading,
 			Filter: f,
 			NotFilter: notf,
 		};
@@ -3949,10 +5117,20 @@ const init = async () => {
 		dom._kids(refineLabelBtn, 'Label: ' + kw);
 		await withStatus('Requesting messages', requestNewView(false));
 	};
+	const viewportEnsureMessages = async () => {
+		// We know how many entries we have, and how many screenfulls. So we know when we
+		// only have 2 screen fulls left. That's when we request the next data.
+		const bounds = msglistscrollElem.getBoundingClientRect();
+		if (msglistscrollElem.scrollTop < msglistscrollElem.scrollHeight - 3 * bounds.height) {
+			return;
+		}
+		// log('new request for scroll')
+		await withStatus('Requesting more messages', requestMessages(bounds, 0));
+	};
 	const otherMailbox = (mailboxID) => requestFilter.MailboxID !== mailboxID ? (mailboxlistView.findMailboxByID(mailboxID) || null) : null;
 	const listMailboxes = () => mailboxlistView.mailboxes();
-	const msglistView = newMsglistView(msgElem, listMailboxes, setLocationHash, otherMailbox, possibleLabels, () => msglistscrollElem ? msglistscrollElem.getBoundingClientRect().height : 0, refineKeyword);
-	const mailboxlistView = newMailboxlistView(msglistView, requestNewView, updatePageTitle, setLocationHash, unloadSearch);
+	const msglistView = newMsglistView(msgElem, listMailboxes, setLocationHash, otherMailbox, possibleLabels, () => msglistscrollElem ? msglistscrollElem.getBoundingClientRect().height : 0, refineKeyword, viewportEnsureMessages);
+	const mailboxlistView = newMailboxlistView(msglistView, requestNewView, updatePageTitle, setLocationHash, unloadSearch, otherMailbox);
 	let refineUnreadBtn, refineReadBtn, refineAttachmentsBtn, refineLabelBtn;
 	const refineToggleActive = (btn) => {
 		for (const e of [refineUnreadBtn, refineReadBtn, refineAttachmentsBtn, refineLabelBtn]) {
@@ -3962,6 +5140,7 @@ const init = async () => {
 			dom._kids(refineLabelBtn, 'Label');
 		}
 	};
+	let threadMode;
 	let msglistElem = dom.div(dom._class('msglist'), style({ position: 'absolute', left: '0', right: 0, top: 0, bottom: 0, display: 'flex', flexDirection: 'column' }), dom.div(attr.role('region'), attr.arialabel('Filter and sorting buttons for message list'), style({ display: 'flex', justifyContent: 'space-between', backgroundColor: '#f8f8f8', borderBottom: '1px solid #ccc', padding: '.25em .5em' }), dom.div(dom.h1('Refine:', style({ fontWeight: 'normal', fontSize: 'inherit', display: 'inline', margin: 0 }), attr.title('Refine message listing with quick filters. These refinement filters are in addition to any search criteria, but the refine attachment filter overrides a search attachment criteria.')), ' ', dom.span(dom._class('btngroup'), refineUnreadBtn = dom.clickbutton(settings.refine === 'unread' ? dom._class('active') : [], 'Unread', attr.title('Only show messages marked as unread.'), async function click(e) {
 		settingsPut({ ...settings, refine: 'unread' });
 		refineToggleActive(e.target);
@@ -3992,7 +5171,17 @@ const init = async () => {
 		settingsPut({ ...settings, refine: '' });
 		refineToggleActive(e.target);
 		await withStatus('Requesting messages', requestNewView(false));
-	})), dom.div(queryactivityElem = dom.span(), ' ', dom.clickbutton('↑↓', attr.title('Toggle sorting by date received.'), settings.orderAsc ? dom._class('invert') : [], async function click(e) {
+	})), dom.div(queryactivityElem = dom.span(), ' ', threadMode = dom.select(attr.arialabel('Thread modes.'), attr.title('Off: Threading disabled, messages are shown individually.\nOn: Group messages in threads, expanded by default except when (previously) manually collapsed.\nUnread: Only expand thread with unread messages, ignoring and not saving whether they were manually collapsed.'), dom.option('Threads: Off', attr.value(api.ThreadMode.ThreadOff), settings.threading === api.ThreadMode.ThreadOff ? attr.selected('') : []), dom.option('Threads: On', attr.value(api.ThreadMode.ThreadOn), settings.threading === api.ThreadMode.ThreadOn ? attr.selected('') : []), dom.option('Threads: Unread', attr.value(api.ThreadMode.ThreadUnread), settings.threading === api.ThreadMode.ThreadUnread ? attr.selected('') : []), async function change() {
+		let reset = settings.threading === api.ThreadMode.ThreadOff;
+		settingsPut({ ...settings, threading: threadMode.value });
+		reset = reset || settings.threading === api.ThreadMode.ThreadOff;
+		if (reset) {
+			await withStatus('Requesting messages', requestNewView(false));
+		}
+		else {
+			msglistView.threadToggle();
+		}
+	}), ' ', dom.clickbutton('↑↓', attr.title('Toggle sorting by date received.'), settings.orderAsc ? dom._class('invert') : [], async function click(e) {
 		settingsPut({ ...settings, orderAsc: !settings.orderAsc });
 		e.target.classList.toggle('invert', settings.orderAsc);
 		// We don't want to include the currently selected message because it could cause a
@@ -4026,15 +5215,7 @@ const init = async () => {
 		if (!sseID || requestViewEnd || requestID) {
 			return;
 		}
-		// We know how many entries we have, and how many screenfulls. So we know when we
-		// only have 2 screen fulls left. That's when we request the next data.
-		const bounds = msglistscrollElem.getBoundingClientRect();
-		if (msglistscrollElem.scrollTop < msglistscrollElem.scrollHeight - 3 * bounds.height) {
-			return;
-		}
-		// log('new request for scroll')
-		const reqAnchor = msglistView.anchorMessageID();
-		await withStatus('Requesting more messages', requestMessages(bounds, reqAnchor, 0));
+		await viewportEnsureMessages();
 	}, dom.div(style({ width: '100%', borderSpacing: '0' }), msglistView))));
 	let searchbarElem; // Input field for search
 	// Called by searchView when user executes the search.
@@ -4125,7 +5306,7 @@ const init = async () => {
 		'?': cmdHelp,
 		'ctrl ?': cmdTooltip,
 		c: cmdCompose,
-		M: cmdFocusMsg,
+		'ctrl m': cmdFocusMsg,
 	};
 	const webmailroot = dom.div(style({ display: 'flex', flexDirection: 'column', alignContent: 'stretch', height: '100dvh' }), dom.div(dom._class('topbar'), style({ display: 'flex' }), attr.role('region'), attr.arialabel('Top bar'), topcomposeboxElem = dom.div(dom._class('pad'), style({ width: settings.mailboxesWidth + 'px', textAlign: 'center' }), dom.clickbutton('Compose', attr.title('Compose new email message.'), function click() {
 		shortcutCmd(cmdCompose, shortcuts);
@@ -4299,7 +5480,7 @@ const init = async () => {
 	let lastflagswidth, lastagewidth;
 	let rulesInserted = false;
 	const updateMsglistWidths = () => {
-		const width = msglistscrollElem.clientWidth;
+		const width = msglistscrollElem.clientWidth - 2; // Borders.
 		lastmsglistwidth = width;
 		let flagswidth = settings.msglistflagsWidth;
 		let agewidth = settings.msglistageWidth;
@@ -4398,6 +5579,7 @@ const init = async () => {
 			}
 		}));
 	};
+	const capitalizeFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 	const connect = async (isreconnect) => {
 		connectionElem.classList.toggle('loading', true);
 		dom._kids(connectionElem);
@@ -4412,7 +5594,7 @@ const init = async () => {
 		catch (err) {
 			connecting = false;
 			noreconnect = true;
-			dom._kids(statusElem, (err.message || 'error fetching connection token') + ', not automatically retrying');
+			dom._kids(statusElem, (capitalizeFirst(err.message || 'Error fetching connection token')) + ', not automatically retrying. ');
 			showNotConnected();
 			return;
 		}
@@ -4427,6 +5609,7 @@ const init = async () => {
 		const fetchCount = Math.max(50, 3 * Math.ceil(msglistscrollElem.getBoundingClientRect().height / msglistView.itemHeight()));
 		const query = {
 			OrderAsc: settings.orderAsc,
+			Threading: settings.threading,
 			Filter: f,
 			NotFilter: notf,
 		};
@@ -4440,6 +5623,7 @@ const init = async () => {
 		// We get an implicit query for the automatically selected mailbox or query.
 		requestSequence++;
 		requestID = requestSequence;
+		requestAnchorMessageID = 0;
 		requestViewEnd = false;
 		clearList();
 		const request = {
@@ -4458,7 +5642,7 @@ const init = async () => {
 		}
 		catch (err) { }
 		eventSource = new window.EventSource('events?token=' + encodeURIComponent(token) + '&request=' + encodeURIComponent(JSON.stringify(request)) + slow);
-		let eventID = window.setTimeout(() => dom._kids(statusElem, 'Connecting...'), 1000);
+		let eventID = window.setTimeout(() => dom._kids(statusElem, 'Connecting... '), 1000);
 		eventSource.addEventListener('open', (e) => {
 			log('eventsource open', { e });
 			if (eventID) {
@@ -4487,7 +5671,7 @@ const init = async () => {
 			document.title = ['(not connected)', loginAddress ? (loginAddress.User + '@' + (loginAddress.Domain.Unicode || loginAddress.Domain.ASCII)) : '', 'Mox Webmail'].filter(s => s).join(' - ');
 			dom._kids(connectionElem);
 			if (noreconnect) {
-				dom._kids(statusElem, errmsg + ', not automatically retrying');
+				dom._kids(statusElem, capitalizeFirst(errmsg) + ', not automatically retrying. ');
 				showNotConnected();
 				listloadingElem.remove();
 				listendElem.remove();
@@ -4530,7 +5714,7 @@ const init = async () => {
 				if (formatEmailASCII(b) === loginAddr) {
 					return 1;
 				}
-				if (a.Domain.ASCII != b.Domain.ASCII) {
+				if (a.Domain.ASCII !== b.Domain.ASCII) {
 					return a.Domain.ASCII < b.Domain.ASCII ? -1 : 1;
 				}
 				return a.User < b.User ? -1 : 1;
@@ -4562,7 +5746,7 @@ const init = async () => {
 		eventSource.addEventListener('viewErr', async (e) => {
 			const viewErr = checkParse(() => api.parser.EventViewErr(JSON.parse(e.data)));
 			log('event viewErr', viewErr);
-			if (viewErr.ViewID != viewID || viewErr.RequestID !== requestID) {
+			if (viewErr.ViewID !== viewID || viewErr.RequestID !== requestID) {
 				log('received viewErr for other viewID or requestID', { expected: { viewID, requestID }, got: { viewID: viewErr.ViewID, requestID: viewErr.RequestID } });
 				return;
 			}
@@ -4578,7 +5762,7 @@ const init = async () => {
 		eventSource.addEventListener('viewReset', async (e) => {
 			const viewReset = checkParse(() => api.parser.EventViewReset(JSON.parse(e.data)));
 			log('event viewReset', viewReset);
-			if (viewReset.ViewID != viewID || viewReset.RequestID !== requestID) {
+			if (viewReset.ViewID !== viewID || viewReset.RequestID !== requestID) {
 				log('received viewReset for other viewID or requestID', { expected: { viewID, requestID }, got: { viewID: viewReset.ViewID, requestID: viewReset.RequestID } });
 				return;
 			}
@@ -4590,27 +5774,24 @@ const init = async () => {
 		eventSource.addEventListener('viewMsgs', async (e) => {
 			const viewMsgs = checkParse(() => api.parser.EventViewMsgs(JSON.parse(e.data)));
 			log('event viewMsgs', viewMsgs);
-			if (viewMsgs.ViewID != viewID || viewMsgs.RequestID !== requestID) {
+			if (viewMsgs.ViewID !== viewID || viewMsgs.RequestID !== requestID) {
 				log('received viewMsgs for other viewID or requestID', { expected: { viewID, requestID }, got: { viewID: viewMsgs.ViewID, requestID: viewMsgs.RequestID } });
 				return;
 			}
 			msglistView.root.classList.toggle('loading', false);
-			const extramsgitemViews = (viewMsgs.MessageItems || []).map(mi => {
-				const othermb = requestFilter.MailboxID !== mi.Message.MailboxID ? mailboxlistView.findMailboxByID(mi.Message.MailboxID) : undefined;
-				return newMsgitemView(mi, msglistView, othermb || null);
-			});
-			msglistView.addMsgitemViews(extramsgitemViews);
+			if (viewMsgs.MessageItems) {
+				msglistView.addMessageItems(viewMsgs.MessageItems || [], false, requestMsgID);
+			}
 			if (viewMsgs.ParsedMessage) {
-				const msgID = viewMsgs.ParsedMessage.ID;
-				const miv = extramsgitemViews.find(miv => miv.messageitem.Message.ID === msgID);
-				if (miv) {
-					msglistView.openMessage(miv, true, viewMsgs.ParsedMessage);
-				}
-				else {
+				const ok = msglistView.openMessage(viewMsgs.ParsedMessage);
+				if (!ok) {
 					// Should not happen, server would be sending a parsedmessage while not including the message itself.
 					requestMsgID = 0;
 					setLocationHash();
 				}
+			}
+			if (viewMsgs.MessageItems && viewMsgs.MessageItems.length > 0) {
+				requestAnchorMessageID = viewMsgs.MessageItems[viewMsgs.MessageItems.length - 1][0].Message.ID;
 			}
 			requestViewEnd = viewMsgs.ViewEnd;
 			if (requestViewEnd) {
@@ -4629,7 +5810,7 @@ const init = async () => {
 		eventSource.addEventListener('viewChanges', async (e) => {
 			const viewChanges = checkParse(() => api.parser.EventViewChanges(JSON.parse(e.data)));
 			log('event viewChanges', viewChanges);
-			if (viewChanges.ViewID != viewID) {
+			if (viewChanges.ViewID !== viewID) {
 				log('received viewChanges for other viewID', { expected: viewID, got: viewChanges.ViewID });
 				return;
 			}
@@ -4653,7 +5834,7 @@ const init = async () => {
 					}
 					else if (tag === 'ChangeMsgAdd') {
 						const c = api.parser.ChangeMsgAdd(x);
-						msglistView.addMessageItems([c.MessageItem]);
+						msglistView.addMessageItems([c.MessageItems || []], true, 0);
 					}
 					else if (tag === 'ChangeMsgRemove') {
 						const c = api.parser.ChangeMsgRemove(x);
@@ -4662,6 +5843,12 @@ const init = async () => {
 					else if (tag === 'ChangeMsgFlags') {
 						const c = api.parser.ChangeMsgFlags(x);
 						msglistView.updateFlags(c.MailboxID, c.UID, c.ModSeq, c.Mask, c.Flags, c.Keywords || []);
+					}
+					else if (tag === 'ChangeMsgThread') {
+						const c = api.parser.ChangeMsgThread(x);
+						if (c.MessageIDs) {
+							msglistView.updateMessageThreadFields(c.MessageIDs, c.Muted, c.Collapsed);
+						}
 					}
 					else if (tag === 'ChangeMailboxRemove') {
 						const c = api.parser.ChangeMailboxRemove(x);
@@ -4695,6 +5882,14 @@ window.addEventListener('load', async () => {
 		window.alert('Error: ' + errmsg(err));
 	}
 });
+// Keep original URL of page load, so we can remove it from stack trace if we need to.
+const origLocation = {
+	href: window.location.href,
+	protocol: window.location.protocol,
+	host: window.location.host,
+	pathname: window.location.pathname,
+	search: window.location.search,
+};
 // If a JS error happens, show a box in the lower left corner, with a button to
 // show details, in a popup. The popup shows the error message and a link to github
 // to create an issue. We want to lower the barrier to give feedback.
@@ -4705,9 +5900,10 @@ const showUnhandledError = (err, lineno, colno) => {
 	}
 	let stack = err.stack || '';
 	if (stack) {
-		// Firefox has stacks with full location.href including hash at the time of
-		// writing, Chromium has location.href without hash.
-		const loc = window.location;
+		log({ stack });
+		// At the time of writing, Firefox has stacks with full location.href of original
+		// page load including hash. Chromium has location.href without hash.
+		const loc = origLocation;
 		stack = '\n' + stack.replaceAll(loc.href, 'webmail.html').replaceAll(loc.protocol + '//' + loc.host + loc.pathname + loc.search, 'webmail.html');
 	}
 	else {
@@ -4749,7 +5945,7 @@ window.addEventListener('unhandledrejection', (e) => {
 		return;
 	}
 	const err = e.reason;
-	if (err instanceof EvalError || err instanceof RangeError || err instanceof ReferenceError || err instanceof SyntaxError || err instanceof TypeError || err instanceof URIError) {
+	if (err instanceof EvalError || err instanceof RangeError || err instanceof ReferenceError || err instanceof SyntaxError || err instanceof TypeError || err instanceof URIError || err instanceof ConsistencyError) {
 		showUnhandledError(err, 0, 0);
 	}
 	else {

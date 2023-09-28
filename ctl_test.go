@@ -61,7 +61,7 @@ func TestCtl(t *testing.T) {
 
 	// "setaccountpassword"
 	testctl(func(ctl *ctl) {
-		ctlcmdSetaccountpassword(ctl, "mjl@mox.example", "test4321")
+		ctlcmdSetaccountpassword(ctl, "mjl", "test4321")
 	})
 
 	err := queue.Init()
@@ -215,6 +215,14 @@ func TestCtl(t *testing.T) {
 	})
 	testctl(func(ctl *ctl) {
 		ctlcmdReparse(ctl, "")
+	})
+
+	// "reassignthreads"
+	testctl(func(ctl *ctl) {
+		ctlcmdReassignthreads(ctl, "mjl")
+	})
+	testctl(func(ctl *ctl) {
+		ctlcmdReassignthreads(ctl, "")
 	})
 
 	// "backup", backup account.

@@ -10,19 +10,24 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"golang.org/x/exp/maps"
+
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dkim"
+	"github.com/mjl-/mox/dmarc"
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/junk"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mtasts"
 	"github.com/mjl-/mox/smtp"
+	"github.com/mjl-/mox/tlsrpt"
 )
 
 // TXTStrings returns a TXT record value as one or more quoted strings, taking the max
@@ -450,18 +455,24 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		"; Once your setup is working, you may want to increase the TTL.",
 		"$TTL 300",
 		"",
+	}
 
-		"; For the machine, only needs to be created for the first domain added.",
-		fmt.Sprintf(`%-*s IN TXT "v=spf1 a -all"`, 20+len(d), h+"."), // ../rfc/7208:2263 ../rfc/7208:2287
-		"",
+	if d != h {
+		records = append(records,
+			"; For the machine, only needs to be created once, for the first domain added.",
+			fmt.Sprintf(`%-*s IN TXT "v=spf1 a -all"`, 20+len(d), h+"."), // ../rfc/7208:2263 ../rfc/7208:2287
+			"",
+		)
+	}
 
+	records = append(records,
 		"; Deliver email for the domain to this host.",
 		fmt.Sprintf("%s.                    MX 10 %s.", d, h),
 		"",
 
 		"; Outgoing messages will be signed with the first two DKIM keys. The other two",
 		"; configured for backup, switching to them is just a config change.",
-	}
+	)
 	var selectors []string
 	for name := range domConf.DKIM.Selectors {
 		selectors = append(selectors, name)
@@ -496,6 +507,17 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		records = append(records, s)
 
 	}
+	dmarcr := dmarc.DefaultRecord
+	dmarcr.Policy = "reject"
+	if domConf.DMARC != nil {
+		uri := url.URL{
+			Scheme: "mailto",
+			Opaque: smtp.NewAddress(domConf.DMARC.ParsedLocalpart, domConf.DMARC.DNSDomain).Pack(false),
+		}
+		dmarcr.AggregateReportAddresses = []dmarc.URI{
+			{Address: uri.String(), MaxSize: 10, Unit: "m"},
+		}
+	}
 	records = append(records,
 		"",
 
@@ -505,10 +527,11 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		fmt.Sprintf(`%s.                    IN TXT "v=spf1 mx ~all"`, d),
 		"",
 
-		"; Emails that fail the DMARC check (without DKIM and without SPF) should be rejected, and request reports.",
-		"; If you email through mailing lists that strip DKIM-Signature headers and don't",
-		"; rewrite the From header, you may want to set the policy to p=none.",
-		fmt.Sprintf(`_dmarc.%s.             IN TXT "v=DMARC1; p=reject; rua=mailto:dmarc-reports@%s!10m"`, d, d),
+		"; Emails that fail the DMARC check (without aligned DKIM and without aligned SPF)",
+		"; should be rejected, and request reports. If you email through mailing lists that",
+		"; strip DKIM-Signature headers and don't rewrite the From header, you may want to",
+		"; set the policy to p=none.",
+		fmt.Sprintf(`_dmarc.%s.             IN TXT "%s"`, d, dmarcr.String()),
 		"",
 	)
 
@@ -527,11 +550,20 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		)
 	}
 
-	records = append(records,
-		"; Request reporting about TLS failures.",
-		fmt.Sprintf(`_smtp._tls.%s.         IN TXT "v=TLSRPTv1; rua=mailto:tls-reports@%s"`, d, d),
-		"",
+	if domConf.TLSRPT != nil {
+		uri := url.URL{
+			Scheme: "mailto",
+			Opaque: smtp.NewAddress(domConf.TLSRPT.ParsedLocalpart, domConf.TLSRPT.DNSDomain).Pack(false),
+		}
+		tlsrptr := tlsrpt.Record{Version: "TLSRPTv1", RUAs: [][]string{{uri.String()}}}
+		records = append(records,
+			"; Request reporting about TLS failures.",
+			fmt.Sprintf(`_smtp._tls.%s.         IN TXT "%s"`, d, tlsrptr.String()),
+			"",
+		)
+	}
 
+	records = append(records,
 		"; Autoconfig is used by Thunderbird. Autodiscover is (in theory) used by Microsoft.",
 		fmt.Sprintf(`autoconfig.%s.         IN CNAME %s.`, d, h),
 		fmt.Sprintf(`_autodiscover._tcp.%s. IN SRV 0 1 443 autoconfig.%s.`, d, d),
@@ -560,8 +592,7 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 	return records, nil
 }
 
-// AccountAdd adds an account and an initial address and reloads the
-// configuration.
+// AccountAdd adds an account and an initial address and reloads the configuration.
 //
 // The new account does not have a password, so cannot yet log in. Email can be
 // delivered.
@@ -893,13 +924,96 @@ func AccountLimitsSave(ctx context.Context, account string, maxOutgoingMessagesP
 	return nil
 }
 
-// ClientConfig holds the client configuration for IMAP/Submission for a
-// domain.
-type ClientConfig struct {
-	Entries []ClientConfigEntry
+type TLSMode uint8
+
+const (
+	TLSModeImmediate TLSMode = 0
+	TLSModeSTARTTLS  TLSMode = 1
+	TLSModeNone      TLSMode = 2
+)
+
+type ProtocolConfig struct {
+	Host    dns.Domain
+	Port    int
+	TLSMode TLSMode
 }
 
-type ClientConfigEntry struct {
+type ClientConfig struct {
+	IMAP       ProtocolConfig
+	Submission ProtocolConfig
+}
+
+// ClientConfigDomain returns a single IMAP and Submission client configuration for
+// a domain.
+func ClientConfigDomain(d dns.Domain) (rconfig ClientConfig, rerr error) {
+	var haveIMAP, haveSubmission bool
+
+	if _, ok := Conf.Domain(d); !ok {
+		return ClientConfig{}, fmt.Errorf("unknown domain")
+	}
+
+	gather := func(l config.Listener) (done bool) {
+		host := Conf.Static.HostnameDomain
+		if l.Hostname != "" {
+			host = l.HostnameDomain
+		}
+		if !haveIMAP && l.IMAPS.Enabled {
+			rconfig.IMAP.Host = host
+			rconfig.IMAP.Port = config.Port(l.IMAPS.Port, 993)
+			rconfig.IMAP.TLSMode = TLSModeImmediate
+			haveIMAP = true
+		}
+		if !haveIMAP && l.IMAP.Enabled {
+			rconfig.IMAP.Host = host
+			rconfig.IMAP.Port = config.Port(l.IMAP.Port, 143)
+			rconfig.IMAP.TLSMode = TLSModeSTARTTLS
+			if l.TLS == nil {
+				rconfig.IMAP.TLSMode = TLSModeNone
+			}
+			haveIMAP = true
+		}
+		if !haveSubmission && l.Submissions.Enabled {
+			rconfig.Submission.Host = host
+			rconfig.Submission.Port = config.Port(l.Submissions.Port, 465)
+			rconfig.Submission.TLSMode = TLSModeImmediate
+			haveSubmission = true
+		}
+		if !haveSubmission && l.Submission.Enabled {
+			rconfig.Submission.Host = host
+			rconfig.Submission.Port = config.Port(l.Submission.Port, 587)
+			rconfig.Submission.TLSMode = TLSModeSTARTTLS
+			if l.TLS == nil {
+				rconfig.Submission.TLSMode = TLSModeNone
+			}
+			haveSubmission = true
+		}
+		return haveIMAP && haveSubmission
+	}
+
+	// Look at the public listener first. Most likely the intended configuration.
+	if public, ok := Conf.Static.Listeners["public"]; ok {
+		if gather(public) {
+			return
+		}
+	}
+	// Go through the other listeners in consistent order.
+	names := maps.Keys(Conf.Static.Listeners)
+	sort.Strings(names)
+	for _, name := range names {
+		if gather(Conf.Static.Listeners[name]) {
+			return
+		}
+	}
+	return ClientConfig{}, fmt.Errorf("no listeners found for imap and/or submission")
+}
+
+// ClientConfigs holds the client configuration for IMAP/Submission for a
+// domain.
+type ClientConfigs struct {
+	Entries []ClientConfigsEntry
+}
+
+type ClientConfigsEntry struct {
 	Protocol string
 	Host     dns.Domain
 	Port     int
@@ -907,16 +1021,16 @@ type ClientConfigEntry struct {
 	Note     string
 }
 
-// ClientConfigDomain returns the client config for IMAP/Submission for a
+// ClientConfigsDomain returns the client configs for IMAP/Submission for a
 // domain.
-func ClientConfigDomain(d dns.Domain) (ClientConfig, error) {
+func ClientConfigsDomain(d dns.Domain) (ClientConfigs, error) {
 	_, ok := Conf.Domain(d)
 	if !ok {
-		return ClientConfig{}, fmt.Errorf("unknown domain")
+		return ClientConfigs{}, fmt.Errorf("unknown domain")
 	}
 
-	c := ClientConfig{}
-	c.Entries = []ClientConfigEntry{}
+	c := ClientConfigs{}
+	c.Entries = []ClientConfigsEntry{}
 	var listeners []string
 
 	for name := range Conf.Static.Listeners {
@@ -943,23 +1057,24 @@ func ClientConfigDomain(d dns.Domain) (ClientConfig, error) {
 			host = l.HostnameDomain
 		}
 		if l.Submissions.Enabled {
-			c.Entries = append(c.Entries, ClientConfigEntry{"Submission (SMTP)", host, config.Port(l.Submissions.Port, 465), name, "with TLS"})
+			c.Entries = append(c.Entries, ClientConfigsEntry{"Submission (SMTP)", host, config.Port(l.Submissions.Port, 465), name, "with TLS"})
 		}
 		if l.IMAPS.Enabled {
-			c.Entries = append(c.Entries, ClientConfigEntry{"IMAP", host, config.Port(l.IMAPS.Port, 993), name, "with TLS"})
+			c.Entries = append(c.Entries, ClientConfigsEntry{"IMAP", host, config.Port(l.IMAPS.Port, 993), name, "with TLS"})
 		}
 		if l.Submission.Enabled {
-			c.Entries = append(c.Entries, ClientConfigEntry{"Submission (SMTP)", host, config.Port(l.Submission.Port, 587), name, note(l.TLS != nil, !l.Submission.NoRequireSTARTTLS)})
+			c.Entries = append(c.Entries, ClientConfigsEntry{"Submission (SMTP)", host, config.Port(l.Submission.Port, 587), name, note(l.TLS != nil, !l.Submission.NoRequireSTARTTLS)})
 		}
 		if l.IMAP.Enabled {
-			c.Entries = append(c.Entries, ClientConfigEntry{"IMAP", host, config.Port(l.IMAPS.Port, 143), name, note(l.TLS != nil, !l.IMAP.NoRequireSTARTTLS)})
+			c.Entries = append(c.Entries, ClientConfigsEntry{"IMAP", host, config.Port(l.IMAPS.Port, 143), name, note(l.TLS != nil, !l.IMAP.NoRequireSTARTTLS)})
 		}
 	}
 
 	return c, nil
 }
 
-// return IPs we may be listening/receiving mail on or connecting/sending from to the outside.
+// IPs returns ip addresses we may be listening/receiving mail on or
+// connecting/sending from to the outside.
 func IPs(ctx context.Context, receiveOnly bool) ([]net.IP, error) {
 	log := xlog.WithContext(ctx)
 
@@ -972,7 +1087,11 @@ func IPs(ctx context.Context, receiveOnly bool) ([]net.IP, error) {
 		if l.IPsNATed {
 			return nil, nil
 		}
-		for _, s := range l.IPs {
+		check := l.IPs
+		if len(l.NATIPs) > 0 {
+			check = l.NATIPs
+		}
+		for _, s := range check {
 			ip := net.ParseIP(s)
 			if ip.IsUnspecified() {
 				if ip.To4() != nil {

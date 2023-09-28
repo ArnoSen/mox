@@ -224,6 +224,7 @@ func (m *merged) serve(ctx context.Context, log *mlog.Log, w http.ResponseWriter
 	gz := acceptsGzip(r)
 	var out []byte
 	var mtime time.Time
+	var origSize int64
 
 	func() {
 		m.Lock()
@@ -265,13 +266,14 @@ func (m *merged) serve(ctx context.Context, log *mlog.Log, w http.ResponseWriter
 				xcheckf(ctx, err, "gzipping combined html")
 				m.combinedGzip = b.Bytes()
 			}
+			origSize = int64(len(out))
 			out = m.combinedGzip
 		}
 		mtime = m.mtime
 	}()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(gzipInjector{w, gz}, r, "", mtime, bytes.NewReader(out))
+	http.ServeContent(gzipInjector{w, gz, origSize}, r, "", mtime, bytes.NewReader(out))
 }
 
 // gzipInjector is a http.ResponseWriter that optionally injects a
@@ -283,6 +285,7 @@ func (m *merged) serve(ctx context.Context, log *mlog.Log, w http.ResponseWriter
 type gzipInjector struct {
 	http.ResponseWriter // Keep most methods.
 	gz                  bool
+	origSize            int64
 }
 
 // WriteHeader adds a Content-Encoding: gzip header before actually writing the
@@ -290,6 +293,9 @@ type gzipInjector struct {
 func (w gzipInjector) WriteHeader(statusCode int) {
 	if w.gz && statusCode == http.StatusOK {
 		w.ResponseWriter.Header().Set("Content-Encoding", "gzip")
+		if lw, ok := w.ResponseWriter.(interface{ SetUncompressedSize(int64) }); ok {
+			lw.SetUncompressedSize(w.origSize)
+		}
 	}
 	w.ResponseWriter.WriteHeader(statusCode)
 }
@@ -305,6 +311,7 @@ func serveContentFallback(log *mlog.Log, w http.ResponseWriter, r *http.Request,
 		st, err := f.Stat()
 		if err == nil {
 			http.ServeContent(w, r, "", st.ModTime(), f)
+			return
 		}
 	}
 	http.ServeContent(w, r, "", fallbackMtime(log), bytes.NewReader(fallback))
@@ -374,7 +381,7 @@ func handle(apiHandler http.Handler, w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			log.WithContext(ctx).Error("handle panic", mlog.Field("err", x))
 			debug.PrintStack()
-			metrics.PanicInc("webmail-handle")
+			metrics.PanicInc(metrics.Webmailhandle)
 			panic(x)
 		}
 		if strings.HasPrefix(err.Code, "user:") {
@@ -751,7 +758,7 @@ func handle(apiHandler http.Handler, w http.ResponseWriter, r *http.Request) {
 
 		m.MsgPrefix = nil
 		m.ParsedBuf = nil
-		mi := MessageItem{m, pm.envelope, pm.attachments, pm.isSigned, pm.isEncrypted, pm.firstLine}
+		mi := MessageItem{m, pm.envelope, pm.attachments, pm.isSigned, pm.isEncrypted, pm.firstLine, false}
 		mijson, err := json.Marshal(mi)
 		xcheckf(ctx, err, "marshal messageitem")
 

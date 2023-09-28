@@ -116,7 +116,49 @@ func analyze(ctx context.Context, log *mlog.Log, resolver dns.Resolver, d delive
 		log.Info("forwarded message, clearing identifying signals of forwarding mail server")
 	}
 
+	assignMailbox := func(tx *bstore.Tx) error {
+		// Set message MailboxID to which mail will be delivered. Reputation is
+		// per-mailbox. If referenced mailbox is not found (e.g. does not yet exist), we
+		// can still determine a reputation because we also base it on outgoing
+		// messages and those are account-global.
+		mb, err := d.acc.MailboxFind(tx, mailbox)
+		if err != nil {
+			return fmt.Errorf("finding destination mailbox: %w", err)
+		}
+		if mb != nil {
+			// We want to deliver to mb.ID, but this message may be rejected and sent to the
+			// Rejects mailbox instead, with MailboxID overwritten. Record the ID in
+			// MailboxDestinedID too. If the message is later moved out of the Rejects mailbox,
+			// we'll adjust the MailboxOrigID so it gets taken into account during reputation
+			// calculating in future deliveries. If we end up delivering to the intended
+			// mailbox (i.e. not rejecting), MailboxDestinedID is cleared during delivery so we
+			// don't store it unnecessarily.
+			d.m.MailboxID = mb.ID
+			d.m.MailboxDestinedID = mb.ID
+		} else {
+			log.Debug("mailbox not found in database", mlog.Field("mailbox", mailbox))
+		}
+		return nil
+	}
+
 	reject := func(code int, secode string, errmsg string, err error, reason string) analysis {
+		// We may have set MailboxDestinedID below already while we had a transaction. If
+		// not, do it now. This makes it possible to use the per-mailbox reputation when a
+		// user moves the message out of the Rejects mailbox to the intended mailbox
+		// (typically Inbox).
+		if d.m.MailboxDestinedID == 0 {
+			var mberr error
+			d.acc.WithRLock(func() {
+				mberr = d.acc.DB.Read(ctx, func(tx *bstore.Tx) error {
+					return assignMailbox(tx)
+				})
+			})
+			if mberr != nil {
+				return analysis{false, mailbox, smtp.C451LocalErr, smtp.SeSys3Other0, false, "error processing", err, nil, nil, reasonReputationError}
+			}
+			d.m.MailboxID = 0 // We plan to reject, no need to set intended MailboxID.
+		}
+
 		accept := false
 		if rs != nil && rs.AcceptRejectsToMailbox != "" {
 			accept = true
@@ -141,7 +183,7 @@ func analyze(ctx context.Context, log *mlog.Log, resolver dns.Resolver, d delive
 		// Messages with DMARC aggregate reports must have a dmarc pass. ../rfc/7489:1866
 		if d.dmarcResult.Status != dmarc.StatusPass {
 			log.Info("received dmarc report without dmarc pass, not processing as dmarc report")
-		} else if report, err := dmarcrpt.ParseMessageReport(store.FileMsgReader(d.m.MsgPrefix, d.dataFile)); err != nil {
+		} else if report, err := dmarcrpt.ParseMessageReport(log, store.FileMsgReader(d.m.MsgPrefix, d.dataFile)); err != nil {
 			log.Infox("parsing dmarc report", err)
 		} else if d, err := dns.ParseDomain(report.PolicyPublished.Domain); err != nil {
 			log.Infox("parsing domain in dmarc report", err)
@@ -173,7 +215,7 @@ func analyze(ctx context.Context, log *mlog.Log, resolver dns.Resolver, d delive
 
 		if !ok {
 			log.Info("received mail to tlsrpt without acceptable DKIM signature, not processing as tls report")
-		} else if report, err := tlsrpt.ParseMessage(store.FileMsgReader(d.m.MsgPrefix, d.dataFile)); err != nil {
+		} else if report, err := tlsrpt.ParseMessage(log, store.FileMsgReader(d.m.MsgPrefix, d.dataFile)); err != nil {
 			log.Infox("parsing tls report", err)
 		} else {
 			var known bool
@@ -203,26 +245,8 @@ func analyze(ctx context.Context, log *mlog.Log, resolver dns.Resolver, d delive
 	var err error
 	d.acc.WithRLock(func() {
 		err = d.acc.DB.Read(ctx, func(tx *bstore.Tx) error {
-			// Set message MailboxID to which mail will be delivered. Reputation is
-			// per-mailbox. If referenced mailbox is not found (e.g. does not yet exist), we
-			// can still determine a reputation because we also base it on outgoing
-			// messages and those are account-global.
-			mb, err := d.acc.MailboxFind(tx, mailbox)
-			if err != nil {
-				return fmt.Errorf("finding destination mailbox: %w", err)
-			}
-			if mb != nil {
-				// We want to deliver to mb.ID, but this message may be rejected and sent to the
-				// Rejects mailbox instead, with MailboxID overwritten. Record the ID in
-				// MailboxDestinedID too. If the message is later moved out of the Rejects mailbox,
-				// we'll adjust the MailboxOrigID so it gets taken into account during reputation
-				// calculating in future deliveries. If we end up delivering to the intended
-				// mailbox (i.e. not rejecting), MailboxDestinedID is cleared during delivery so we
-				// don't store it unnecessarily.
-				d.m.MailboxID = mb.ID
-				d.m.MailboxDestinedID = mb.ID
-			} else {
-				log.Debug("mailbox not found in database", mlog.Field("mailbox", mailbox))
+			if err := assignMailbox(tx); err != nil {
+				return err
 			}
 
 			isjunk, conclusive, method, err = reputation(tx, log, d.m)
@@ -274,7 +298,7 @@ func analyze(ctx context.Context, log *mlog.Log, resolver dns.Resolver, d delive
 			log.Errorx("get key for verifying subject token", err)
 			return reject(smtp.C451LocalErr, smtp.SeSys3Other0, "error processing", err, reasonSubjectpassError)
 		}
-		err = subjectpass.Verify(d.dataFile, []byte(subjectpassKey), conf.SubjectPass.Period)
+		err = subjectpass.Verify(log, d.dataFile, []byte(subjectpassKey), conf.SubjectPass.Period)
 		pass := err == nil
 		log.Infox("pass by subject token", err, mlog.Field("pass", pass))
 		if pass {

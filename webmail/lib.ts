@@ -242,9 +242,14 @@ const addLinks = (text: string): (HTMLAnchorElement | string)[] => {
 		r.push(s)
 		// If URL ends with interpunction, and next character is whitespace or end, don't
 		// include the interpunction in the URL.
-		if (/[!),.:;>?]$/.test(url) && (!text || /^[ \t\r\n]/.test(text))) {
-			text = url.substring(url.length-1)+text
-			url = url.substring(0, url.length-1)
+		if (!text || /^[ \t\r\n]/.test(text)) {
+			if (/[)>][!,.:;?]$/.test(url)) {
+				text = url.substring(url.length-2)+text
+				url = url.substring(0, url.length-2)
+			} else if (/[)>!,.:;?]$/.test(url)) {
+				text = url.substring(url.length-1)+text
+				url = url.substring(0, url.length-1)
+			}
 		}
 		r.push(dom.a(url, attr.href(url), attr.target('_blank'), attr.rel('noopener noreferrer')))
 	}
@@ -327,7 +332,7 @@ const equalAddress = (a: api.MessageAddress, b: api.MessageAddress) => {
 // loadMsgheaderView loads the common message headers into msgheaderelem.
 // if refineKeyword is set, labels are shown and a click causes a call to
 // refineKeyword.
-const loadMsgheaderView = (msgheaderelem: HTMLElement, mi: api.MessageItem, refineKeyword: null | ((kw: string) => Promise<void>)) => {
+const loadMsgheaderView = (msgheaderelem: HTMLElement, mi: api.MessageItem, moreHeaders: string[], refineKeyword: null | ((kw: string) => Promise<void>)) => {
 	const msgenv = mi.Envelope
 	const received = mi.Message.Received
 	const receivedlocal = new Date(received.getTime() - received.getTimezoneOffset()*60*1000)
@@ -378,6 +383,12 @@ const loadMsgheaderView = (msgheaderelem: HTMLElement, mi: api.MessageItem, refi
 					),
 				)
 			),
+		),
+		moreHeaders.map(k =>
+			dom.tr(
+				dom.td(k+':', style({textAlign: 'right', color: '#555', whiteSpace: 'nowrap'})),
+				dom.td(),
+			)
 		),
 	)
 }

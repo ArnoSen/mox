@@ -26,7 +26,7 @@ func messageItem(log *mlog.Log, m store.Message, state *msgState) (MessageItem, 
 	// Clear largish unused data.
 	m.MsgPrefix = nil
 	m.ParsedBuf = nil
-	return MessageItem{m, pm.envelope, pm.attachments, pm.isSigned, pm.isEncrypted, pm.firstLine}, nil
+	return MessageItem{m, pm.envelope, pm.attachments, pm.isSigned, pm.isEncrypted, pm.firstLine, true}, nil
 }
 
 // formatFirstLine returns a line the client can display next to the subject line
@@ -45,7 +45,7 @@ func formatFirstLine(r io.Reader) (string, error) {
 	ensureLines()
 
 	isSnipped := func(s string) bool {
-		return s == "[...]" || s == "..."
+		return s == "[...]" || s == "[…]" || s == "..."
 	}
 
 	nextLineQuoted := func(i int) bool {
@@ -55,7 +55,8 @@ func formatFirstLine(r io.Reader) (string, error) {
 		return i+1 < len(lines) && (strings.HasPrefix(lines[i+1], ">") || isSnipped(lines[i+1]))
 	}
 
-	// remainder is signature if we see a line with only and minimum 2 dashes, and there are no more empty lines, and there aren't more than 5 lines left
+	// Remainder is signature if we see a line with only and minimum 2 dashes, and
+	// there are no more empty lines, and there aren't more than 5 lines left.
 	isSignature := func() bool {
 		if len(lines) == 0 || !strings.HasPrefix(lines[0], "--") || strings.Trim(strings.TrimSpace(lines[0]), "-") != "" {
 			return false
@@ -77,6 +78,10 @@ func formatFirstLine(r io.Reader) (string, error) {
 
 	result := ""
 
+	resultSnipped := func() bool {
+		return strings.HasSuffix(result, "[...]\n") || strings.HasSuffix(result, "[…]")
+	}
+
 	// Quick check for initial wrapped "On ... wrote:" line.
 	if len(lines) > 3 && strings.HasPrefix(lines[0], "On ") && !strings.HasSuffix(lines[0], "wrote:") && strings.HasSuffix(lines[1], ":") && nextLineQuoted(1) {
 		result = "[...]\n"
@@ -87,7 +92,7 @@ func formatFirstLine(r io.Reader) (string, error) {
 	for ; len(lines) > 0 && !isSignature(); ensureLines() {
 		line := lines[0]
 		if strings.HasPrefix(line, ">") {
-			if !strings.HasSuffix(result, "[...]\n") {
+			if !resultSnipped() {
 				result += "[...]\n"
 			}
 			lines = lines[1:]
@@ -101,14 +106,14 @@ func formatFirstLine(r io.Reader) (string, error) {
 		// line, with an optional empty line in between. If we don't have any text yet, we
 		// don't require the digits.
 		if strings.HasSuffix(line, ":") && (strings.ContainsAny(line, "0123456789") || result == "") && nextLineQuoted(0) {
-			if !strings.HasSuffix(result, "[...]\n") {
+			if !resultSnipped() {
 				result += "[...]\n"
 			}
 			lines = lines[1:]
 			continue
 		}
-		// Skip snipping by author.
-		if !(isSnipped(line) && strings.HasSuffix(result, "[...]\n")) {
+		// Skip possibly duplicate snipping by author.
+		if !isSnipped(line) || !resultSnipped() {
 			result += line + "\n"
 		}
 		lines = lines[1:]
@@ -207,13 +212,12 @@ func parsedMessage(log *mlog.Log, m store.Message, state *msgState, full, msgite
 					disp, params, err := mime.ParseMediaType(cp)
 					log.Check(err, "parsing content-disposition", mlog.Field("cp", cp))
 					if strings.EqualFold(disp, "attachment") {
-						if full {
-							name := p.ContentTypeParams["name"]
-							if name == "" {
-								name = params["filename"]
-							}
-							pm.attachments = append(pm.attachments, Attachment{path, name, p})
+						// todo: should we be decoding these names? i've seen messages with regular q-word style mime-encoding, not the one specified in ../rfc/2231:210
+						name := p.ContentTypeParams["name"]
+						if name == "" {
+							name = params["filename"]
 						}
+						pm.attachments = append(pm.attachments, Attachment{path, name, p})
 						return
 					}
 				}
@@ -318,12 +322,12 @@ func parseListPostAddress(s string) *MessageAddress {
 	if !strings.HasPrefix(s, "<mailto:") {
 		return nil
 	}
-	s = strings.TrimPrefix(s, "<mailto:")
-	t := strings.SplitN(s, ">", 2)
-	if len(t) != 2 {
+	s = s[1:]
+	s, _, found := strings.Cut(s, ">")
+	if !found {
 		return nil
 	}
-	u, err := url.Parse(t[0])
+	u, err := url.Parse(s)
 	if err != nil {
 		return nil
 	}

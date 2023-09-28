@@ -13,7 +13,7 @@ h1 { font-size: 1.2rem; }
 h2 { font-size: 1.1rem; }
 h3, h4 { font-size: 1rem; }
 ul { padding-left: 1rem; }
-.literal { background-color: #fdfdfd; padding: .5em 1em; border: 1px solid #eee; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 15px; tab-size: 4; }
+.literal { background-color: #eee; padding: .5em 1em; border: 1px solid #eee; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 15px; tab-size: 4; }
 table td, table th { padding: .2em .5em; }
 table > tbody > tr:nth-child(odd) { background-color: #f8f8f8; }
 .text { max-width: 50em; }
@@ -234,6 +234,11 @@ const index = async () => {
 					)
 				}
 				problems.appendChild(dom.div(box(yellow, data.Message)))
+			})
+			eventSource.addEventListener('step', (e) => {
+				const data = JSON.parse(e.data) // {Title: ...}
+				console.log('import step event', {e, data})
+				importProgress.appendChild(dom.div(dom.br(), box(blue, 'Step: '+data.Title)))
 			})
 			eventSource.addEventListener('done', (e) => {
 				console.log('import done event', {e})
@@ -475,7 +480,7 @@ const index = async () => {
 				),
 				dom.div(
 					dom.button('Upload and import'),
-					dom.p(style({fontStyle: 'italic', marginTop: '.5ex'}), 'The file is uploaded first, then its messages are imported. Importing is done in a transaction, you can abort the entire import before it is finished.'),
+					dom.p(style({fontStyle: 'italic', marginTop: '.5ex'}), 'The file is uploaded first, then its messages are imported, finally messages are matched for threading. Importing is done in a transaction, you can abort the entire import before it is finished.'),
 				),
 			),
 		),
@@ -596,6 +601,8 @@ const destination = async (name) => {
 	let fullName
 	let saveButton
 
+	const addresses = [name, ...Object.keys(destinations).filter(a => !a.startsWith('@') && a !== name)]
+
 	const page = document.getElementById('page')
 	dom._kids(page,
 		crumbs(
@@ -665,16 +672,25 @@ const destination = async (name) => {
 				}
 				page.classList.add('loading')
 				await api.DestinationSave(name, dest, newDest)
-				dest = newDest // Set new dest, for if user edits again. Without this, they would get an error that the config has been modified.
+				window.location.reload() // todo: only refresh part of ui
 			} catch (err) {
 				console.log({err})
 				window.alert('Error: '+err.message)
+				page.classList.remove('loading')
 				return
 			} finally {
 				saveButton.disabled = false
-				page.classList.remove('loading')
 			}
 		}),
+		dom.br(),
+		dom.br(),
+		dom.br(),
+		dom.p("Apple's mail applications don't do account autoconfiguration, and when adding an account it can choose defaults that don't work with modern email servers. Adding an account through a \"mobileconfig\" profile file can be more convenient: It contains the IMAP/SMTP settings such as host name, port, TLS, authentication mechanism and user name. This profile does not contain a login password. Opening the profile adds it under Profiles in System Preferences (macOS) or Settings (iOS), where you can install it. These profiles are not signed, so users will have to ignore the warnings about them being unsigned. ",
+			dom.br(),
+			dom.a(attr({href: 'https://autoconfig.'+domainName(domain)+'/profile.mobileconfig?addresses='+encodeURIComponent(addresses.join(','))+'&name='+encodeURIComponent(dest.FullName), download: ''}), 'Download .mobileconfig email account profile'),
+			dom.br(),
+			dom.a(attr({href: 'https://autoconfig.'+domainName(domain)+'/profile.mobileconfig.qrcode.png?addresses='+encodeURIComponent(addresses.join(','))+'&name='+encodeURIComponent(dest.FullName), download: ''}), 'Open QR-code with link to .mobileconfig profile'),
+		),
 	)
 }
 

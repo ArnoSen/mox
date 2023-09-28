@@ -272,7 +272,15 @@ func (c *Config) allowACMEHosts(checkACMEHosts bool) {
 			}
 		}
 
-		m.SetAllowedHostnames(dns.StrictResolver{Pkg: "autotls"}, hostnames, c.Static.Listeners["public"].IPs, checkACMEHosts)
+		public := c.Static.Listeners["public"]
+		ips := public.IPs
+		if len(public.NATIPs) > 0 {
+			ips = public.NATIPs
+		}
+		if public.IPsNATed {
+			ips = nil
+		}
+		m.SetAllowedHostnames(dns.StrictResolver{Pkg: "autotls"}, hostnames, ips, checkACMEHosts)
 	}
 }
 
@@ -628,6 +636,17 @@ func PrepareStaticConfig(ctx context.Context, configFile string, conf *Config, c
 				continue
 			}
 			l.SMTP.DNSBLZones = append(l.SMTP.DNSBLZones, d)
+		}
+		if l.IPsNATed && len(l.NATIPs) > 0 {
+			addErrorf("listener %q has both IPsNATed and NATIPs (remove deprecated IPsNATed)", name)
+		}
+		for _, ipstr := range l.NATIPs {
+			ip := net.ParseIP(ipstr)
+			if ip == nil {
+				addErrorf("listener %q has invalid ip %q", name, ipstr)
+			} else if ip.IsUnspecified() || ip.IsLoopback() {
+				addErrorf("listener %q has NAT ip that is the unspecified or loopback address %s", name, ipstr)
+			}
 		}
 		checkPath := func(kind string, enabled bool, path string) {
 			if enabled && path != "" && !strings.HasPrefix(path, "/") {
@@ -1195,9 +1214,20 @@ func prepareDynamicConfig(ctx context.Context, dynamicPath string, static config
 			// ../rfc/8616:234
 			addErrorf("DMARC localpart %q is an internationalized address, only conventional ascii-only address possible for interopability", lp)
 		}
+		addrdom := domain.Domain
+		if dmarc.Domain != "" {
+			addrdom, err = dns.ParseDomain(dmarc.Domain)
+			if err != nil {
+				addErrorf("DMARC domain %q: %s", dmarc.Domain, err)
+			} else if _, ok := c.Domains[addrdom.Name()]; !ok {
+				addErrorf("unknown domain %q for DMARC address in domain %q", dmarc.Domain, d)
+			}
+		}
+
 		domain.DMARC.ParsedLocalpart = lp
+		domain.DMARC.DNSDomain = addrdom
 		c.Domains[d] = domain
-		addrFull := smtp.NewAddress(lp, domain.Domain).String()
+		addrFull := smtp.NewAddress(lp, addrdom).String()
 		dest := config.Destination{
 			Mailbox:      dmarc.Mailbox,
 			DMARCReports: true,
@@ -1224,9 +1254,20 @@ func prepareDynamicConfig(ctx context.Context, dynamicPath string, static config
 			// to keep this ascii-only addresses.
 			addErrorf("TLSRPT localpart %q is an internationalized address, only conventional ascii-only address allowed for interopability", lp)
 		}
+		addrdom := domain.Domain
+		if tlsrpt.Domain != "" {
+			addrdom, err = dns.ParseDomain(tlsrpt.Domain)
+			if err != nil {
+				addErrorf("TLSRPT domain %q: %s", tlsrpt.Domain, err)
+			} else if _, ok := c.Domains[addrdom.Name()]; !ok {
+				addErrorf("unknown domain %q for TLSRPT address in domain %q", tlsrpt.Domain, d)
+			}
+		}
+
 		domain.TLSRPT.ParsedLocalpart = lp
+		domain.TLSRPT.DNSDomain = addrdom
 		c.Domains[d] = domain
-		addrFull := smtp.NewAddress(lp, domain.Domain).String()
+		addrFull := smtp.NewAddress(lp, addrdom).String()
 		dest := config.Destination{
 			Mailbox:    tlsrpt.Mailbox,
 			TLSReports: true,

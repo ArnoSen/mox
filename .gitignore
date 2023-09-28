@@ -31,3 +31,5 @@
 /cover.html
 /.go/
 /node_modules/
+/upgrade*-verifydata.*.pprof
+/upgrade*-openaccounts.*.pprof

@@ -26,6 +26,7 @@ import (
 	"github.com/mjl-/bstore"
 
 	"github.com/mjl-/mox/message"
+	"github.com/mjl-/mox/metrics"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/store"
@@ -68,6 +69,7 @@ func ImportManage() {
 		if x := recover(); x != nil {
 			log.Error("import manage panic", mlog.Field("err", x))
 			debug.PrintStack()
+			metrics.PanicInc(metrics.Importmanage)
 		}
 	}()
 
@@ -191,6 +193,9 @@ type importProblem struct {
 }
 type importDone struct{}
 type importAborted struct{}
+type importStep struct {
+	Title string
+}
 
 // importStart prepare the import and launches the goroutine to actually import.
 // importStart is responsible for closing f.
@@ -282,12 +287,6 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 	// ID's of delivered messages. If we have to rollback, we have to remove this files.
 	var deliveredIDs []int64
 
-	ximportcheckf := func(err error, format string, args ...any) {
-		if err != nil {
-			panic(importError{fmt.Errorf("%s: %s", fmt.Sprintf(format, args...), err)})
-		}
-	}
-
 	sendEvent := func(kind string, v any) {
 		buf, err := json.Marshal(v)
 		if err != nil {
@@ -298,11 +297,6 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		importers.Events <- importEvent{token, []byte(ssemsg), v, nil}
 	}
 
-	problemf := func(format string, args ...any) {
-		msg := fmt.Sprintf(format, args...)
-		sendEvent("problem", importProblem{Message: msg})
-	}
-
 	canceled := func() bool {
 		select {
 		case <-ctx.Done():
@@ -311,6 +305,11 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		default:
 			return false
 		}
+	}
+
+	problemf := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		sendEvent("problem", importProblem{Message: msg})
 	}
 
 	defer func() {
@@ -343,8 +342,18 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		} else {
 			log.Error("import panic", mlog.Field("err", x))
 			debug.PrintStack()
+			metrics.PanicInc(metrics.Importmessages)
 		}
 	}()
+
+	ximportcheckf := func(err error, format string, args ...any) {
+		if err != nil {
+			panic(importError{fmt.Errorf("%s: %s", fmt.Sprintf(format, args...), err)})
+		}
+	}
+
+	err := acc.ThreadingWait(log)
+	ximportcheckf(err, "waiting for account thread upgrade")
 
 	conf, _ := acc.Conf()
 
@@ -505,12 +514,17 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		}
 
 		// Parse message and store parsed information for later fast retrieval.
-		p, err := message.EnsurePart(f, m.Size)
+		p, err := message.EnsurePart(log, false, f, m.Size)
 		if err != nil {
 			problemf("parsing message %s: %s (continuing)", pos, err)
 		}
 		m.ParsedBuf, err = json.Marshal(p)
 		ximportcheckf(err, "marshal parsed message structure")
+
+		// Set fields needed for future threading. By doing it now, DeliverMessage won't
+		// have to parse the Part again.
+		p.SetReaderAt(store.FileMsgReader(m.MsgPrefix, f))
+		m.PrepareThreading(log, &p)
 
 		if m.Received.IsZero() {
 			if p.Envelope != nil && !p.Envelope.Date.IsZero() {
@@ -523,7 +537,7 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		// We set the flags that Deliver would set now and train ourselves. This prevents
 		// Deliver from training, which would open the junk filter, change it, and write it
 		// back to disk, for each message (slow).
-		m.JunkFlagsForMailbox(mb.Name, conf)
+		m.JunkFlagsForMailbox(mb, conf)
 		if jf != nil && m.NeedsTraining() {
 			trainMessage(m, p, pos)
 		}
@@ -531,7 +545,8 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		const consumeFile = true
 		const sync = false
 		const notrain = true
-		if err := acc.DeliverMessage(log, tx, m, f, consumeFile, sync, notrain); err != nil {
+		const nothreads = true
+		if err := acc.DeliverMessage(log, tx, m, f, consumeFile, sync, notrain, nothreads); err != nil {
 			problemf("delivering message %s: %s (continuing)", pos, err)
 			return
 		}
@@ -794,11 +809,18 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 	for _, count := range messages {
 		total += count
 	}
-	log.Debug("message imported", mlog.Field("total", total))
+	log.Debug("messages imported", mlog.Field("total", total))
 
 	// Send final update for count of last-imported mailbox.
 	if prevMailbox != "" {
 		sendEvent("count", importCount{prevMailbox, messages[prevMailbox]})
+	}
+
+	// Match threads.
+	if len(deliveredIDs) > 0 {
+		sendEvent("step", importStep{"matching messages with threads"})
+		err = acc.AssignThreads(ctx, log, tx, deliveredIDs[0], 0, io.Discard)
+		ximportcheckf(err, "assigning messages to threads")
 	}
 
 	// Update mailboxes with counts and keywords.

@@ -22,6 +22,7 @@ cd testdata/upgrade
 # Check that we can upgrade what we currently generate.
 ../../mox gentestdata data
 ../../mox verifydata data
+../../mox openaccounts data test0 test1 test2
 rm -r data
 echo
 
@@ -38,11 +39,31 @@ for tag in $tagsrev; do
 	(CGO_ENABLED=0 GOBIN=$PWD/$tag go install github.com/mjl-/mox@$tag)
 	# Generate with historic release.
 	./$tag/mox gentestdata $tag/data
-	# Verify with current code.
-	../../mox verifydata $tag/data
+	# Verify with current code. v0.0.[45] had a message with wrong Size. We don't
+	# want to abort the upgrade check because of it.
+	if test $tag = v0.0.4 -o $tag = v0.0.5; then
+		../../mox verifydata -skip-size-check $tag/data
+	else
+		../../mox verifydata $tag/data
+	fi
 	echo
 	rm -r $tag/data
 done
+
+# Do upgrade from v0.0.5 with big import straight to current. Will create
+# multiple new indices so may be heavier during upgrade.
+echo "Testing upgrade from v0.0.5 + big import straight to current."
+tag=v0.0.5
+./$tag/mox gentestdata stepdata
+ulimit -S -d unlimited
+echo 'Importing bulk data for upgrading.'
+gunzip < ../upgradetest.mbox.gz | time ./$tag/mox ximport mbox ./stepdata/accounts/test0 upgradetest /dev/stdin
+echo
+ulimit -S -d 768000
+time ../../mox -cpuprof ../../upgrade0-verifydata.cpu.pprof -memprof ../../upgrade0-verifydata.mem.pprof verifydata -skip-size-check stepdata
+time ../../mox -loglevel info -cpuprof ../../upgrade0-openaccounts.cpu.pprof -memprof ../../upgrade0-openaccounts.mem.pprof openaccounts stepdata test0 test1 test2
+rm -r stepdata
+
 
 # Also go step-wise through each released version. Having upgraded step by step
 # can have added more schema upgrades to the database files.
@@ -65,12 +86,18 @@ for tag in $tags; do
 		fi
 
 		echo "Upgrade data to $tag."
-		time ./$tag/mox verifydata stepdata
+		if test $tag = v0.0.4 -o $tag = v0.0.5; then
+			time ./$tag/mox verifydata stepdata
+		else
+			time ./$tag/mox verifydata -skip-size-check stepdata
+			time ./$tag/mox openaccounts stepdata test0 test1 test2
+		fi
 		echo
 	fi
 done
 echo "Testing final upgrade to current."
-time ../../mox verifydata stepdata
+time ../../mox -cpuprof ../../upgrade1-verifydata.cpu.pprof -memprof ../../upgrade1-verifydata.mem.pprof verifydata -skip-size-check stepdata
+time ../../mox -loglevel info -cpuprof ../../upgrade1-openaccounts.cpu.pprof -memprof ../../upgrade1-openaccounts.mem.pprof openaccounts stepdata test0 test1 test2
 rm -r stepdata
 rm */mox
 cd ../..

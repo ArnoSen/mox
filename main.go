@@ -14,8 +14,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -36,8 +38,10 @@ import (
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
+	"github.com/mjl-/mox/moxio"
 	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/mtasts"
+	"github.com/mjl-/mox/publicsuffix"
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/spf"
 	"github.com/mjl-/mox/store"
@@ -120,6 +124,7 @@ var commands = []struct {
 	{"dmarc lookup", cmdDMARCLookup},
 	{"dmarc parsereportmsg", cmdDMARCParsereportmsg},
 	{"dmarc verify", cmdDMARCVerify},
+	{"dmarc checkreportaddrs", cmdDMARCCheckreportaddrs},
 	{"dnsbl check", cmdDNSBLCheck},
 	{"dnsbl checkhealth", cmdDNSBLCheckhealth},
 	{"mtasts lookup", cmdMTASTSLookup},
@@ -140,6 +145,7 @@ var commands = []struct {
 	{"ensureparsed", cmdEnsureParsed},
 	{"recalculatemailboxcounts", cmdRecalculateMailboxCounts},
 	{"message parse", cmdMessageParse},
+	{"reassignthreads", cmdReassignthreads},
 
 	// Not listed.
 	{"helpall", cmdHelpall},
@@ -158,6 +164,8 @@ var commands = []struct {
 	{"gentestdata", cmdGentestdata},
 	{"ximport maildir", cmdXImportMaildir},
 	{"ximport mbox", cmdXImportMbox},
+	{"openaccounts", cmdOpenaccounts},
+	{"readmessages", cmdReadmessages},
 }
 
 var cmds []cmd
@@ -385,6 +393,10 @@ func main() {
 	// flag.
 	store.CheckConsistencyOnClose = false
 
+	ctxbg := context.Background()
+	mox.Shutdown = ctxbg
+	mox.Context = ctxbg
+
 	log.SetFlags(0)
 
 	// If invoked as sendmail, e.g. /usr/sbin/sendmail, we do enough so cron can get a
@@ -403,9 +415,10 @@ func main() {
 	flag.BoolVar(&pedantic, "pedantic", false, "protocol violations result in errors instead of accepting/working around them")
 	flag.BoolVar(&store.CheckConsistencyOnClose, "checkconsistency", false, "dangerous option for testing only, enables data checks that abort/panic when inconsistencies are found")
 
-	var cpuprofile, memprofile string
+	var cpuprofile, memprofile, tracefile string
 	flag.StringVar(&cpuprofile, "cpuprof", "", "store cpu profile to file")
 	flag.StringVar(&memprofile, "memprof", "", "store mem profile to file")
+	flag.StringVar(&tracefile, "trace", "", "store execution trace to file")
 
 	flag.Usage = func() { usage(cmds, false) }
 	flag.Parse()
@@ -414,6 +427,9 @@ func main() {
 		usage(cmds, false)
 	}
 
+	if tracefile != "" {
+		defer traceExecution(tracefile)()
+	}
 	defer profile(cpuprofile, memprofile)()
 
 	if pedantic {
@@ -493,7 +509,7 @@ configured over otherwise secured connections, like a VPN.
 }
 
 func printClientConfig(d dns.Domain) {
-	cc, err := mox.ClientConfigDomain(d)
+	cc, err := mox.ClientConfigsDomain(d)
 	xcheckf(err, "getting client config")
 	fmt.Printf("%-20s %-30s %5s %-15s %s\n", "Protocol", "Host", "Port", "Listener", "Note")
 	for _, e := range cc.Entries {
@@ -512,7 +528,9 @@ are printed.
 		c.Usage()
 	}
 
-	_, errs := mox.ParseConfig(context.Background(), mox.ConfigStaticPath, true, false, false)
+	mox.FilesImmediate = true
+
+	_, errs := mox.ParseConfig(context.Background(), mox.ConfigStaticPath, true, true, false)
 	if len(errs) > 1 {
 		log.Printf("multiple errors:")
 		for _, err := range errs {
@@ -663,7 +681,7 @@ func ctlcmdConfigAccountAdd(ctl *ctl, account, address string) {
 	ctl.xwrite(account)
 	ctl.xwrite(address)
 	ctl.xreadok()
-	fmt.Printf("account added, set a password with \"mox setaccountpassword %s\"\n", address)
+	fmt.Printf("account added, set a password with \"mox setaccountpassword %s\"\n", account)
 }
 
 func cmdConfigAccountRemove(c *cmd) {
@@ -1018,7 +1036,7 @@ back to should an upgrade fail. Simply copying files in the data directory
 while mox is running can result in unusable database files.
 
 Message files never change (they are read-only, though can be removed) and are
-hardlinked so they don't consume additional space. If hardlinking fails, for
+hard-linked so they don't consume additional space. If hardlinking fails, for
 example when the backup destination directory is on a different file system, a
 regular copy is made. Using a destination directory like "data/tmp/backup"
 increases the odds hardlinking succeeds: the default systemd service file
@@ -1118,7 +1136,7 @@ pick a random, unguessable password, preferably at least 12 characters.
 }
 
 func cmdSetaccountpassword(c *cmd) {
-	c.params = "address"
+	c.params = "account"
 	c.help = `Set new password an account.
 
 The password is read from stdin. Secrets derived from the password, but not the
@@ -1126,7 +1144,9 @@ password itself, are stored in the account database. The stored secrets are for
 authentication with: scram-sha-256, scram-sha-1, cram-md5, plain text (bcrypt
 hash).
 
-Any email address configured for the account can be used.
+The parameter is an account name, as configured under Accounts in domains.conf
+and as present in the data/accounts/ directory, not a configured email address
+for an account.
 `
 	args := c.Parse()
 	if len(args) != 1 {
@@ -1139,9 +1159,9 @@ Any email address configured for the account can be used.
 	ctlcmdSetaccountpassword(xctl(), args[0], pw)
 }
 
-func ctlcmdSetaccountpassword(ctl *ctl, address, password string) {
+func ctlcmdSetaccountpassword(ctl *ctl, account, password string) {
 	ctl.xwrite("setaccountpassword")
-	ctl.xwrite(address)
+	ctl.xwrite(account)
 	ctl.xwrite(password)
 	ctl.xreadok()
 }
@@ -1441,11 +1461,13 @@ headers prepended.
 		c.Usage()
 	}
 
+	clog := mlog.New("dkimsign")
+
 	msgf, err := os.Open(args[0])
 	xcheckf(err, "open message")
 	defer msgf.Close()
 
-	p, err := message.Parse(msgf)
+	p, err := message.Parse(clog, true, msgf)
 	xcheckf(err, "parsing message")
 
 	if len(p.Envelope.From) != 1 {
@@ -1589,7 +1611,7 @@ can be found in message headers.
 
 	data, err := io.ReadAll(os.Stdin)
 	xcheckf(err, "read message")
-	dmarcFrom, _, err := message.From(bytes.NewReader(data))
+	dmarcFrom, _, err := message.From(mlog.New("dmarcverify"), false, bytes.NewReader(data))
 	xcheckf(err, "extract dmarc from message")
 
 	const ignoreTestMode = false
@@ -1602,6 +1624,82 @@ can be found in message headers.
 	_, result := dmarc.Verify(context.Background(), dns.StrictResolver{}, dmarcFrom.Domain, dkimResults, spfStatus, spfIdentity, false)
 	xcheckf(result.Err, "dmarc verify")
 	fmt.Printf("dmarc from: %s\ndmarc status: %q\ndmarc reject: %v\ncmarc record: %s\n", dmarcFrom, result.Status, result.Reject, result.Record)
+}
+
+func cmdDMARCCheckreportaddrs(c *cmd) {
+	c.params = "domain"
+	c.help = `For each reporting address in the domain's DMARC record, check if it has opted into receiving reports (if needed).
+
+A DMARC record can request reports about DMARC evaluations to be sent to an
+email/http address. If the organizational domains of that of the DMARC record
+and that of the report destination address do not match, the destination
+address must opt-in to receiving DMARC reports by creating a DMARC record at
+<dmarcdomain>._report._dmarc.<reportdestdomain>.
+`
+	args := c.Parse()
+	if len(args) != 1 {
+		c.Usage()
+	}
+
+	dom := xparseDomain(args[0], "domain")
+	_, domain, record, txt, err := dmarc.Lookup(context.Background(), dns.StrictResolver{}, dom)
+	xcheckf(err, "dmarc lookup domain %s", dom)
+	fmt.Printf("dmarc record at domain %s: %q\n", domain, txt)
+
+	check := func(kind, addr string) {
+		printResult := func(format string, args ...any) {
+			fmt.Printf("%s %s: %s\n", kind, addr, fmt.Sprintf(format, args...))
+		}
+
+		u, err := url.Parse(addr)
+		if err != nil {
+			printResult("parsing uri: %v (skipping)", addr, err)
+			return
+		}
+		var destdom dns.Domain
+		switch u.Scheme {
+		case "mailto":
+			a, err := smtp.ParseAddress(u.Opaque)
+			if err != nil {
+				printResult("parsing destination email address %s: %v (skipping)", u.Opaque, err)
+				return
+			}
+			destdom = a.Domain
+		default:
+			printResult("unrecognized scheme in reporting address %s (skipping)", u.Scheme)
+			return
+		}
+
+		if publicsuffix.Lookup(context.Background(), dom) == publicsuffix.Lookup(context.Background(), destdom) {
+			printResult("pass (same organizational domain)")
+			return
+		}
+
+		accepts, status, _, txt, err := dmarc.LookupExternalReportsAccepted(context.Background(), dns.StrictResolver{}, domain, destdom)
+		var txtstr string
+		txtaddr := fmt.Sprintf("%s._report._dmarc.%s", domain.ASCII, destdom.ASCII)
+		if txt == "" {
+			txtstr = fmt.Sprintf(" (no txt record %s)", txtaddr)
+		} else {
+			txtstr = fmt.Sprintf(" (txt record %s: %q)", txtaddr, txt)
+		}
+		if status != dmarc.StatusNone {
+			printResult("fail: %s%s", err, txtstr)
+		} else if accepts {
+			printResult("pass%s", txtstr)
+		} else if err != nil {
+			printResult("fail: %s%s", err, txtstr)
+		} else {
+			printResult("fail%s", txtstr)
+		}
+	}
+
+	for _, uri := range record.AggregateReportAddresses {
+		check("aggregate reporting", uri.Address)
+	}
+	for _, uri := range record.FailureReportAddresses {
+		check("failure reporting", uri.Address)
+	}
 }
 
 func cmdDMARCParsereportmsg(c *cmd) {
@@ -1619,10 +1717,12 @@ understand email deliverability problems.
 		c.Usage()
 	}
 
+	clog := mlog.New("dmarcparsereportmsg")
+
 	for _, arg := range args {
 		f, err := os.Open(arg)
 		xcheckf(err, "open %q", arg)
-		feedback, err := dmarcrpt.ParseMessageReport(f)
+		feedback, err := dmarcrpt.ParseMessageReport(clog, f)
 		xcheckf(err, "parse report in %q", arg)
 		meta := feedback.ReportMetadata
 		fmt.Printf("Report: period %s-%s, organisation %q, reportID %q, %s\n", time.Unix(meta.DateRange.Begin, 0).UTC().String(), time.Unix(meta.DateRange.End, 0).UTC().String(), meta.OrgName, meta.ReportID, meta.Email)
@@ -1671,9 +1771,11 @@ func cmdDMARCDBAddReport(c *cmd) {
 
 	mustLoadConfig()
 
+	clog := mlog.New("dmarcdbaddreport")
+
 	fromdomain := xparseDomain(args[0], "domain")
 	fmt.Fprintln(os.Stderr, "reading report message from stdin")
-	report, err := dmarcrpt.ParseMessageReport(os.Stdin)
+	report, err := dmarcrpt.ParseMessageReport(clog, os.Stdin)
 	xcheckf(err, "parse message")
 	err = dmarcdb.AddReport(context.Background(), report, fromdomain)
 	xcheckf(err, "add dmarc report")
@@ -1710,10 +1812,12 @@ The report is printed in formatted JSON.
 		c.Usage()
 	}
 
+	clog := mlog.New("tlsrptparsereportmsg")
+
 	for _, arg := range args {
 		f, err := os.Open(arg)
 		xcheckf(err, "open %q", arg)
-		report, err := tlsrpt.ParseMessage(f)
+		report, err := tlsrpt.ParseMessage(clog, f)
 		xcheckf(err, "parse report in %q", arg)
 		// todo future: only print the highlights?
 		enc := json.NewEncoder(os.Stdout)
@@ -1853,11 +1957,13 @@ func cmdTLSRPTDBAddReport(c *cmd) {
 
 	mustLoadConfig()
 
+	clog := mlog.New("tlsrptdbaddreport")
+
 	// First read message, to get the From-header. Then parse it as TLSRPT.
 	fmt.Fprintln(os.Stderr, "reading report message from stdin")
 	buf, err := io.ReadAll(os.Stdin)
 	xcheckf(err, "reading message")
-	part, err := message.Parse(bytes.NewReader(buf))
+	part, err := message.Parse(clog, true, bytes.NewReader(buf))
 	xcheckf(err, "parsing message")
 	if part.Envelope == nil || len(part.Envelope.From) != 1 {
 		log.Fatalf("message must have one From-header")
@@ -1865,7 +1971,7 @@ func cmdTLSRPTDBAddReport(c *cmd) {
 	from := part.Envelope.From[0]
 	domain := xparseDomain(from.Host, "domain")
 
-	report, err := tlsrpt.ParseMessage(bytes.NewReader(buf))
+	report, err := tlsrpt.ParseMessage(clog, bytes.NewReader(buf))
 	xcheckf(err, "parsing tls report in message")
 
 	mailfrom := from.User + "@" + from.Host // todo future: should escape and such
@@ -1990,6 +2096,7 @@ func cmdVersion(c *cmd) {
 	fmt.Println(moxvar.Version)
 }
 
+// todo: should make it possible to run this command against a running mox. it should disconnect existing clients for accounts with a bumped uidvalidity, so they will reconnect and refetch the data.
 func cmdBumpUIDValidity(c *cmd) {
 	c.params = "account [mailbox]"
 	c.help = `Change the IMAP UID validity of the mailbox, causing IMAP clients to refetch messages.
@@ -1997,7 +2104,7 @@ func cmdBumpUIDValidity(c *cmd) {
 This can be useful after manually repairing metadata about the account/mailbox.
 
 Opens account database file directly. Ensure mox does not have the account
-+open, or is not running.
+open, or is not running.
 `
 	args := c.Parse()
 	if len(args) != 1 && len(args) != 2 {
@@ -2013,8 +2120,12 @@ Opens account database file directly. Ensure mox does not have the account
 		}
 	}()
 
-	var uidvalidity uint32
 	err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
+		uidvalidity, err := a.NextUIDValidity(tx)
+		if err != nil {
+			return fmt.Errorf("assigning next uid validity: %v", err)
+		}
+
 		q := bstore.QueryTx[store.Mailbox](tx)
 		if len(args) == 2 {
 			q.FilterEqual("Name", args[1])
@@ -2027,8 +2138,7 @@ Opens account database file directly. Ensure mox does not have the account
 			return fmt.Errorf("looking up mailbox %q, found %d mailboxes", args[1], len(mbl))
 		}
 		for _, mb := range mbl {
-			mb.UIDValidity++
-			uidvalidity = mb.UIDValidity
+			mb.UIDValidity = uidvalidity
 			err = tx.Update(&mb)
 			if err != nil {
 				return fmt.Errorf("updating uid validity for mailbox: %v", err)
@@ -2274,6 +2384,8 @@ func cmdEnsureParsed(c *cmd) {
 		c.Usage()
 	}
 
+	clog := mlog.New("ensureparsed")
+
 	mustLoadConfig()
 	a, err := store.OpenAccount(args[0])
 	xcheckf(err, "open account")
@@ -2296,7 +2408,7 @@ func cmdEnsureParsed(c *cmd) {
 		}
 		for _, m := range l {
 			mr := a.MessageReader(m)
-			p, err := message.EnsurePart(mr, m.Size)
+			p, err := message.EnsurePart(clog, false, mr, m.Size)
 			if err != nil {
 				log.Printf("parsing message %d: %v (continuing)", m.ID, err)
 			}
@@ -2349,16 +2461,222 @@ func cmdMessageParse(c *cmd) {
 		c.Usage()
 	}
 
+	clog := mlog.New("messageparse")
+
 	f, err := os.Open(args[0])
 	xcheckf(err, "open")
 	defer f.Close()
 
-	part, err := message.Parse(f)
+	part, err := message.Parse(clog, false, f)
 	xcheckf(err, "parsing message")
-	err = part.Walk(nil)
+	err = part.Walk(clog, nil)
 	xcheckf(err, "parsing nested parts")
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "\t")
 	err = enc.Encode(part)
 	xcheckf(err, "write")
+}
+
+func cmdOpenaccounts(c *cmd) {
+	c.unlisted = true
+	c.params = "datadir account ..."
+	c.help = `Open and close accounts, for triggering data upgrades, for tests.
+
+Opens database files directly, not going through a running mox instance.
+`
+
+	args := c.Parse()
+	if len(args) <= 1 {
+		c.Usage()
+	}
+
+	clog := mlog.New("openaccounts")
+
+	dataDir := filepath.Clean(args[0])
+	for _, accName := range args[1:] {
+		accDir := filepath.Join(dataDir, "accounts", accName)
+		log.Printf("opening account %s...", accDir)
+		a, err := store.OpenAccountDB(accDir, accName)
+		xcheckf(err, "open account %s", accName)
+		err = a.ThreadingWait(clog)
+		xcheckf(err, "wait for threading upgrade to complete for %s", accName)
+		err = a.Close()
+		xcheckf(err, "close account %s", accName)
+	}
+}
+
+func cmdReassignthreads(c *cmd) {
+	c.params = "[account]"
+	c.help = `Reassign message threads.
+
+For all accounts, or optionally only the specified account.
+
+Threading for all messages in an account is first reset, and new base subject
+and normalized message-id saved with the message. Then all messages are
+evaluated and matched against their parents/ancestors.
+
+Messages are matched based on the References header, with a fall-back to an
+In-Reply-To header, and if neither is present/valid, based only on base
+subject.
+
+A References header typically points to multiple previous messages in a
+hierarchy. From oldest ancestor to most recent parent. An In-Reply-To header
+would have only a message-id of the parent message.
+
+A message is only linked to a parent/ancestor if their base subject is the
+same. This ensures unrelated replies, with a new subject, are placed in their
+own thread.
+
+The base subject is lower cased, has whitespace collapsed to a single
+space, and some components removed: leading "Re:", "Fwd:", "Fw:", or bracketed
+tag (that mailing lists often add, e.g. "[listname]"), trailing "(fwd)", or
+enclosing "[fwd: ...]".
+
+Messages are linked to all their ancestors. If an intermediate parent/ancestor
+message is deleted in the future, the message can still be linked to the earlier
+ancestors. If the direct parent already wasn't available while matching, this is
+stored as the message having a "missing link" to its stored ancestors.
+`
+	args := c.Parse()
+	if len(args) > 1 {
+		c.Usage()
+	}
+
+	mustLoadConfig()
+	var account string
+	if len(args) == 1 {
+		account = args[0]
+	}
+	ctlcmdReassignthreads(xctl(), account)
+}
+
+func ctlcmdReassignthreads(ctl *ctl, account string) {
+	ctl.xwrite("reassignthreads")
+	ctl.xwrite(account)
+	ctl.xreadok()
+	ctl.xstreamto(os.Stdout)
+}
+
+func cmdReadmessages(c *cmd) {
+	c.unlisted = true
+	c.params = "datadir account ..."
+	c.help = `Open account, parse several headers for all messages.
+
+For performance testing.
+
+Opens database files directly, not going through a running mox instance.
+`
+
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	var procs, workqueuesize, limit int
+	c.flag.IntVar(&procs, "procs", gomaxprocs, "number of goroutines for reading messages")
+	c.flag.IntVar(&workqueuesize, "workqueuesize", 2*gomaxprocs, "number of messages to keep in work queue")
+	c.flag.IntVar(&limit, "limit", 0, "number of messages to process if greater than zero")
+	args := c.Parse()
+	if len(args) <= 1 {
+		c.Usage()
+	}
+
+	type threadPrep struct {
+		references []string
+		inReplyTo  []string
+	}
+
+	threadingFields := [][]byte{
+		[]byte("references"),
+		[]byte("in-reply-to"),
+	}
+
+	dataDir := filepath.Clean(args[0])
+	for _, accName := range args[1:] {
+		accDir := filepath.Join(dataDir, "accounts", accName)
+		log.Printf("opening account %s...", accDir)
+		a, err := store.OpenAccountDB(accDir, accName)
+		xcheckf(err, "open account %s", accName)
+
+		prepareMessages := func(in, out chan moxio.Work[store.Message, threadPrep]) {
+			headerbuf := make([]byte, 8*1024)
+			scratch := make([]byte, 4*1024)
+			for {
+				w, ok := <-in
+				if !ok {
+					return
+				}
+
+				m := w.In
+				var partialPart struct {
+					HeaderOffset int64
+					BodyOffset   int64
+				}
+				if err := json.Unmarshal(m.ParsedBuf, &partialPart); err != nil {
+					w.Err = fmt.Errorf("unmarshal part: %v", err)
+				} else {
+					size := partialPart.BodyOffset - partialPart.HeaderOffset
+					if int(size) > len(headerbuf) {
+						headerbuf = make([]byte, size)
+					}
+					if size > 0 {
+						buf := headerbuf[:int(size)]
+						err := func() error {
+							mr := a.MessageReader(m)
+							defer mr.Close()
+
+							// ReadAt returns whole buffer or error. Single read should be fast.
+							n, err := mr.ReadAt(buf, partialPart.HeaderOffset)
+							if err != nil || n != len(buf) {
+								return fmt.Errorf("read header: %v", err)
+							}
+							return nil
+						}()
+						if err != nil {
+							w.Err = err
+						} else if h, err := message.ParseHeaderFields(buf, scratch, threadingFields); err != nil {
+							w.Err = err
+						} else {
+							w.Out.references = h["References"]
+							w.Out.inReplyTo = h["In-Reply-To"]
+						}
+					}
+				}
+
+				out <- w
+			}
+		}
+
+		n := 0
+		t := time.Now()
+		t0 := t
+
+		processMessage := func(m store.Message, prep threadPrep) error {
+			if n%100000 == 0 {
+				log.Printf("%d messages (delta %s)", n, time.Since(t))
+				t = time.Now()
+			}
+			n++
+			return nil
+		}
+
+		wq := moxio.NewWorkQueue[store.Message, threadPrep](procs, workqueuesize, prepareMessages, processMessage)
+
+		err = a.DB.Write(context.Background(), func(tx *bstore.Tx) error {
+			q := bstore.QueryTx[store.Message](tx)
+			q.FilterEqual("Expunged", false)
+			q.SortAsc("ID")
+			if limit > 0 {
+				q.Limit(limit)
+			}
+			err = q.ForEach(wq.Add)
+			if err == nil {
+				err = wq.Finish()
+			}
+			wq.Stop()
+
+			return err
+		})
+		xcheckf(err, "processing message")
+
+		err = a.Close()
+		xcheckf(err, "close account %s", accName)
+		log.Printf("account %s, total time %s", accName, time.Since(t0))
+	}
 }

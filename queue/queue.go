@@ -219,7 +219,7 @@ func Add(ctx context.Context, log *mlog.Log, senderAccount string, mailFrom, rcp
 		conf, _ := acc.Conf()
 		dest := conf.Destinations[mailFrom.String()]
 		acc.WithWLock(func() {
-			err = acc.Deliver(log, dest, &m, msgFile, consumeFile)
+			err = acc.DeliverDestination(log, dest, &m, msgFile, consumeFile)
 		})
 		if err != nil {
 			return 0, fmt.Errorf("delivering message: %v", err)
@@ -497,7 +497,7 @@ func deliver(resolver dns.Resolver, m Msg) {
 		if x != nil {
 			qlog.Error("deliver panic", mlog.Field("panic", x))
 			debug.PrintStack()
-			metrics.PanicInc("queue")
+			metrics.PanicInc(metrics.Queue)
 		}
 	}()
 

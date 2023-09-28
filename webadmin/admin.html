@@ -13,7 +13,7 @@ h1 { font-size: 1.2rem; }
 h2 { font-size: 1.1rem; }
 h3, h4 { font-size: 1rem; }
 ul { padding-left: 1rem; }
-.literal { background-color: #fdfdfd; padding: .5em 1em; border: 1px solid #eee; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 15px; tab-size: 4; }
+.literal { background-color: #eee; padding: .5em 1em; margin: 1ex 0; border: 1px solid #eee; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 15px; tab-size: 4; }
 table td, table th { padding: .2em .5em; }
 table table td, table table th { padding: 0 0.1em; }
 table.long >tbody >tr >td { padding: 1em .5em; }
@@ -695,12 +695,12 @@ const account = async (name) => {
 const domain = async (d) => {
 	const end = new Date().toISOString()
 	const start = new Date(new Date().getTime() - 30*24*3600*1000).toISOString()
-	const [dmarcSummaries, tlsrptSummaries, localpartAccounts, dnsdomain, clientConfig] = await Promise.all([
+	const [dmarcSummaries, tlsrptSummaries, localpartAccounts, dnsdomain, clientConfigs] = await Promise.all([
 		api.DMARCSummaries(start, end, d),
 		api.TLSRPTSummaries(start, end, d),
 		api.DomainLocalparts(d),
 		api.Domain(d),
-		api.ClientConfigDomain(d),
+		api.ClientConfigsDomain(d),
 	])
 
 	let form, fieldset, localpart, account
@@ -725,7 +725,7 @@ const domain = async (d) => {
 				),
 			),
 			dom.tbody(
-				clientConfig.Entries.map(e =>
+				clientConfigs.Entries.map(e =>
 					dom.tr(
 						dom.td(e.Protocol),
 						dom.td(domainString(e.Host)),
@@ -756,7 +756,7 @@ const domain = async (d) => {
 						dom.td(t[0] || '(catchall)'),
 						dom.td(dom.a(t[1], attr({href: '#accounts/'+t[1]}))),
 						dom.td(
-							dom.button('Remove address', async function click(e) {
+							dom.button('Remove', async function click(e) {
 								e.preventDefault()
 								if (!window.confirm('Are you sure you want to remove this address?')) {
 									return
@@ -856,10 +856,11 @@ const domainDNSRecords = async (d) => {
 			'DNS Records',
 		),
 		dom.h1('Required DNS records'),
-		dom('pre.literal', records.join('\n')),
+		dom('pre.literal', style({maxWidth: '70em'}), records.join('\n')),
 		dom.br(),
 	)
 }
+
 const domainDNSCheck = async (d) => {
 	const [checks, dnsdomain] = await Promise.all([
 		api.CheckDomain(d),
@@ -881,7 +882,7 @@ const domainDNSCheck = async (d) => {
 			instructions = dom.div(style({margin: '.5ex 0'}))
 			const instrs = [
 				r.Instructions.map(s => [
-					dom('pre.literal', style({display: 'inline-block'}), s),
+					dom('pre.literal', style({display: 'inline-block', maxWidth: '60em'}), s),
 					dom.br(),
 				]),
 			]
@@ -951,7 +952,7 @@ const domainDNSCheck = async (d) => {
 	const detailsMTASTS = empty(checks.MTASTS.CNAMEs) && !checks.MTASTS.TXT && !checks.MTASTS.PolicyText ? [] : [
 		dom.div('CNAMEs followed: ' + (checks.MTASTS.CNAMEs.join(', ') || '(none)')),
 		!checks.MTASTS.TXT ? [] : dom.div('MTA-STS record: ' + checks.MTASTS.TXT),
-		!checks.MTASTS.PolicyText ? [] : dom.div('MTA-STS policy: ', dom('pre.literal', checks.MTASTS.PolicyText)),
+		!checks.MTASTS.PolicyText ? [] : dom.div('MTA-STS policy: ', dom('pre.literal', style({maxWidth: '60em'}), checks.MTASTS.PolicyText)),
 	]
 	const detailsSRVConf = !Object.entries(checks.SRVConf.SRVs) ? [] : [
 		dom.table(
@@ -1938,7 +1939,8 @@ const webserver = async () => {
 						dom.td('LogName', attr({title: 'Name used during logging for requests matching this handler. If empty, the index of the handler in the list is used.'})),
 						dom.td('Domain', attr({title: 'Request must be for this domain to match this handler.'})),
 						dom.td('Path Regexp', attr({title: 'Request must match this path regular expression to match this handler. Must start with with a ^.'})),
-						dom.td('To HTTPS', attr({title: 'Redirect plain HTTP (non-TLS) requests to HTTPS'})),
+						dom.td('To HTTPS', attr({title: 'Redirect plain HTTP (non-TLS) requests to HTTPS.'})),
+						dom.td('Compress', attr({title: 'Transparently compress responses (currently with gzip) if the client supports it, the status is 200 OK, no Content-Encoding is set on the response yet and the Content-Type of the response hints that the data is compressible (text/..., specific application/... and .../...+json and .../...+xml). For static files only, a cache with compressed files is kept.'})),
 					),
 					dom.tr(
 						dom.td(
@@ -1952,6 +1954,9 @@ const webserver = async () => {
 						),
 						dom.td(
 							row.ToHTTPS=dom.input(attr({type: 'checkbox', title: 'Redirect plain HTTP (non-TLS) requests to HTTPS'}), !wh.DontRedirectPlainHTTP ? attr({checked: ''}) : []),
+						),
+						dom.td(
+							row.Compress=dom.input(attr({type: 'checkbox', title: 'Transparently compress responses.'}), wh.Compress ? attr({checked: ''}) : []),
 						),
 					),
 				),
@@ -2008,6 +2013,7 @@ const webserver = async () => {
 				Domain: row.Domain.value,
 				PathRegexp: row.PathRegexp.value,
 				DontRedirectPlainHTTP: !row.ToHTTPS.checked,
+				Compress: row.Compress.checked,
 			}
 			const s = row.type.value
 			const details = row.getDetails()

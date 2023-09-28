@@ -44,7 +44,7 @@ func monitorDNSBL(log *mlog.Log) {
 		if x != nil {
 			log.Error("monitordnsbl panic", mlog.Field("panic", x))
 			debug.PrintStack()
-			metrics.PanicInc("serve")
+			metrics.PanicInc(metrics.Serve)
 		}
 	}()
 
@@ -364,7 +364,7 @@ requested, other TLS certificates are requested on demand.
 		for _, e := range tmps {
 			if fi, err := e.Info(); err != nil {
 				log.Errorx("stat tmp file", err, mlog.Field("filename", e.Name()))
-			} else if now.Sub(fi.ModTime()) > 7*24*time.Hour {
+			} else if now.Sub(fi.ModTime()) > 7*24*time.Hour && !fi.IsDir() {
 				p := filepath.Join(tmpdir, e.Name())
 				if err := os.Remove(p); err != nil {
 					log.Errorx("removing stale temporary file", err, mlog.Field("path", p))

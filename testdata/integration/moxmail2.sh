@@ -9,7 +9,8 @@ mkdir /tmp/mox
 cd /tmp/mox
 mox quickstart moxtest2@mox2.example "$MOX_UID" > output.txt
 
-sed -i -e '/- 172.28.1.20/d' -e 's/- 0.0.0.0/- 172.28.1.20/' -e '/- ::/d' -e 's,ACME: .*$,KeyCerts:\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/moxmail2.pem\n\t\t\t\t\tKeyFile: /integration/tls/moxmail2-key.pem\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/mox2-autoconfig.pem\n\t\t\t\t\tKeyFile: /integration/tls/mox2-autoconfig-key.pem\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/mox2-mtasts.pem\n\t\t\t\t\tKeyFile: /integration/tls/mox2-mtasts-key.pem\n,' -e 's/SMTP:$/SMTP:\n\t\t\tFirstTimeSenderDelay: 1s/' config/mox.conf
+cp config/mox.conf config/mox.conf.orig
+sed -i -e 's,ACME: .*$,KeyCerts:\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/moxmail2.pem\n\t\t\t\t\tKeyFile: /integration/tls/moxmail2-key.pem\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/mox2-autoconfig.pem\n\t\t\t\t\tKeyFile: /integration/tls/mox2-autoconfig-key.pem\n\t\t\t\t-\n\t\t\t\t\tCertFile: /integration/tls/mox2-mtasts.pem\n\t\t\t\t\tKeyFile: /integration/tls/mox2-mtasts-key.pem\n,' -e 's/SMTP:$/SMTP:\n\t\t\tFirstTimeSenderDelay: 1s/' config/mox.conf
 cat <<EOF >>config/mox.conf
 
 TLS:
@@ -28,7 +29,7 @@ unbound-control -s 172.28.1.30 reload # reload unbound with zone file changes
 mox -checkconsistency serve &
 while true; do
 	if test -e data/ctl; then
-		echo -n accountpass4321 | mox setaccountpassword moxtest2@mox2.example
+		echo -n accountpass4321 | mox setaccountpassword moxtest2
 		break
 	fi
 	sleep 0.1

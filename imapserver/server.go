@@ -31,7 +31,7 @@ not in IMAP4rev2). ../rfc/3501:964
 - todo: do not return binary data for a fetch body. at least not for imap4rev1. we should be encoding it as base64?
 - todo: on expunge we currently remove the message even if other sessions still have a reference to the uid. if they try to query the uid, they'll get an error. we could be nicer and only actually remove the message when the last reference has gone. we could add a new flag to store.Message marking the message as expunged, not give new session access to such messages, and make store remove them at startup, and clean them when the last session referencing the session goes. however, it will get much more complicated. renaming messages would need special handling. and should we do the same for removed mailboxes?
 - todo: try to recover from syntax errors when the last command line ends with a }, i.e. a literal. we currently abort the entire connection. we may want to read some amount of literal data and continue with a next command.
-- future: more extensions: STATUS=SIZE, OBJECTID, MULTISEARCH, REPLACE, NOTIFY, CATENATE, MULTIAPPEND, SORT, THREAD, CREATE-SPECIAL-USE.
+- todo future: more extensions: STATUS=SIZE, OBJECTID, MULTISEARCH, REPLACE, NOTIFY, CATENATE, MULTIAPPEND, SORT, THREAD, CREATE-SPECIAL-USE.
 */
 
 import (
@@ -682,7 +682,7 @@ func serve(listenerName string, cid int64, tlsConfig *tls.Config, nc net.Conn, x
 		} else {
 			c.log.Error("unhandled panic", mlog.Field("err", x))
 			debug.PrintStack()
-			metrics.PanicInc("imapserver")
+			metrics.PanicInc(metrics.Imapserver)
 		}
 	}()
 
@@ -1199,7 +1199,7 @@ func (c *conn) applyChanges(changes []store.Change, initial bool) {
 		case store.ChangeRemoveMailbox, store.ChangeAddMailbox, store.ChangeRenameMailbox, store.ChangeAddSubscription:
 			n = append(n, change)
 			continue
-		case store.ChangeMailboxCounts, store.ChangeMailboxSpecialUse, store.ChangeMailboxKeywords:
+		case store.ChangeMailboxCounts, store.ChangeMailboxSpecialUse, store.ChangeMailboxKeywords, store.ChangeThread:
 		default:
 			panic(fmt.Errorf("missing case for %#v", change))
 		}
@@ -2683,7 +2683,7 @@ func (c *conn) cmdAppend(tag, cmd string, p *parser) {
 		}
 	}()
 	defer c.xtrace(mlog.LevelTracedata)()
-	mw := &message.Writer{Writer: msgFile}
+	mw := message.NewWriter(msgFile)
 	msize, err := io.Copy(mw, io.LimitReader(c.br, size))
 	c.xtrace(mlog.LevelTrace) // Restore.
 	if err != nil {
@@ -2692,11 +2692,6 @@ func (c *conn) cmdAppend(tag, cmd string, p *parser) {
 	}
 	if msize != size {
 		xserverErrorf("read %d bytes for message, expected %d (%w)", msize, size, errIO)
-	}
-	msgPrefix := []byte{}
-	// todo: should we treat the message as body? i believe headers are required in messages, and bodies are optional. so would make more sense to treat the data as headers. perhaps only if the headers are valid?
-	if !mw.HaveHeaders {
-		msgPrefix = []byte("\r\n")
 	}
 
 	if utf8 {
@@ -2736,8 +2731,7 @@ func (c *conn) cmdAppend(tag, cmd string, p *parser) {
 				Received:      tm,
 				Flags:         storeFlags,
 				Keywords:      keywords,
-				Size:          size + int64(len(msgPrefix)),
-				MsgPrefix:     msgPrefix,
+				Size:          size,
 			}
 
 			mb.Add(m.MailboxCounts())
@@ -2746,7 +2740,7 @@ func (c *conn) cmdAppend(tag, cmd string, p *parser) {
 			err = tx.Update(&mb)
 			xcheckf(err, "updating mailbox counts")
 
-			err := c.account.DeliverMessage(c.log, tx, &m, msgFile, true, true, false)
+			err := c.account.DeliverMessage(c.log, tx, &m, msgFile, true, true, false, false)
 			xcheckf(err, "delivering message")
 		})
 
@@ -2921,6 +2915,9 @@ func (c *conn) xexpunge(uidSet *numSet, missingMailboxOK bool) (remove []store.M
 				removeIDs[i] = m.ID
 				anyIDs[i] = m.ID
 				mb.Sub(m.MailboxCounts())
+				// Update "remove", because RetrainMessage below will save the message.
+				remove[i].Expunged = true
+				remove[i].ModSeq = modseq
 			}
 			qmr := bstore.QueryTx[store.Recipient](tx)
 			qmr.FilterEqual("MessageID", anyIDs...)
@@ -2929,7 +2926,10 @@ func (c *conn) xexpunge(uidSet *numSet, missingMailboxOK bool) (remove []store.M
 
 			qm = bstore.QueryTx[store.Message](tx)
 			qm.FilterIDs(removeIDs)
-			_, err = qm.UpdateNonzero(store.Message{Expunged: true, ModSeq: modseq})
+			n, err := qm.UpdateNonzero(store.Message{Expunged: true, ModSeq: modseq})
+			if err == nil && n != len(removeIDs) {
+				err = fmt.Errorf("only %d messages set to expunged, expected %d", n, len(removeIDs))
+			}
 			xcheckf(err, "marking messages marked for deleted as expunged")
 
 			err = tx.Update(&mb)
@@ -3227,7 +3227,7 @@ func (c *conn) cmdxCopy(isUID bool, tag, cmd string, p *parser) {
 					m.IsReject = false
 				}
 				m.TrainedJunk = nil
-				m.JunkFlagsForMailbox(mbDst.Name, conf)
+				m.JunkFlagsForMailbox(mbDst, conf)
 				err := tx.Insert(&m)
 				xcheckf(err, "inserting message")
 				msgs[uid] = m
@@ -3378,9 +3378,7 @@ func (c *conn) cmdxMove(isUID bool, tag, cmd string, p *parser) {
 					xserverErrorf("internal error: got uid %d, expected %d, for index %d", m.UID, uids[i], i)
 				}
 
-				mc := m.MailboxCounts()
-				mbSrc.Sub(mc)
-				mbDst.Add(mc)
+				mbSrc.Sub(m.MailboxCounts())
 
 				// Copy of message record that we'll insert when UID is freed up.
 				om := *m
@@ -3394,10 +3392,12 @@ func (c *conn) cmdxMove(isUID bool, tag, cmd string, p *parser) {
 					// is used for reputation calculation during future deliveries.
 					m.MailboxOrigID = m.MailboxDestinedID
 					m.IsReject = false
+					m.Seen = false
 				}
+				mbDst.Add(m.MailboxCounts())
 				m.UID = uidnext
 				m.ModSeq = modseq
-				m.JunkFlagsForMailbox(mbDst.Name, conf)
+				m.JunkFlagsForMailbox(mbDst, conf)
 				uidnext++
 				err := tx.Update(m)
 				xcheckf(err, "updating moved message in database")

@@ -595,7 +595,7 @@ func serve(listenerName string, cid int64, hostname dns.Domain, tlsConfig *tls.C
 		} else {
 			c.log.Error("unhandled panic", mlog.Field("err", x))
 			debug.PrintStack()
-			metrics.PanicInc("smtpserver")
+			metrics.PanicInc(metrics.Smtpserver)
 		}
 	}()
 
@@ -773,15 +773,19 @@ func (c *conn) cmdEhlo(p *parser) {
 
 // ../rfc/5321:1783
 func (c *conn) cmdHello(p *parser, ehlo bool) {
-	// ../rfc/5321:1827, though a few paragraphs earlier at ../rfc/5321:1802 is a claim
-	// additional data can occur.
-	p.xspace()
 	var remote dns.IPDomain
-	if ehlo {
-		remote = p.xipdomain(true)
+	if c.submission && !moxvar.Pedantic {
+		// Mail clients regularly put bogus information in the hostname/ip. For submission,
+		// the value is of no use, so there is not much point in annoying the user with
+		// errors they cannot fix themselves. Except when in pedantic mode.
+		remote = dns.IPDomain{IP: c.remoteIP}
 	} else {
-		remote = dns.IPDomain{Domain: p.xdomain()}
-		if !c.submission {
+		p.xspace()
+		if ehlo {
+			remote = p.xipdomain(true)
+		} else {
+			remote = dns.IPDomain{Domain: p.xdomain()}
+
 			// Verify a remote domain name has an A or AAAA record, CNAME not allowed. ../rfc/5321:722
 			cidctx := context.WithValue(mox.Context, mlog.CidKey, c.cid)
 			ctx, cancel := context.WithTimeout(cidctx, time.Minute)
@@ -792,9 +796,15 @@ func (c *conn) cmdHello(p *parser, ehlo bool) {
 			}
 			// For success or temporary resolve errors, we'll just continue.
 		}
+		// ../rfc/5321:1827
+		// Though a few paragraphs earlier is a claim additional data can occur for address
+		// literals (IP addresses), although the ABNF in that document does not allow it.
+		// We allow additional text, but only if space-separated.
+		if len(remote.IP) > 0 && p.space() {
+			p.remainder() // ../rfc/5321:1802 ../rfc/2821:1632
+		}
+		p.xend()
 	}
-	p.remainder() // ../rfc/5321:1802
-	p.xend()
 
 	// Reset state as if RSET command has been issued. ../rfc/5321:2093 ../rfc/5321:2453
 	c.rset()
@@ -1505,7 +1515,7 @@ func (c *conn) cmdData(p *parser) {
 			c.log.Check(err, "removing temporary message file")
 		}
 	}()
-	msgWriter := &message.Writer{Writer: dataFile}
+	msgWriter := message.NewWriter(dataFile)
 	dr := smtp.NewDataReader(c.r)
 	n, err := io.Copy(&limitWriter{maxSize: c.maxMessageSize, w: msgWriter}, dr)
 	c.xtrace(mlog.LevelTrace) // Restore.
@@ -1534,7 +1544,7 @@ func (c *conn) cmdData(p *parser) {
 	// Basic sanity checks on messages before we send them out to the world. Just
 	// trying to be strict in what we do to others and liberal in what we accept.
 	if c.submission {
-		if !msgWriter.HaveHeaders {
+		if !msgWriter.HaveBody {
 			// ../rfc/6409:541
 			xsmtpUserErrorf(smtp.C554TransactionFailed, smtp.SeMsg6Other0, "message requires both header and body section")
 		}
@@ -1548,9 +1558,9 @@ func (c *conn) cmdData(p *parser) {
 
 	if Localserve {
 		// Require that message can be parsed fully.
-		p, err := message.Parse(dataFile)
+		p, err := message.Parse(c.log, false, dataFile)
 		if err == nil {
-			err = p.Walk(nil)
+			err = p.Walk(c.log, nil)
 		}
 		if err != nil {
 			// ../rfc/6409:541
@@ -1661,7 +1671,7 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 	// for other users.
 	// We don't check the Sender field, there is no expectation of verification, ../rfc/7489:2948
 	// and with Resent headers it seems valid to have someone else as Sender. ../rfc/5322:1578
-	msgFrom, header, err := message.From(dataFile)
+	msgFrom, header, err := message.From(c.log, true, dataFile)
 	if err != nil {
 		metricSubmission.WithLabelValues("badmessage").Inc()
 		c.log.Infox("parsing message From address", err, mlog.Field("user", c.username))
@@ -1771,10 +1781,6 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 		}
 
 		xmsgPrefix := append([]byte(recvHdrFor(rcptAcc.rcptTo.String())), msgPrefix...)
-		// todo: don't convert the headers to a body? it seems the body part is optional. does this have consequences for us in other places? ../rfc/5322:343
-		if !msgWriter.HaveHeaders {
-			xmsgPrefix = append(xmsgPrefix, "\r\n"...)
-		}
 
 		msgSize := int64(len(xmsgPrefix)) + msgWriter.Size
 		if _, err := queue.Add(ctx, c.log, c.account.Name, *c.mailFrom, rcptAcc.rcptTo, msgWriter.Has8bit, c.smtputf8, msgSize, messageID, xmsgPrefix, dataFile, nil, i == len(c.recipients)-1); err != nil {
@@ -1858,7 +1864,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 
 	// todo: in decision making process, if we run into (some) temporary errors, attempt to continue. if we decide to accept, all good. if we decide to reject, we'll make it a temporary reject.
 
-	msgFrom, headers, err := message.From(dataFile)
+	msgFrom, headers, err := message.From(c.log, false, dataFile)
 	if err != nil {
 		c.log.Infox("parsing message for From address", err)
 	}
@@ -1897,6 +1903,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			if x != nil {
 				c.log.Error("dkim verify panic", mlog.Field("err", x))
 				debug.PrintStack()
+				metrics.PanicInc(metrics.Dkimverify)
 			}
 		}()
 		defer wg.Done()
@@ -1930,8 +1937,9 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		defer func() {
 			x := recover() // Should not happen, but don't take program down if it does.
 			if x != nil {
-				c.log.Error("dkim verify panic", mlog.Field("err", x))
+				c.log.Error("spf verify panic", mlog.Field("err", x))
 				debug.PrintStack()
+				metrics.PanicInc(metrics.Spfverify)
 			}
 		}()
 		defer wg.Done()
@@ -2118,16 +2126,16 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 	// Prepare for analyzing content, calculating reputation.
 	ipmasked1, ipmasked2, ipmasked3 := ipmasked(c.remoteIP)
 	var verifiedDKIMDomains []string
+	dkimSeen := map[string]bool{}
 	for _, r := range dkimResults {
 		// A message can have multiple signatures for the same identity. For example when
 		// signing the message multiple times with different algorithms (rsa and ed25519).
-		seen := map[string]bool{}
 		if r.Status != dkim.StatusPass {
 			continue
 		}
 		d := r.Sig.Domain.Name()
-		if !seen[d] {
-			seen[d] = true
+		if !dkimSeen[d] {
+			dkimSeen[d] = true
 			verifiedDKIMDomains = append(verifiedDKIMDomains, d)
 		}
 	}
@@ -2283,9 +2291,6 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 				receivedSPF.Header() +
 				recvHdrFor(rcptAcc.rcptTo.String()),
 		)
-		if !msgWriter.HaveHeaders {
-			msgPrefix = append(msgPrefix, "\r\n"...)
-		}
 
 		m := &store.Message{
 			Received:           time.Now(),
@@ -2322,7 +2327,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		if !a.accept {
 			conf, _ := acc.Conf()
 			if conf.RejectsMailbox != "" {
-				present, messageid, messagehash, err := rejectPresent(log, acc, conf.RejectsMailbox, m, dataFile)
+				present, _, messagehash, err := rejectPresent(log, acc, conf.RejectsMailbox, m, dataFile)
 				if err != nil {
 					log.Errorx("checking whether reject is already present", err)
 				} else if !present {
@@ -2331,7 +2336,6 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 					// Regular automatic junk flags configuration applies to these messages. The
 					// default is to treat these as neutral, so they won't cause outright rejections
 					// due to reputation for later delivery attempts.
-					m.MessageID = messageid
 					m.MessageHash = messagehash
 					acc.WithWLock(func() {
 						hasSpace := true
@@ -2385,7 +2389,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			}
 		}
 
-		// If a forwarded message and this is a first-time sender, wait before actually
+		// If this is a first-time sender and not a forwarded message, wait before actually
 		// delivering. If this turns out to be a spammer, we've kept one of their
 		// connections busy.
 		if delayFirstTime && !m.IsForward && a.reason == reasonNoBadSignals && c.firstTimeSenderDelay > 0 {
@@ -2395,7 +2399,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 
 		// Gather the message-id before we deliver and the file may be consumed.
 		if !parsedMessageID {
-			if p, err := message.Parse(store.FileMsgReader(m.MsgPrefix, dataFile)); err != nil {
+			if p, err := message.Parse(c.log, false, store.FileMsgReader(m.MsgPrefix, dataFile)); err != nil {
 				log.Infox("parsing message for message-id", err)
 			} else if header, err := p.Header(); err != nil {
 				log.Infox("parsing message header for message-id", err)
@@ -2427,8 +2431,8 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			log.Info("incoming message delivered", mlog.Field("reason", a.reason), mlog.Field("msgfrom", msgFrom))
 
 			conf, _ := acc.Conf()
-			if conf.RejectsMailbox != "" && messageID != "" {
-				if err := acc.RejectsRemove(log, conf.RejectsMailbox, messageID); err != nil {
+			if conf.RejectsMailbox != "" && m.MessageID != "" {
+				if err := acc.RejectsRemove(log, conf.RejectsMailbox, m.MessageID); err != nil {
 					log.Errorx("removing message from rejects mailbox", err, mlog.Field("messageid", messageID))
 				}
 			}

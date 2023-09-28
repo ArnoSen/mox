@@ -185,6 +185,20 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 	var mdnewf, mdcurf *os.File
 	var msgreader store.MsgSource
 
+	// Open account, creating a database file if it doesn't exist yet. It must be known
+	// in the configuration file.
+	a, err := store.OpenAccount(account)
+	ctl.xcheck(err, "opening account")
+	defer func() {
+		if a != nil {
+			err := a.Close()
+			ctl.log.Check(err, "closing account after import")
+		}
+	}()
+
+	err = a.ThreadingWait(ctl.log)
+	ctl.xcheck(err, "waiting for account thread upgrade")
+
 	defer func() {
 		if mboxf != nil {
 			err := mboxf.Close()
@@ -197,17 +211,6 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 		if mdcurf != nil {
 			err := mdcurf.Close()
 			ctl.log.Check(err, "closing maildir cur after import")
-		}
-	}()
-
-	// Open account, creating a database file if it doesn't exist yet. It must be known
-	// in the configuration file.
-	a, err := store.OpenAccount(account)
-	ctl.xcheck(err, "opening account")
-	defer func() {
-		if a != nil {
-			err := a.Close()
-			ctl.log.Check(err, "closing account after import")
 		}
 	}()
 
@@ -253,7 +256,7 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 		if x != ctl.x {
 			ctl.log.Error("import error", mlog.Field("panic", fmt.Errorf("%v", x)))
 			debug.PrintStack()
-			metrics.PanicInc("import")
+			metrics.PanicInc(metrics.Import)
 		} else {
 			ctl.log.Error("import error")
 		}
@@ -277,7 +280,8 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 		const consumeFile = true
 		const sync = false
 		const notrain = true
-		err := a.DeliverMessage(ctl.log, tx, m, mf, consumeFile, sync, notrain)
+		const nothreads = true
+		err := a.DeliverMessage(ctl.log, tx, m, mf, consumeFile, sync, notrain, nothreads)
 		ctl.xcheck(err, "delivering message")
 		deliveredIDs = append(deliveredIDs, m.ID)
 		ctl.log.Debug("delivered message", mlog.Field("id", m.ID))
@@ -325,12 +329,17 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 			mb.Add(m.MailboxCounts())
 
 			// Parse message and store parsed information for later fast retrieval.
-			p, err := message.EnsurePart(msgf, m.Size)
+			p, err := message.EnsurePart(ctl.log, false, msgf, m.Size)
 			if err != nil {
 				ctl.log.Infox("parsing message, continuing", err, mlog.Field("path", origPath))
 			}
 			m.ParsedBuf, err = json.Marshal(p)
 			ctl.xcheck(err, "marshal parsed message structure")
+
+			// Set fields needed for future threading. By doing it now, DeliverMessage won't
+			// have to parse the Part again.
+			p.SetReaderAt(store.FileMsgReader(m.MsgPrefix, msgf))
+			m.PrepareThreading(ctl.log, &p)
 
 			if m.Received.IsZero() {
 				if p.Envelope != nil && !p.Envelope.Date.IsZero() {
@@ -343,7 +352,7 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 			// We set the flags that Deliver would set now and train ourselves. This prevents
 			// Deliver from training, which would open the junk filter, change it, and write it
 			// back to disk, for each message (slow).
-			m.JunkFlagsForMailbox(mb.Name, conf)
+			m.JunkFlagsForMailbox(mb, conf)
 			if jf != nil && m.NeedsTraining() {
 				if words, err := jf.ParseMessage(p); err != nil {
 					ctl.log.Infox("parsing message for updating junk filter", err, mlog.Field("parse", ""), mlog.Field("path", origPath))
@@ -383,6 +392,12 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 			ctl.xcheck(err, "reading next message")
 
 			process(m, msgf, origPath)
+		}
+
+		// Match threads.
+		if len(deliveredIDs) > 0 {
+			err = a.AssignThreads(ctx, ctl.log, tx, deliveredIDs[0], 0, io.Discard)
+			ctl.xcheck(err, "assigning messages to threads")
 		}
 
 		// Get mailbox again, uidnext is likely updated.

@@ -13,6 +13,11 @@ describe-static" and "mox config describe-domains":
 
 # mox.conf
 
+	# NOTE: This config file is in 'sconf' format. Indent with tabs. Comments must be
+	# on their own line, they don't end a line. Do not escape or quote strings.
+	# Details: https://pkg.go.dev/github.com/mjl-/sconf.
+
+
 	# Directory where all data is stored, e.g. queue, accounts and messages, ACME TLS
 	# certs/keys. If this is a relative path, it is relative to the directory of
 	# mox.conf.
@@ -45,8 +50,8 @@ describe-static" and "mox config describe-domains":
 
 	# If enabled, a single DNS TXT lookup of _updates.xmox.nl is done every 24h to
 	# check for a new release. Each time a new release is found, a changelog is
-	# fetched from https://updates.xmox.nl and delivered to the postmaster mailbox.
-	# (optional)
+	# fetched from https://updates.xmox.nl/changelog and delivered to the postmaster
+	# mailbox. (optional)
 	CheckUpdates: false
 
 	# In pedantic mode protocol violations (that happen in the wild) for SMTP/IMAP/etc
@@ -110,9 +115,15 @@ describe-static" and "mox config describe-domains":
 			IPs:
 				-
 
-			# Set this if the specified IPs are not the public IPs, but are NATed. This makes
-			# the DNS check skip a few checks related to IPs, such as for iprev, mx, spf,
-			# autoconfig, autodiscover. (optional)
+			# If set, the mail server is configured behind a NAT and field IPs are internal
+			# instead of the public IPs, while NATIPs lists the public IPs. Used during
+			# IP-related DNS self-checks, such as for iprev, mx, spf, autoconfig,
+			# autodiscover, and for autotls. (optional)
+			NATIPs:
+				-
+
+			# Deprecated, use NATIPs instead. If set, IPs are not the public IPs, but are
+			# NATed. Skips IP-related DNS self-checks. (optional)
 			IPsNATed: false
 
 			# If empty, the config global Hostname is used. (optional)
@@ -166,7 +177,8 @@ describe-static" and "mox config describe-domains":
 				# block list provider. If any of the listed DNSBLs contains a requested IP
 				# address, the message is rejected as spam. The DNSBLs are checked for healthiness
 				# before use, at most once per 4 hours. Example DNSBLs: sbl.spamhaus.org,
-				# bl.spamcop.net (optional)
+				# bl.spamcop.net. See https://www.spamhaus.org/sbl/ and https://www.spamcop.net/
+				# for more information and terms of use. (optional)
 				DNSBLs:
 					-
 
@@ -519,6 +531,11 @@ describe-static" and "mox config describe-domains":
 
 # domains.conf
 
+	# NOTE: This config file is in 'sconf' format. Indent with tabs. Comments must be
+	# on their own line, they don't end a line. Do not escape or quote strings.
+	# Details: https://pkg.go.dev/github.com/mjl-/sconf.
+
+
 	# Domains for which email is accepted. For internationalized domains, use their
 	# IDNA names in UTF-8.
 	Domains:
@@ -594,6 +611,10 @@ describe-static" and "mox config describe-domains":
 				# non-internationalized. Recommended value: dmarc-reports.
 				Localpart:
 
+				# Alternative domain for report recipient address. Can be used to receive reports
+				# for other domains. Unicode name. (optional)
+				Domain:
+
 				# Account to deliver to.
 				Account:
 
@@ -632,6 +653,10 @@ describe-static" and "mox config describe-domains":
 				# Address-part before the @ that accepts TLSRPT reports. Recommended value:
 				# tls-reports.
 				Localpart:
+
+				# Alternative domain for report recipient address. Can be used to receive reports
+				# for other domains. Unicode name. (optional)
+				Domain:
 
 				# Account to deliver to.
 				Account:
@@ -902,6 +927,13 @@ describe-static" and "mox config describe-domains":
 			# to HTTPS. If you don't have a HTTPS webserver configured, set this to true.
 			# (optional)
 			DontRedirectPlainHTTP: false
+
+			# Transparently compress responses (currently with gzip) if the client supports
+			# it, the status is 200 OK, no Content-Encoding is set on the response yet and the
+			# Content-Type of the response hints that the data is compressible (text/...,
+			# specific application/... and .../...+json and .../...+xml). For static files
+			# only, a cache with compressed files is kept. (optional)
+			Compress: false
 
 			# Serve static files. (optional)
 			WebStatic:

@@ -1,3 +1,7 @@
+// Package webadmin is a web app for the mox administrator for viewing and changing
+// the configuration, like creating/removing accounts, viewing DMARC and TLS
+// reports, check DNS records for a domain, change the webserver configuration,
+// etc.
 package webadmin
 
 import (
@@ -15,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -45,6 +50,7 @@ import (
 	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/mtasts"
 	"github.com/mjl-/mox/mtastsdb"
+	"github.com/mjl-/mox/publicsuffix"
 	"github.com/mjl-/mox/queue"
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/spf"
@@ -361,7 +367,7 @@ func logPanic(ctx context.Context) {
 	log := xlog.WithContext(ctx)
 	log.Error("recover from panic", mlog.Field("panic", x))
 	debug.PrintStack()
-	metrics.PanicInc("http")
+	metrics.PanicInc(metrics.Webadmin)
 }
 
 // return IPs we may be listening on.
@@ -455,13 +461,19 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 		}
 	}
 
-	// If at least one listener with SMTP enabled has specified NATed IPs, we'll skip
+	// If at least one listener with SMTP enabled has unspecified NATed IPs, we'll skip
 	// some checks related to these IPs.
-	var isNAT bool
+	var isNAT, isUnspecifiedNAT bool
 	for _, l := range mox.Conf.Static.Listeners {
-		if l.IPsNATed && l.SMTP.Enabled {
+		if !l.SMTP.Enabled {
+			continue
+		}
+		if l.IPsNATed {
+			isUnspecifiedNAT = true
 			isNAT = true
-			break
+		}
+		if len(l.NATIPs) > 0 {
+			isNAT = true
 		}
 	}
 
@@ -473,16 +485,17 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		// For each mox.Conf.SpecifiedSMTPListenIPs, and each address for
+		// For each mox.Conf.SpecifiedSMTPListenIPs and all NATIPs, and each IP for
 		// mox.Conf.HostnameDomain, check if they resolve back to the host name.
 		hostIPs := map[dns.Domain][]net.IP{}
 		ips, err := resolver.LookupIP(ctx, "ip", mox.Conf.Static.HostnameDomain.ASCII+".")
 		if err != nil {
 			addf(&r.IPRev.Errors, "Looking up IPs for hostname: %s", err)
 		}
-		if !isNAT {
+
+		gatherMoreIPs := func(publicIPs []net.IP) {
 		nextip:
-			for _, ip := range mox.Conf.Static.SpecifiedSMTPListenIPs {
+			for _, ip := range publicIPs {
 				for _, xip := range ips {
 					if ip.Equal(xip) {
 						continue nextip
@@ -490,6 +503,19 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 				}
 				ips = append(ips, ip)
 			}
+		}
+		if !isNAT {
+			gatherMoreIPs(mox.Conf.Static.SpecifiedSMTPListenIPs)
+		}
+		for _, l := range mox.Conf.Static.Listeners {
+			if !l.SMTP.Enabled {
+				continue
+			}
+			var natips []net.IP
+			for _, ip := range l.NATIPs {
+				natips = append(natips, net.ParseIP(ip))
+			}
+			gatherMoreIPs(natips)
 		}
 		hostIPs[mox.Conf.Static.HostnameDomain] = ips
 
@@ -598,7 +624,7 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 				addf(&r.MX.Errors, "Looking up IPs for mx host %q: %s", mx.Host, err)
 			}
 			r.MX.Records[i].IPs = ips
-			if isNAT {
+			if isUnspecifiedNAT {
 				continue
 			}
 			if len(ourIPs) == 0 {
@@ -765,7 +791,11 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 				if !l.SMTP.Enabled || l.IPsNATed {
 					continue
 				}
-				for _, ipstr := range l.IPs {
+				ips := l.IPs
+				if len(l.NATIPs) > 0 {
+					ips = l.NATIPs
+				}
+				for _, ipstr := range ips {
 					ip := net.ParseIP(ipstr)
 					checkSPFIP(ip)
 				}
@@ -908,23 +938,43 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 		if record != nil && len(record.AggregateReportAddresses) == 0 {
 			addf(&r.DMARC.Warnings, "It is recommended you specify you would like aggregate reports about delivery success in the DMARC record, see instructions.")
 		}
-		localpart := smtp.Localpart("dmarc-reports")
+
+		dmarcr := dmarc.DefaultRecord
+		dmarcr.Policy = "reject"
+
+		var extInstr string
 		if domConf.DMARC != nil {
-			localpart = domConf.DMARC.ParsedLocalpart
+			// If the domain is in a different Organizational Domain, the receiving domain
+			// needs a special DNS record to opt-in to receiving reports. We check for that
+			// record.
+			// ../rfc/7489:1541
+			orgDom := publicsuffix.Lookup(ctx, domain)
+			destOrgDom := publicsuffix.Lookup(ctx, domConf.DMARC.DNSDomain)
+			if orgDom != destOrgDom {
+				accepts, status, _, _, err := dmarc.LookupExternalReportsAccepted(ctx, resolver, domain, domConf.DMARC.DNSDomain)
+				if status != dmarc.StatusNone {
+					addf(&r.DMARC.Errors, "Checking if external destination accepts reports: %s", err)
+				} else if !accepts {
+					addf(&r.DMARC.Errors, "External destination does not accept reports (%s)", err)
+				}
+				extInstr = fmt.Sprintf("Ensure a DNS TXT record exists in the domain of the destination address to opt-in to receiving reports from this domain:\n\n\t%s._report._dmarc.%s. IN TXT \"v=DMARC1;\"\n\n", domain.ASCII, domConf.DMARC.DNSDomain.ASCII)
+			}
+
+			uri := url.URL{
+				Scheme: "mailto",
+				Opaque: smtp.NewAddress(domConf.DMARC.ParsedLocalpart, domConf.DMARC.DNSDomain).Pack(false),
+			}
+			dmarcr.AggregateReportAddresses = []dmarc.URI{
+				{Address: uri.String(), MaxSize: 10, Unit: "m"},
+			}
 		} else {
-			addf(&r.DMARC.Instructions, `Configure a DMARC destination in domain in config file. Localpart could be %q.`, localpart)
-		}
-		dmarcr := dmarc.Record{
-			Version: "DMARC1",
-			Policy:  "reject",
-			AggregateReportAddresses: []dmarc.URI{
-				{Address: fmt.Sprintf("mailto:%s!10m", smtp.NewAddress(localpart, domain).Pack(false))},
-			},
-			AggregateReportingInterval: 86400,
-			Percentage:                 100,
+			addf(&r.DMARC.Instructions, `Configure a DMARC destination in domain in config file.`)
 		}
 		instr := fmt.Sprintf("Ensure a DNS TXT record like the following exists:\n\n\t_dmarc IN TXT %s\n\nYou can start with testing mode by replacing p=reject with p=none. You can also request for the policy to be applied to a percentage of emails instead of all, by adding pct=X, with X between 0 and 100. Keep in mind that receiving mail servers will apply some anti-spam assessment regardless of the policy and whether it is applied to the message. The ruf= part requests daily aggregate reports to be sent to the specified address, which is automatically configured and reports automatically analyzed.", mox.TXTStrings(dmarcr.String()))
 		addf(&r.DMARC.Instructions, instr)
+		if extInstr != "" {
+			addf(&r.DMARC.Instructions, extInstr)
+		}
 	}()
 
 	// TLSRPT
@@ -942,23 +992,31 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 			r.TLSRPT.Record = &TLSRPTRecord{*record}
 		}
 
-		localpart := smtp.Localpart("tls-reports")
+		instr := `TLSRPT is an opt-in mechanism to request feedback about TLS connectivity from remote SMTP servers when they connect to us. It allows detecting delivery problems and unwanted downgrades to plaintext SMTP connections. With TLSRPT you configure an email address to which reports should be sent. Remote SMTP servers will send a report once a day with the number of successful connections, and the number of failed connections including details that should help debugging/resolving any issues.`
 		if domConf.TLSRPT != nil {
-			localpart = domConf.TLSRPT.ParsedLocalpart
-		} else {
-			addf(&r.TLSRPT.Errors, `Configure a TLSRPT destination in domain in config file. Localpart could be %q.`, localpart)
-		}
-		tlsrptr := &tlsrpt.Record{
-			Version: "TLSRPTv1",
-			// todo: should URI-encode the URI, including ',', '!' and ';'.
-			RUAs: [][]string{{fmt.Sprintf("mailto:%s", smtp.NewAddress(localpart, domain).Pack(false))}},
-		}
-		instr := fmt.Sprintf(`TLSRPT is an opt-in mechanism to request feedback about TLS connectivity from remote SMTP servers when they connect to us. It allows detecting delivery problems and unwanted downgrades to plaintext SMTP connections. With TLSRPT you configure an email address to which reports should be sent. Remote SMTP servers will send a report once a day with the number of successful connections, and the number of failed connections including details that should help debugging/resolving any issues.
+			// TLSRPT does not require validation of reporting addresses outside the domain.
+			// ../rfc/8460:1463
+			uri := url.URL{
+				Scheme: "mailto",
+				Opaque: smtp.NewAddress(domConf.TLSRPT.ParsedLocalpart, domConf.TLSRPT.DNSDomain).Pack(false),
+			}
+			uristr := uri.String()
+			uristr = strings.ReplaceAll(uristr, ",", "%2C")
+			uristr = strings.ReplaceAll(uristr, "!", "%21")
+			uristr = strings.ReplaceAll(uristr, ";", "%3B")
+			tlsrptr := &tlsrpt.Record{
+				Version: "TLSRPTv1",
+				RUAs:    [][]string{{uristr}},
+			}
+			instr += fmt.Sprintf(`
 
 Ensure a DNS TXT record like the following exists:
 
 	_smtp._tls IN TXT %s
 `, mox.TXTStrings(tlsrptr.String()))
+		} else {
+			addf(&r.TLSRPT.Errors, `Configure a TLSRPT destination in domain in config file.`)
+		}
 		addf(&r.TLSRPT.Instructions, instr)
 	}()
 
@@ -1135,7 +1193,7 @@ When enabling MTA-STS, or updating a policy, always update the policy first (thr
 		}
 
 		r.Autoconf.IPs = ips
-		if !isNAT {
+		if !isUnspecifiedNAT {
 			if len(ourIPs) == 0 {
 				addf(&r.Autoconf.Errors, "Autoconfig does not point to one of our IPs.")
 			} else if len(notOurIPs) > 0 {
@@ -1171,7 +1229,7 @@ When enabling MTA-STS, or updating a policy, always update the policy first (thr
 			}
 			match = true
 			r.Autodiscover.Records = append(r.Autodiscover.Records, AutodiscoverSRV{*srv, ips})
-			if !isNAT {
+			if !isUnspecifiedNAT {
 				if len(ourIPs) == 0 {
 					addf(&r.Autodiscover.Errors, "SRV target %q does not point to our IPs.", srv.Target)
 				} else if len(notOurIPs) > 0 {
@@ -1520,7 +1578,8 @@ func (Admin) DomainRemove(ctx context.Context, domain string) {
 	xcheckf(ctx, err, "removing domain")
 }
 
-// AccountAdd adds existing a new account, with an initial email address, and reloads the configuration.
+// AccountAdd adds existing a new account, with an initial email address, and
+// reloads the configuration.
 func (Admin) AccountAdd(ctx context.Context, accountName, address string) {
 	err := mox.AccountAdd(ctx, accountName, address)
 	xcheckf(ctx, err, "adding account")
@@ -1567,13 +1626,13 @@ func (Admin) SetAccountLimits(ctx context.Context, accountName string, maxOutgoi
 	xcheckf(ctx, err, "saving account limits")
 }
 
-// ClientConfigDomain returns configurations for email clients, IMAP and
+// ClientConfigsDomain returns configurations for email clients, IMAP and
 // Submission (SMTP) for the domain.
-func (Admin) ClientConfigDomain(ctx context.Context, domain string) mox.ClientConfig {
+func (Admin) ClientConfigsDomain(ctx context.Context, domain string) mox.ClientConfigs {
 	d, err := dns.ParseDomain(domain)
 	xcheckuserf(ctx, err, "parsing domain")
 
-	cc, err := mox.ClientConfigDomain(d)
+	cc, err := mox.ClientConfigsDomain(d)
 	xcheckf(ctx, err, "client config for domain")
 	return cc
 }

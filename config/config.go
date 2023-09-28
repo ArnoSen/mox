@@ -34,14 +34,14 @@ func Port(port, fallback int) int {
 // Static is a parsed form of the mox.conf configuration file, before converting it
 // into a mox.Config after additional processing.
 type Static struct {
-	DataDir          string            `sconf-doc:"Directory where all data is stored, e.g. queue, accounts and messages, ACME TLS certs/keys. If this is a relative path, it is relative to the directory of mox.conf."`
+	DataDir          string            `sconf-doc:"NOTE: This config file is in 'sconf' format. Indent with tabs. Comments must be on their own line, they don't end a line. Do not escape or quote strings. Details: https://pkg.go.dev/github.com/mjl-/sconf.\n\n\nDirectory where all data is stored, e.g. queue, accounts and messages, ACME TLS certs/keys. If this is a relative path, it is relative to the directory of mox.conf."`
 	LogLevel         string            `sconf-doc:"Default log level, one of: error, info, debug, trace, traceauth, tracedata. Trace logs SMTP and IMAP protocol transcripts, with traceauth also messages with passwords, and tracedata on top of that also the full data exchanges (full messages), which can be a large amount of data."`
 	PackageLogLevels map[string]string `sconf:"optional" sconf-doc:"Overrides of log level per package (e.g. queue, smtpclient, smtpserver, imapserver, spf, dkim, dmarc, dmarcdb, autotls, junk, mtasts, tlsrpt)."`
 	User             string            `sconf:"optional" sconf-doc:"User to switch to after binding to all sockets as root. Default: mox. If the value is not a known user, it is parsed as integer and used as uid and gid."`
 	NoFixPermissions bool              `sconf:"optional" sconf-doc:"If true, do not automatically fix file permissions when starting up. By default, mox will ensure reasonable owner/permissions on the working, data and config directories (and files), and mox binary (if present)."`
 	Hostname         string            `sconf-doc:"Full hostname of system, e.g. mail.<domain>"`
 	HostnameDomain   dns.Domain        `sconf:"-" json:"-"` // Parsed form of hostname.
-	CheckUpdates     bool              `sconf:"optional" sconf-doc:"If enabled, a single DNS TXT lookup of _updates.xmox.nl is done every 24h to check for a new release. Each time a new release is found, a changelog is fetched from https://updates.xmox.nl and delivered to the postmaster mailbox."`
+	CheckUpdates     bool              `sconf:"optional" sconf-doc:"If enabled, a single DNS TXT lookup of _updates.xmox.nl is done every 24h to check for a new release. Each time a new release is found, a changelog is fetched from https://updates.xmox.nl/changelog and delivered to the postmaster mailbox."`
 	Pedantic         bool              `sconf:"optional" sconf-doc:"In pedantic mode protocol violations (that happen in the wild) for SMTP/IMAP/etc result in errors instead of accepting such behaviour."`
 	TLS              struct {
 		CA *struct {
@@ -94,7 +94,7 @@ type SpecialUseMailboxes struct {
 
 // Dynamic is the parsed form of domains.conf, and is automatically reloaded when changed.
 type Dynamic struct {
-	Domains            map[string]Domain  `sconf-doc:"Domains for which email is accepted. For internationalized domains, use their IDNA names in UTF-8."`
+	Domains            map[string]Domain  `sconf-doc:"NOTE: This config file is in 'sconf' format. Indent with tabs. Comments must be on their own line, they don't end a line. Do not escape or quote strings. Details: https://pkg.go.dev/github.com/mjl-/sconf.\n\n\nDomains for which email is accepted. For internationalized domains, use their IDNA names in UTF-8."`
 	Accounts           map[string]Account `sconf-doc:"Accounts to which email can be delivered. An account can accept email for multiple domains, for multiple localparts, and deliver to multiple mailboxes."`
 	WebDomainRedirects map[string]string  `sconf:"optional" sconf-doc:"Redirect all requests from domain (key) to domain (value). Always redirects to HTTPS. For plain HTTP redirects, use a WebHandler with a WebRedirect."`
 	WebHandlers        []WebHandler       `sconf:"optional" sconf-doc:"Handle webserver requests by serving static files, redirecting or reverse-proxying HTTP(s). The first matching WebHandler will handle the request. Built-in handlers, e.g. for account, admin, autoconfig and mta-sts always run first. If no handler matches, the response status code is file not found (404). If functionality you need is missng, simply forward the requests to an application that can provide the needed functionality."`
@@ -114,7 +114,8 @@ type ACME struct {
 
 type Listener struct {
 	IPs            []string   `sconf-doc:"Use 0.0.0.0 to listen on all IPv4 and/or :: to listen on all IPv6 addresses, but it is better to explicitly specify the IPs you want to use for email, as mox will make sure outgoing connections will only be made from one of those IPs."`
-	IPsNATed       bool       `sconf:"optional" sconf-doc:"Set this if the specified IPs are not the public IPs, but are NATed. This makes the DNS check skip a few checks related to IPs, such as for iprev, mx, spf, autoconfig, autodiscover."`
+	NATIPs         []string   `sconf:"optional" sconf-doc:"If set, the mail server is configured behind a NAT and field IPs are internal instead of the public IPs, while NATIPs lists the public IPs. Used during IP-related DNS self-checks, such as for iprev, mx, spf, autoconfig, autodiscover, and for autotls."`
+	IPsNATed       bool       `sconf:"optional" sconf-doc:"Deprecated, use NATIPs instead. If set, IPs are not the public IPs, but are NATed. Skips IP-related DNS self-checks."`
 	Hostname       string     `sconf:"optional" sconf-doc:"If empty, the config global Hostname is used."`
 	HostnameDomain dns.Domain `sconf:"-" json:"-"` // Set when parsing config.
 
@@ -125,7 +126,7 @@ type Listener struct {
 		Port            int      `sconf:"optional" sconf-doc:"Default 25."`
 		NoSTARTTLS      bool     `sconf:"optional" sconf-doc:"Do not offer STARTTLS to secure the connection. Not recommended."`
 		RequireSTARTTLS bool     `sconf:"optional" sconf-doc:"Do not accept incoming messages if STARTTLS is not active. Can be used in combination with a strict MTA-STS policy. A remote SMTP server may not support TLS and may not be able to deliver messages."`
-		DNSBLs          []string `sconf:"optional" sconf-doc:"Addresses of DNS block lists for incoming messages. Block lists are only consulted for connections/messages without enough reputation to make an accept/reject decision. This prevents sending IPs of all communications to the block list provider. If any of the listed DNSBLs contains a requested IP address, the message is rejected as spam. The DNSBLs are checked for healthiness before use, at most once per 4 hours. Example DNSBLs: sbl.spamhaus.org, bl.spamcop.net"`
+		DNSBLs          []string `sconf:"optional" sconf-doc:"Addresses of DNS block lists for incoming messages. Block lists are only consulted for connections/messages without enough reputation to make an accept/reject decision. This prevents sending IPs of all communications to the block list provider. If any of the listed DNSBLs contains a requested IP address, the message is rejected as spam. The DNSBLs are checked for healthiness before use, at most once per 4 hours. Example DNSBLs: sbl.spamhaus.org, bl.spamcop.net. See https://www.spamhaus.org/sbl/ and https://www.spamcop.net/ for more information and terms of use."`
 
 		FirstTimeSenderDelay *time.Duration `sconf:"optional" sconf-doc:"Delay before accepting a message from a first-time sender for the destination account. Default: 15s."`
 
@@ -271,10 +272,12 @@ type Domain struct {
 
 type DMARC struct {
 	Localpart string `sconf-doc:"Address-part before the @ that accepts DMARC reports. Must be non-internationalized. Recommended value: dmarc-reports."`
+	Domain    string `sconf:"optional" sconf-doc:"Alternative domain for report recipient address. Can be used to receive reports for other domains. Unicode name."`
 	Account   string `sconf-doc:"Account to deliver to."`
 	Mailbox   string `sconf-doc:"Mailbox to deliver to, e.g. DMARC."`
 
 	ParsedLocalpart smtp.Localpart `sconf:"-"`
+	DNSDomain       dns.Domain     `sconf:"-"` // Effective domain, always set based on Domain field or Domain where this is configured.
 }
 
 type MTASTS struct {
@@ -287,10 +290,12 @@ type MTASTS struct {
 
 type TLSRPT struct {
 	Localpart string `sconf-doc:"Address-part before the @ that accepts TLSRPT reports. Recommended value: tls-reports."`
+	Domain    string `sconf:"optional" sconf-doc:"Alternative domain for report recipient address. Can be used to receive reports for other domains. Unicode name."`
 	Account   string `sconf-doc:"Account to deliver to."`
 	Mailbox   string `sconf-doc:"Mailbox to deliver to, e.g. TLSRPT."`
 
 	ParsedLocalpart smtp.Localpart `sconf:"-"`
+	DNSDomain       dns.Domain     `sconf:"-"` // Effective domain, always set based on Domain field or Domain where this is configured.
 }
 
 type Selector struct {
@@ -432,6 +437,7 @@ type WebHandler struct {
 	Domain                string       `sconf-doc:"Both Domain and PathRegexp must match for this WebHandler to match a request. Exactly one of WebStatic, WebRedirect, WebForward must be set."`
 	PathRegexp            string       `sconf-doc:"Regular expression matched against request path, must always start with ^ to ensure matching from the start of the path. The matching prefix can optionally be stripped by WebForward. The regular expression does not have to end with $."`
 	DontRedirectPlainHTTP bool         `sconf:"optional" sconf-doc:"If set, plain HTTP requests are not automatically permanently redirected (308) to HTTPS. If you don't have a HTTPS webserver configured, set this to true."`
+	Compress              bool         `sconf:"optional" sconf-doc:"Transparently compress responses (currently with gzip) if the client supports it, the status is 200 OK, no Content-Encoding is set on the response yet and the Content-Type of the response hints that the data is compressible (text/..., specific application/... and .../...+json and .../...+xml). For static files only, a cache with compressed files is kept."`
 	WebStatic             *WebStatic   `sconf:"optional" sconf-doc:"Serve static files."`
 	WebRedirect           *WebRedirect `sconf:"optional" sconf-doc:"Redirect requests to configured URL."`
 	WebForward            *WebForward  `sconf:"optional" sconf-doc:"Forward requests to another webserver, i.e. reverse proxy."`
