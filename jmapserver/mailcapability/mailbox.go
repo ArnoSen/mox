@@ -25,10 +25,11 @@ func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 	retAccountId = accountId
 
 	mailboxes, notFound, state, mErr := jaccount.GetMailboxes(ctx, ids)
+
 	for _, mb := range mailboxes {
 		//FIXME do not filtering on properties
 		list = append(list, mb)
 	}
 
-	return
+	return accountId, state, list, notFound, mErr
 }

@@ -193,7 +193,7 @@ func NewJMailboxes(hierarchyDelimiter string, mbs ...JMailbox) JMailboxes {
 	}
 }
 
-func (jmbs JMailboxes) AddMailbox(mb JMailbox) {
+func (jmbs *JMailboxes) AddMailbox(mb JMailbox) {
 	jmbs.Mbs = append(jmbs.Mbs, mb)
 }
 
