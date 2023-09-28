@@ -5,8 +5,10 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"os/user"
+
+	"github.com/mjl-/mox/jmapserver/user"
 
 	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"
@@ -103,19 +105,24 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctUserxVal := r.Context().Value(sh.contextUserKey)
 	user, ok := ctUserxVal.(user.User)
-	if !ok || user.Username == "" {
+	if !ok || user.Email == "" {
+		if !ok {
+			sh.logger.Debug(fmt.Sprintf("ctxUserxVal is not of type user.User but %T", ctUserxVal))
+		} else {
+			sh.logger.Debug("username is context valu of type user.User is empty")
+		}
 		//user is not authenticated so send error
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Username)
+	accounts, err := sh.AccountRepo.GetAccounts(r.Context(), user.Email)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Username)
+	primaryAccounts, err := sh.AccountRepo.GetPrimaryAccounts(r.Context(), user.Email)
 	if err != nil {
 		//FIXME send out a body with some more information?
 		w.WriteHeader(http.StatusInternalServerError)
@@ -127,7 +134,7 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Capabilities:    sh.Capabilities,
 		Accounts:        accounts,
 		PrimaryAccounts: primaryAccounts,
-		Username:        user.Username,
+		Username:        user.Email,
 		APIURL:          sh.APIURL,
 		DownloadURL:     sh.DownloadURL,
 		UploadURL:       sh.UploadURL,

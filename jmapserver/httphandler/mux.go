@@ -106,6 +106,7 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 		account, err := authM.OpenEmailAuthFunc(email, password)
 		if err != nil {
 			//there is no details in the spec what needs to send when the authentication fails
+			authM.Logger.Debug(fmt.Sprintf("authentication err %s", err))
 			rw.WriteHeader(http.StatusUnauthorized)
 			rw.Write([]byte("incorrect/username password"))
 			return
