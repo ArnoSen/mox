@@ -794,8 +794,8 @@ loopUsing:
 
 			type queryRequest struct {
 				AccountId            basetypes.Id           `json:"accountId"`
-				Filter               *datatyper.Filter      `json:"filter"`
-				Sort                 []datatyper.Comparator `json:"sort"`
+				Filter               *basetypes.Filter      `json:"filter"`
+				Sort                 []basetypes.Comparator `json:"sort"`
 				Position             basetypes.Int          `json:"position"`
 				Anchor               *basetypes.Id          `json:"anchor"`
 				AnchorOffset         basetypes.Int          `json:"anchorOffset"`
@@ -825,7 +825,32 @@ loopUsing:
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
-			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
+
+			//pass in the jaccount
+			userIface := r.Context().Value(ah.contextUserKey)
+			if userIface == nil {
+				ah.logger.Debug("no user found in context")
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			userObj, ok := userIface.(user.User)
+			if !ok {
+				ah.logger.Debug("user is not of type user.User", mlog.Field("unexpectedtype", fmt.Sprintf("%T", userIface)))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			mAccount, err := ah.AccountOpener(userObj.Name)
+			if err != nil {
+				ah.logger.Debug("error opening account", mlog.Field("err", err.Error()), mlog.Field("accountname", userObj.Email))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+			//FIXME need to decide when/how to close accounts. Probably I should have some map with open accounts so multi queries run more efficient
+			defer mAccount.Close()
+
+			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -852,8 +877,8 @@ loopUsing:
 
 			type queryChangesRequest struct {
 				AccountId       basetypes.Id           `json:"accountId"`
-				Filter          *datatyper.Filter      `json:"filter"`
-				Sort            []datatyper.Comparator `json:"sort"`
+				Filter          *basetypes.Filter      `json:"filter"`
+				Sort            []basetypes.Comparator `json:"sort"`
 				SinceQueryState string                 `json:"sinceQueryState"`
 				MaxChanges      *basetypes.Uint        `json:"maxChanges"`
 				UpToId          *basetypes.Id          `json:"upToId"`

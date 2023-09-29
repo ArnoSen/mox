@@ -1,10 +1,16 @@
 package mailcapability
 
 import (
+	"context"
+
 	"github.com/mjl-/mox/jmapserver/basetypes"
+	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
 type EmailDT struct {
+	//maxQueryLimit is the number of emails returned for a query request
+	maxQueryLimit int
 }
 
 func NewEmail() EmailDT {
@@ -13,6 +19,21 @@ func NewEmail() EmailDT {
 
 func (m EmailDT) Name() string {
 	return "Email"
+}
+
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.5
+func (m EmailDT) Query(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit *basetypes.Uint, calculateTotal bool) (retAccountId basetypes.Id, queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, retLimit basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
+
+	var adjustedLimit int = m.maxQueryLimit
+
+	if limit != nil && int(*limit) < adjustedLimit {
+		adjustedLimit = int(*limit)
+	}
+
+	state, canCalculateChanges, retPosition, ids, total, mErr := jaccount.QueryEmail(ctx, filter, sort, position, anchor, anchorOffset, adjustedLimit, calculateTotal)
+
+	panic("not implemented")
+	return accountId, state, canCalculateChanges, basetypes.Int(0), nil, 0, basetypes.Uint(adjustedLimit), nil
 }
 
 type Email struct {
