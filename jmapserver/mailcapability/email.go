@@ -24,6 +24,9 @@ func (m EmailDT) Name() string {
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.5
 func (m EmailDT) Query(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit *basetypes.Uint, calculateTotal bool) (retAccountId basetypes.Id, queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, retLimit basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
+	//FIXME
+	//Need to handle collapseThreads ../../rfc/8621:2506
+
 	var adjustedLimit int = m.maxQueryLimit
 
 	if limit != nil && int(*limit) < adjustedLimit {
@@ -32,8 +35,7 @@ func (m EmailDT) Query(ctx context.Context, jaccount jaccount.JAccounter, accoun
 
 	state, canCalculateChanges, retPosition, ids, total, mErr := jaccount.QueryEmail(ctx, filter, sort, position, anchor, anchorOffset, adjustedLimit, calculateTotal)
 
-	panic("not implemented")
-	return accountId, state, canCalculateChanges, basetypes.Int(0), nil, 0, basetypes.Uint(adjustedLimit), nil
+	return accountId, state, canCalculateChanges, basetypes.Int(retPosition), ids, total, basetypes.Uint(adjustedLimit), mErr
 }
 
 type Email struct {

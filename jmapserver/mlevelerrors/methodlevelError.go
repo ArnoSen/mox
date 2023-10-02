@@ -79,3 +79,25 @@ type SetError struct {
 	Type        ErrorType
 	Description *string
 }
+
+// Query errors
+func NewMethodLevelErrorUnsupportedFilter(msg string) *MethodLevelError {
+	return &MethodLevelError{
+		Type:        "unsupportedFilter",
+		Description: msg,
+	}
+}
+
+func NewMethodLevelErrorUnsupportedSort(msg string) *MethodLevelError {
+	return &MethodLevelError{
+		Type:        "unsupportedSort",
+		Description: msg,
+	}
+}
+
+func NewMethodLevelErrorAnchorNotFound(msg string) *MethodLevelError {
+	return &MethodLevelError{
+		Type:        "anchorNotFound",
+		Description: msg,
+	}
+}
