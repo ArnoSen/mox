@@ -3,11 +3,13 @@ package jaccount
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
 
@@ -51,6 +53,12 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 	//FIXME this implementation needs to be completed
 
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
+	ja.mlog.Debug("q type", mlog.Field("type", fmt.Sprintf("%T", q)))
+
+	q2 := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
+
+	//qTotal is a secondary query that we may need to calculate the total
+	//var qTotal bstore.QueryDB[store.Message]
 
 	if filter != nil {
 		filterCondition, ok := filter.GetFilter().(basetypes.FilterCondition)
@@ -78,6 +86,11 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 			q.FilterNonzero(store.Message{
 				MailboxID: int64(mailboxIDint),
 			})
+
+			q2.FilterNonzero(store.Message{
+				MailboxID: int64(mailboxIDint),
+			})
+
 		default:
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
 		}
@@ -89,8 +102,10 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 		case "receivedAt":
 			if s.IsAscending {
 				q.SortAsc("Received")
+				q2.SortAsc("Received")
 			}
 			q.SortDesc("Received")
+			q2.SortDesc("Received")
 		default:
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedSort("unsupported sort parameter")
 		}
@@ -100,8 +115,10 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 
 	if calculateTotal {
 		//TODO looking at the implementation of Count, maybe it is better we calc the total in the next for loop
-		totalCnt, countErr := q.Count()
+		q2.Limit(math.MaxInt)
+		totalCnt, countErr := q2.Count()
 		if countErr != nil {
+			ja.mlog.Error("error getting count", mlog.Field("err", countErr.Error()))
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 		total = basetypes.Uint(totalCnt)
@@ -119,19 +136,20 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 			continue
 		}
 
-		var id uint64
+		var id int64
 		if err := q.NextID(&id); err == bstore.ErrAbsent {
 			// No more messages.
 			// Note: if we don't iterate until an error, Close must be called on the query for cleanup.
 			break
 		} else if err != nil {
+			ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 		// The ID is fetched from the index. The full record is
 		// never read from the database. Calling Next instead
 		// of NextID does always fetch, parse and return the
 		// full record.
-		ids = append(ids, basetypes.Id(fmt.Sprintf("%s", id)))
+		ids = append(ids, basetypes.Id(fmt.Sprintf("%d", id)))
 	}
 
 	return "stubstate", false, position, ids, total, nil

@@ -13,8 +13,10 @@ type EmailDT struct {
 	maxQueryLimit int
 }
 
-func NewEmail() EmailDT {
-	return EmailDT{}
+func NewEmail(maxQueryLimit int) EmailDT {
+	return EmailDT{
+		maxQueryLimit: maxQueryLimit,
+	}
 }
 
 func (m EmailDT) Name() string {

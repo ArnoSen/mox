@@ -10,6 +10,9 @@ var _ datatyper.Getter = NewMailBox()
 
 const (
 	URN = "urn:ietf:params:jmap:mail"
+
+	//NB: this is not an officially documented limit in the RFC
+	maxEmailQueryLimit = 50
 )
 
 type MailCapabilitySettings struct {
@@ -42,7 +45,7 @@ func NewMailCapability(settings MailCapabilitySettings, contextUserKey string) *
 		datatypes: []datatyper.Datatyper{
 			NewMailBox(),
 			NewThread(),
-			NewEmail(),
+			NewEmail(maxEmailQueryLimit),
 		},
 	}
 }

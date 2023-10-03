@@ -5,6 +5,7 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
 
@@ -21,10 +22,12 @@ var _ JAccounter = &JAccount{}
 
 type JAccount struct {
 	mAccount *store.Account
+	mlog     *mlog.Log
 }
 
-func NewJAccount(mAccount *store.Account) *JAccount {
+func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
 	return &JAccount{
 		mAccount: mAccount,
+		mlog:     mlog,
 	}
 }

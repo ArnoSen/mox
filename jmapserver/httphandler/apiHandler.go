@@ -558,7 +558,7 @@ loopUsing:
 				continue
 			}
 
-			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount), finalAccountId, finalIds, finalProperties)
+			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), finalAccountId, finalIds, finalProperties)
 			mAccount.Close()
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
@@ -850,7 +850,7 @@ loopUsing:
 			//FIXME need to decide when/how to close accounts. Probably I should have some map with open accounts so multi queries run more efficient
 			defer mAccount.Close()
 
-			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
+			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -865,6 +865,25 @@ loopUsing:
 				"total":               total,
 				"limit":               retLimit,
 			}))
+
+			ah.logger.Debug("query results",
+				mlog.Field("queryState", queryState),
+				mlog.Field("canCalculateChanges", canCalculateChanges),
+				mlog.Field("position", retPosition),
+				mlog.Field("ids", func(ids []basetypes.Id) string {
+					var result string
+					for i, id := range ids {
+						if i == 0 {
+							result = string(id)
+						} else {
+							result = result + "," + string(id)
+						}
+					}
+					return result
+				}(ids)),
+				mlog.Field("total", total),
+				mlog.Field("limit", retLimit),
+			)
 
 		case "queryChanges":
 
