@@ -31,5 +31,10 @@ func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 		list = append(list, mb)
 	}
 
+	if notFound == nil {
+		//notFound cannot be null
+		notFound = []basetypes.Id{}
+	}
+
 	return accountId, state, list, notFound, mErr
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"regexp"
 	"strconv"
 	"strings"
@@ -119,7 +120,7 @@ func newInvocationResponse(methodCallID string) InvocationResponse {
 	}
 }
 
-// withArgError adds an error to a invocation reponse
+// withArgError adds an error to a invocation response
 func (inv InvocationResponse) withArgError(mErr *mlevelerrors.MethodLevelError) InvocationResponse {
 	inv.Arguments = map[string]interface{}{
 		"error": mErr,
@@ -149,8 +150,15 @@ func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, 
 			if resp.Name != resultRef.Name {
 				return mlevelerrors.NewMethodLevelErrorInvalidResultReference("method name is not matching with method call id")
 			}
+
+			//we need to make sure we have pure json as input
+			argBytes, err := json.Marshal(resp.Arguments)
+			if err != nil {
+				return mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+
 			//marshal the result of that particular call
-			jsonMessage, mlErr := resolveJSONPointer(resp.Arguments, resultRef.Path)
+			jsonMessage, mlErr := resolveJSONPointer(argBytes, resultRef.Path)
 			if mlErr != nil {
 				return mlErr
 			}
@@ -166,7 +174,8 @@ func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, 
 
 }
 
-func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMessage, *mlevelerrors.MethodLevelError) {
+func resolveJSONPointer(msg json.RawMessage, pointer string) (json.RawMessage, *mlevelerrors.MethodLevelError) {
+	//func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMessage, *mlevelerrors.MethodLevelError) {
 	//implements rfc6901
 
 	//the magic needs to happen here
@@ -177,6 +186,12 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 		- /element/arr/0/property1
 		- /element/ * /property
 	*/
+
+	var resp map[string]interface{}
+
+	if err := json.Unmarshal(msg, &resp); err != nil {
+		return nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
 
 	var result interface{}
 	if len(pointer) == 0 {
@@ -221,6 +236,11 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 
 				} else if pointerElement == "*" {
 					//we have special char '*' with it's own logic
+					if result == nil {
+						//
+						return json.RawMessage([]byte("null")), nil
+					}
+
 					arr, ok := result.([]interface{})
 					if !ok {
 						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("%s/* does not reference an array", pathUpTillNow))
@@ -238,6 +258,10 @@ func resolveJSONPointer(resp map[string]interface{}, pointer string) (json.RawMe
 					for _, arrElement := range arr {
 						arrElementMapString, ok := arrElement.(map[string]interface{})
 						if !ok {
+							//FIXME if it is not map[string]interface{}....
+							// 2 options: convert it here, or do it before we call this function: maybe we should have this fn only except json.Rawmessage
+							// so we do not care about any 'real' types here. I think that would be the best solution
+							mlog.New("mlog-singleton").Debug("unexpected type", mlog.Field("arrElement type", fmt.Sprintf("%T", arrElement)))
 							return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("elements in array referenced by '*' must be of type map[string]Object")
 						}
 
@@ -339,6 +363,7 @@ func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater Session
 
 // ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
 	//populate the reponse with the CORS headers
 	addCORSAllowedOriginHeader(w, r)
 
@@ -348,13 +373,18 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isContentTypeJSON(r.Header.Get(HeaderContentType)) {
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSONContentType(), w)
+	if r.ContentLength > int64(coreSettings.MaxSizeRequest) {
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", coreSettings.MaxSizeRequest)), w, ah.logger)
 		return
 	}
 
-	if r.ContentLength > int64(coreSettings.MaxSizeRequest) {
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", coreSettings.MaxSizeRequest)), w)
+	reqBody, err := httputil.DumpRequest(r, true)
+	if err == nil {
+		ah.logger.Debug("dump http request", mlog.Field("payload", string(reqBody)))
+	}
+
+	if !isContentTypeJSON(r.Header.Get(HeaderContentType)) {
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSONContentType(), w, ah.logger)
 		return
 	}
 
@@ -365,24 +395,24 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch e := err.(type) {
 		case *json.InvalidUnmarshalError:
 			//InvalidUnmarshalError is only returned when a non pointer is provided to Decode()
-			writeOutput(http.StatusInternalServerError, nil, w)
+			writeOutput(http.StatusInternalServerError, nil, w, ah.logger)
 			return
 		case *json.SyntaxError:
 			//SyntaxError means the JSON is invalid
-			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSON(err.Error()), w)
+			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSON(err.Error()), w, ah.logger)
 			return
 		case *json.UnmarshalTypeError:
-			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotRequest(fmt.Sprintf("error in %s", e.Field)), w)
+			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotRequest(fmt.Sprintf("error in %s", e.Field)), w, ah.logger)
 			return
 		default:
 			//have a catch all for other errors that unmarschal may throw
-			writeOutput(http.StatusInternalServerError, nil, w)
+			writeOutput(http.StatusInternalServerError, nil, w, ah.logger)
 			return
 		}
 	}
 
 	if len(request.Using) == 0 || len(request.MethodCalls) == 0 {
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotRequest("'using' empty or no method calls"), w)
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotRequest("'using' empty or no method calls"), w, ah.logger)
 		return
 	}
 
@@ -394,7 +424,7 @@ loopUsing:
 				continue loopUsing
 			}
 		}
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorUnknownCapability(fmt.Sprintf("%s is not a known capability", capabilityURN)), w)
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorUnknownCapability(fmt.Sprintf("%s is not a known capability", capabilityURN)), w, ah.logger)
 		return
 	}
 
@@ -508,7 +538,7 @@ loopUsing:
 			if requestArgs.IdsResultRef != nil {
 				//so we now have the thing that we need to insert
 				var ids []basetypes.Id
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#ids", &ids)
+				mlErr := response.getResultByRef(requestArgs.IdsResultRef, "#ids", &ids)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -518,7 +548,7 @@ loopUsing:
 
 			if requestArgs.PropertiesResultRef != nil {
 				var props []string
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#properties", &props)
+				mlErr := response.getResultByRef(requestArgs.PropertiesResultRef, "#properties", &props)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -565,13 +595,20 @@ loopUsing:
 				continue
 			}
 
-			ah.logger.Debug("got mailboxes", mlog.Field("count", len(list)))
+			//FIXME not sure if this is the place
+			//do property filtering
+			propertyFilteredList, err := filterProperties(list, finalProperties)
+			if err != nil {
+				ah.logger.Error("applying filtering failed ", mlog.Field("err", err.Error()))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
+				continue
+			}
 
 			response.addMethodResponse(invocationResponse.withArgOK(invocation.Name, map[string]interface{}{
 				//FIXME maybe this should be set entirely by the object that returns the result because some fields are not so fixed as expected
 				"accountId": retAccountId,
 				"state":     state,
-				"list":      list,
+				"list":      propertyFilteredList,
 				"notFound":  notFound,
 			}))
 
@@ -639,7 +676,7 @@ loopUsing:
 			if requestArgs.SinceStateResultRef != nil {
 				//so we now have the thing that we need to insert
 				var sinceState string
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#sinceState", &sinceState)
+				mlErr := response.getResultByRef(requestArgs.SinceStateResultRef, "#sinceState", &sinceState)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -649,7 +686,7 @@ loopUsing:
 
 			if requestArgs.MaxChangesResultRef != nil {
 				var maxChanges *basetypes.Uint
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#maxChanges", &maxChanges)
+				mlErr := response.getResultByRef(requestArgs.MaxChangesResultRef, "#maxChanges", &maxChanges)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -946,11 +983,11 @@ loopUsing:
 	}
 
 	response.SessionState = ah.SessionStater.SessionState()
-	writeOutput(200, response, w)
+	writeOutput(200, response, w, ah.logger)
 }
 
 // writeOutput encodes a the body into json and writes the output the the reponse writer
-func writeOutput(statusCode int, body interface{}, w http.ResponseWriter) {
+func writeOutput(statusCode int, body interface{}, w http.ResponseWriter, logger *mlog.Log) {
 
 	if statusCode == http.StatusInternalServerError {
 		w.WriteHeader(statusCode)
@@ -963,14 +1000,57 @@ func writeOutput(statusCode int, body interface{}, w http.ResponseWriter) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	logger.Debug("http response", mlog.Field("response", string(jsonBytes)))
+
 	w.Header().Add(HeaderContentType, HeaderContentTypeJSON)
 	w.WriteHeader(statusCode)
 	w.Write(jsonBytes)
 }
 
 func isContentTypeJSON(ct string) bool {
-	if ct == HeaderContentTypeJSON || ct == HeaderContentTypeJSONUTF8 {
+	if strings.ToLower(ct) == strings.ToLower(HeaderContentTypeJSON) || strings.ToLower(ct) == strings.ToLower(HeaderContentTypeJSONUTF8) {
 		return true
 	}
 	return false
+}
+
+func filterProperties(list []any, properties []string) ([]any, error) {
+	if len(properties) == 0 {
+		//nothing to do
+		return list, nil
+	}
+
+	//Marshal first
+	listBytes, err := json.Marshal(list)
+	if err != nil {
+		return nil, err
+	}
+
+	var myMaps []map[string]interface{}
+
+	if err := json.Unmarshal(listBytes, &myMaps); err != nil {
+		return nil, err
+	}
+
+	var result []any
+
+	for _, myMap := range myMaps {
+		for k := range myMap {
+			var propNeedsToBeIncluded bool
+			for _, prop := range properties {
+				if prop == k {
+					propNeedsToBeIncluded = true
+					break
+				}
+			}
+			if !propNeedsToBeIncluded {
+				delete(myMap, k)
+			}
+		}
+		result = append(result, myMap)
+
+	}
+
+	return result, nil
 }

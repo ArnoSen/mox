@@ -41,10 +41,13 @@ type JMAPServerHandler struct {
 	Logger        *mlog.Log
 
 	contextUserKey string
+
+	sessionCapabilityInfo map[string]interface{}
 }
 
 func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, accountOpener AccountOpener, corsAllowFrom []string, logger *mlog.Log) JMAPServerHandler {
-	return JMAPServerHandler{
+
+	result := JMAPServerHandler{
 		Hostname: hostname,
 		Port:     port,
 		Path:     path,
@@ -67,12 +70,19 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 			}),
 			mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey),
 		},
-		CORSAllowFrom:     corsAllowFrom,
-		OpenEmailAuthFunc: openEmailAuthFunc,
-		AccountOpener:     accountOpener,
-		Logger:            logger,
-		contextUserKey:    defaultContextUserKey,
+		CORSAllowFrom:         corsAllowFrom,
+		OpenEmailAuthFunc:     openEmailAuthFunc,
+		AccountOpener:         accountOpener,
+		Logger:                logger,
+		contextUserKey:        defaultContextUserKey,
+		sessionCapabilityInfo: make(map[string]interface{}),
 	}
+
+	for _, capability := range result.Capability {
+		result.sessionCapabilityInfo[capability.Urn()] = capability.SessionObjectInfo()
+	}
+
+	return result
 }
 
 type OpenEmailAuthFunc func(email, password string) (*store.Account, error)
@@ -103,6 +113,10 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 			rw.Write(nil)
 			return
 		}
+
+		//remove the auth header so it does not end up in the logs when we dump requests in debug
+		r.Header.Del("Authorization")
+
 		account, err := authM.OpenEmailAuthFunc(email, password)
 		if err != nil {
 			//there is no details in the spec what needs to send when the authentication fails
@@ -172,14 +186,6 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 
 func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
-	//instantiate subhandlers
-	sessionCapabiltyInfo := map[string]interface{}{}
-
-	for _, capability := range jh.Capability {
-		jh.Logger.Debug("adding capability", mlog.Field("urn", capability.Urn()))
-		sessionCapabiltyInfo[capability.Urn()] = capability.SessionObjectInfo()
-	}
-
 	//find out what we were called from because we need this information in the sessionHandler
 	baseURL := fmt.Sprintf("https://%s:%d", jh.Hostname, jh.Port)
 
@@ -194,7 +200,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	sessionHandler := NewSessionHandler(
 		NewAccountRepo(),
-		sessionCapabiltyInfo,
+		jh.sessionCapabilityInfo,
 		baseURL+apiPath,
 		baseURL+downloadPath,
 		baseURL+uploadPath,

@@ -466,8 +466,6 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		xlog.Debug("check path match", mlog.Field("request", r.URL.Path), mlog.Field("handlerpath", h.Path))
-
 		if r.URL.Path == h.Path || strings.HasSuffix(h.Path, "/") && strings.HasPrefix(r.URL.Path, h.Path) {
 			nw.Handler = h.Name
 			nw.Compress = true
@@ -681,6 +679,11 @@ func Listen() {
 				hostname = "localhost"
 			}
 			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, store.OpenAccount, l.JMAPHTTPS.CORSAllowOrigin, mlog.New("jmap")))
+
+			srv.Handle("jmap-wellknown", nil, "/.well-known/jmap", http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+				resp.Header().Add("Location", "/jmap/session")
+				resp.WriteHeader(http.StatusFound)
+			}))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {

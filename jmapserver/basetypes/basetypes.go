@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -20,6 +21,10 @@ func ParseId(idStr string) (Id, *mlevelerrors.MethodLevelError) {
 		return Id(""), mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("invalid id %s", idStr))
 	}
 	return Id(idStr), nil
+}
+
+func NewIdFromInt64(i int64) Id {
+	return Id(fmt.Sprintf("%d", i))
 }
 
 func (id *Id) UnmarshalJSON(b []byte) error {
@@ -44,6 +49,11 @@ func (id *Id) UnmarshalJSON(b []byte) error {
 
 func (id Id) IsEmpty() bool {
 	return len(id) == 0
+}
+
+// Int64 returns an int64 if the format is suitable. If not, an error is sent
+func (id Id) Int64() (int64, error) {
+	return strconv.ParseInt(string(id), 10, 64)
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.3
@@ -73,6 +83,11 @@ type Date time.Time
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.4
 type UTCDate time.Time
+
+func (u UTCDate) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Time(u).UTC().String())
+
+}
 
 // ParseIds parses a slice of strings into a slice of Id. If one element fails the parse, an error is returned and the failedId is returned in the response
 func ParseIds(idStrs []string) (result []Id, failedId string, mErr *mlevelerrors.MethodLevelError) {
