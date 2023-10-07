@@ -597,7 +597,10 @@ loopUsing:
 
 			//FIXME not sure if this is the place
 			//do property filtering
-			propertyFilteredList, err := filterProperties(list, finalProperties)
+			//id should be always returned even if it is not requested
+			//AAA
+			// ../../rfc/8620:1608
+			propertyFilteredList, err := filterProperties(list, append(finalProperties, "id"))
 			if err != nil {
 				ah.logger.Error("applying filtering failed ", mlog.Field("err", err.Error()))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
