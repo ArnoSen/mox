@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"strconv"
 
 	"github.com/mjl-/bstore"
@@ -142,14 +141,7 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 
 	ja.mlog.Debug("JAccount QueryEmail", mlog.Field("collapseThreads", collapseThreads))
 
-	//FIXME implement collapseThreads
-
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
-
-	q2 := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
-
-	//qTotal is a secondary query that we may need to calculate the total
-	//var qTotal bstore.QueryDB[store.Message]
 
 	if filter != nil {
 		filterCondition, ok := filter.GetFilter().(basetypes.FilterCondition)
@@ -178,14 +170,9 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 				MailboxID: int64(mailboxIDint),
 			})
 
-			q2.FilterNonzero(store.Message{
-				MailboxID: int64(mailboxIDint),
-			})
-
 		default:
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
 		}
-
 	}
 
 	for _, s := range sort {
@@ -193,47 +180,30 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 		case "receivedAt":
 			if s.IsAscending {
 				q.SortAsc("Received")
-				q2.SortAsc("Received")
 			}
 			q.SortDesc("Received")
-			q2.SortDesc("Received")
 		default:
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedSort("unsupported sort parameter")
 		}
 	}
 
-	q.Limit(int(position) + limit)
-
-	if calculateTotal {
-		//TODO looking at the implementation of Count, maybe it is better we calc the total in the next for loop
-		q2.Limit(math.MaxInt)
-		totalCnt, countErr := q2.Count()
-		if countErr != nil {
-			ja.mlog.Error("error getting count", mlog.Field("err", countErr.Error()))
-			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
-		}
-		total = basetypes.Uint(totalCnt)
-	}
+	q.Limit(limit + int(position))
 
 	var (
 		//FIXME position can also be negative. In that case results need to come from the other end of the list.
-		skip      int64 = int64(position)
-		i         int64
-		threadMap map[int64]interface{} = make(map[int64]interface{})
+		currentPos int64
+		threadMap  map[int64]interface{} = make(map[int64]interface{})
 	)
 
+search:
 	for {
-		i++
-		if i-1 < skip {
-			continue
-		}
 
 		if !collapseThreads {
 			var id int64
 			if err := q.NextID(&id); err == bstore.ErrAbsent {
 				// No more messages.
 				// Note: if we don't iterate until an error, Close must be called on the query for cleanup.
-				break
+				break search
 			} else if err != nil {
 				ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
 				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
@@ -243,20 +213,37 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 			// never read from the database. Calling Next instead
 			// of NextID does always fetch, parse and return the
 			// full record.
-			ids = append(ids, basetypes.NewIdFromInt64(id))
+			if currentPos < int64(position) {
+				continue search
+			}
+			currentPos++
+
+			if len(ids) < limit {
+				ids = append(ids, basetypes.NewIdFromInt64(id))
+			}
+			total++
 		} else {
 			msg, err := q.Next()
 			if err == bstore.ErrAbsent {
-				break
+				break search
 			} else if err != nil {
 				ja.mlog.Error("error getting message", mlog.Field("err", err.Error()))
 				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 
 			if _, ok := threadMap[msg.ThreadID]; !ok {
-				ids = append(ids, basetypes.NewIdFromInt64(msg.ID))
+
+				if currentPos < int64(position) {
+					continue search
+				}
+
+				if len(ids) < limit {
+					ids = append(ids, basetypes.NewIdFromInt64(msg.ID))
+				}
 				threadMap[msg.ThreadID] = nil
+				total++
 			}
+			currentPos++
 		}
 	}
 
