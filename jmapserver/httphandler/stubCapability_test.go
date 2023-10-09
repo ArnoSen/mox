@@ -6,6 +6,7 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
@@ -45,6 +46,11 @@ func NewStubDatatype(name string) StubDatatype {
 	}
 }
 
+var (
+	_ datatyper.Getter = StubDatatype{}
+	_ datatyper.Setter = StubDatatype{}
+)
+
 func (sdt StubDatatype) Name() string {
 	return sdt.name
 }
@@ -60,7 +66,7 @@ func (sdt StubDatatype) Echo(ctx context.Context, content json.RawMessage) (map[
 	return resp, nil
 }
 
-func (sdt StubDatatype) Get(ctx context.Context, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (sdt StubDatatype) Get(ctx context.Context, jac jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	//just return empty values
 	retAccountId = accountId
 	return

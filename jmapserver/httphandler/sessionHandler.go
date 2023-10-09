@@ -164,7 +164,7 @@ func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(sh.CacheControlHeader[0], sh.CacheControlHeader[1])
 	}
 
-	addCORSAllowedOriginHeader(w, r)
+	AddCORSAllowedOriginHeader(w, r)
 	w.Write(resultBytes)
 
 	/*

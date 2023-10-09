@@ -6,5 +6,5 @@ type DownloadHandler struct {
 }
 
 func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	addCORSAllowedOriginHeader(w, r)
+	AddCORSAllowedOriginHeader(w, r)
 }

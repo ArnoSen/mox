@@ -4,9 +4,12 @@ import (
 	"context"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
+	"github.com/mjl-/mox/jmapserver/datatyper"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
+
+var _ datatyper.Getter = &ThreadDT{}
 
 type ThreadDT struct {
 }
@@ -19,7 +22,7 @@ func (t ThreadDT) Name() string {
 	return "Thread"
 }
 
-func (tDT ThreadDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (tDT ThreadDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	state, result, notFound, mErr := jaccount.GetThread(ctx, ids)
 	for _, r := range result {
@@ -32,4 +35,8 @@ func (tDT ThreadDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 
 	return accountId, state, list, notFound, mErr
 
+}
+
+func (tDT ThreadDT) CustomGetRequestParams() any {
+	return nil
 }

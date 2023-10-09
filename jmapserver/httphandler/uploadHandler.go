@@ -6,5 +6,5 @@ type UploadHandler struct {
 }
 
 func (uh UploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	addCORSAllowedOriginHeader(w, r)
+	AddCORSAllowedOriginHeader(w, r)
 }

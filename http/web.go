@@ -680,10 +680,12 @@ func Listen() {
 			}
 			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, store.OpenAccount, l.JMAPHTTPS.CORSAllowOrigin, mlog.New("jmap")))
 
-			srv.Handle("jmap-wellknown", nil, "/.well-known/jmap", http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+			srv.Handle("jmap-wellknown", nil, "/.well-known/jmap", http.HandlerFunc(httphandler.NewCORSMiddleware(l.JMAPHTTPS.CORSAllowOrigin, []string{"Authorization", "*"}).HandleMethodOptions(func(resp http.ResponseWriter, req *http.Request) {
+				//FIXME this is ugly but it works
+				httphandler.AddCORSAllowedOriginHeader(resp, req)
 				resp.Header().Add("Location", "/jmap/session")
 				resp.WriteHeader(http.StatusFound)
-			}))
+			})))
 		}
 
 		if l.TLS != nil && l.TLS.ACME != "" {

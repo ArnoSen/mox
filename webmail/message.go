@@ -127,6 +127,7 @@ func formatFirstLine(r io.Reader) (string, error) {
 	return result, scanner.Err()
 }
 
+// AO need to understand this part well
 func parsedMessage(log *mlog.Log, m store.Message, state *msgState, full, msgitem bool) (pm ParsedMessage, rerr error) {
 	if full || msgitem {
 		if !state.ensurePart(m, true) {

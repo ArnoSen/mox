@@ -81,11 +81,16 @@ type Int int64
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.4
 type Date time.Time
 
+func (u Date) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Time(u).Format(time.RFC3339))
+
+}
+
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.4
 type UTCDate time.Time
 
 func (u UTCDate) MarshalJSON() ([]byte, error) {
-	return json.Marshal(time.Time(u).UTC().String())
+	return json.Marshal(time.Time(u).UTC().Format(time.RFC3339))
 
 }
 

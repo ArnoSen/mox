@@ -3,6 +3,7 @@ package jaccount
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 
@@ -137,9 +138,11 @@ type EmailBodyPart struct {
 	SubParts    []EmailBodyPart `json:"subParts"`
 }
 
-func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
+func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
-	//FIXME this implementation needs to be completed
+	ja.mlog.Debug("JAccount QueryEmail", mlog.Field("collapseThreads", collapseThreads))
+
+	//FIXME implement collapseThreads
 
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
 
@@ -199,7 +202,7 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 		}
 	}
 
-	q.Limit(limit)
+	q.Limit(int(position) + limit)
 
 	if calculateTotal {
 		//TODO looking at the implementation of Count, maybe it is better we calc the total in the next for loop
@@ -214,8 +217,9 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 
 	var (
 		//FIXME position can also be negative. In that case results need to come from the other end of the list.
-		skip int64 = int64(position)
-		i    int64
+		skip      int64 = int64(position)
+		i         int64
+		threadMap map[int64]interface{} = make(map[int64]interface{})
 	)
 
 	for {
@@ -224,26 +228,46 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 			continue
 		}
 
-		var id int64
-		if err := q.NextID(&id); err == bstore.ErrAbsent {
-			// No more messages.
-			// Note: if we don't iterate until an error, Close must be called on the query for cleanup.
-			break
-		} else if err != nil {
-			ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
-			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
+		if !collapseThreads {
+			var id int64
+			if err := q.NextID(&id); err == bstore.ErrAbsent {
+				// No more messages.
+				// Note: if we don't iterate until an error, Close must be called on the query for cleanup.
+				break
+			} else if err != nil {
+				ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
+				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+
+			// The ID is fetched from the index. The full record is
+			// never read from the database. Calling Next instead
+			// of NextID does always fetch, parse and return the
+			// full record.
+			ids = append(ids, basetypes.NewIdFromInt64(id))
+		} else {
+			msg, err := q.Next()
+			if err == bstore.ErrAbsent {
+				break
+			} else if err != nil {
+				ja.mlog.Error("error getting message", mlog.Field("err", err.Error()))
+				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+
+			if _, ok := threadMap[msg.ThreadID]; !ok {
+				ids = append(ids, basetypes.NewIdFromInt64(msg.ID))
+				threadMap[msg.ThreadID] = nil
+			}
 		}
-		// The ID is fetched from the index. The full record is
-		// never read from the database. Calling Next instead
-		// of NextID does always fetch, parse and return the
-		// full record.
-		ids = append(ids, basetypes.Id(fmt.Sprintf("%d", id)))
 	}
 
 	return "stubstate", false, position, ids, total, nil
 }
 
-func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+
+	//TODO:
+	// implement properties:  blobId, inReplyTo, references, header:list-id:asText, header:list-post:asURLs, replyTo, sentAt, bodyStructure, bodyValues
+	// implement body parameters: partId, blobId, size, name, type, charset, disposition, cid, location
 
 	for _, id := range ids {
 		idInt64, err := id.Int64()
@@ -268,6 +292,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 
 		resultElement := Email{
 			EmailMetadata: EmailMetadata{
+				Id:       id,
 				ThreadId: basetypes.NewIdFromInt64(em.ThreadID),
 				MailboxIds: map[basetypes.Id]bool{
 					basetypes.NewIdFromInt64(em.MailboxID): true,
@@ -277,16 +302,18 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 				Keywords:   flagsToKeywords(em.Flags),
 			},
 			EmailBodyParts: EmailBodyParts{
-				Preview: "this is a preview",
+				Preview: "<preview not available>",
 			},
 		}
 
-		if HasAny(properties, "from", "subject", "to", "messageId", "date") {
+		if HasAny(properties, "from", "subject", "to", "messageId", "date", "sender", "preview") {
 			part, err := em.LoadPart(ja.mAccount.MessageReader(em))
 			if err != nil {
 				ja.mlog.Error("error load message part", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
+
+			ja.mlog.Debug("dump part", mlog.Field("var", part.VarString()))
 
 			if env := part.Envelope; env != nil {
 				resultElement.HeaderFieldsProperties.MessageId = []string{env.MessageID}
@@ -302,9 +329,25 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 				for _, to := range env.To {
 					resultElement.HeaderFieldsProperties.To = append(resultElement.HeaderFieldsProperties.To, msgAddressToEmailAddress(to))
 				}
+				for _, cc := range env.CC {
+					resultElement.HeaderFieldsProperties.CC = append(resultElement.HeaderFieldsProperties.CC, msgAddressToEmailAddress(cc))
+				}
 				for _, bcc := range env.BCC {
 					resultElement.HeaderFieldsProperties.BCC = append(resultElement.HeaderFieldsProperties.BCC, msgAddressToEmailAddress(bcc))
 				}
+				for _, sender := range env.Sender {
+					resultElement.HeaderFieldsProperties.Sender = append(resultElement.HeaderFieldsProperties.Sender, msgAddressToEmailAddress(sender))
+				}
+			}
+
+			//read the whole body and see what we got
+			fullBody, err := io.ReadAll(part.Reader())
+			if err != nil {
+				ja.mlog.Error("error loading body", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			} else if len(fullBody) < 100 {
+				resultElement.EmailBodyParts.Preview = string(fullBody)
+			} else {
+				resultElement.EmailBodyParts.Preview = string(fullBody[:100])
 			}
 		}
 

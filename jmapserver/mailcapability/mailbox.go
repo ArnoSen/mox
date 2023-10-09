@@ -21,7 +21,7 @@ func (m MailboxDT) Name() string {
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
-func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	retAccountId = accountId
 
 	mailboxes, notFound, state, mErr := jaccount.GetMailboxes(ctx, ids)
@@ -37,4 +37,8 @@ func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 	}
 
 	return accountId, state, list, notFound, mErr
+}
+
+func (m MailboxDT) CustomGetRequestParams() any {
+	return nil
 }

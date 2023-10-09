@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/text/encoding/ianaindex"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/moxio"
 	"github.com/mjl-/mox/moxvar"
@@ -79,6 +80,10 @@ type Part struct {
 	parent          *Part                // Parent part, for getting bound from, and setting nextBoundOffset when a part has finished reading. Only for subparts, not top-level parts.
 	bound           []byte               // Only set if valid multipart with boundary, includes leading --, excludes \r\n.
 	strict          bool                 // If set, valid crlf line endings are verified when reading body.
+}
+
+func (p Part) VarString() string {
+	return (&spew.ConfigState{DisableMethods: true, DisablePointerMethods: true}).Sdump(p)
 }
 
 // todo: have all Content* fields in Part?

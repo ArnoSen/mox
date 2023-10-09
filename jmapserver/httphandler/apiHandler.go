@@ -237,7 +237,7 @@ func resolveJSONPointer(msg json.RawMessage, pointer string) (json.RawMessage, *
 				} else if pointerElement == "*" {
 					//we have special char '*' with it's own logic
 					if result == nil {
-						//
+						//FIXME should we send an empty array
 						return json.RawMessage([]byte("null")), nil
 					}
 
@@ -352,20 +352,28 @@ type APIHandler struct {
 }
 
 func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger *mlog.Log) *APIHandler {
-	return &APIHandler{
+	result := &APIHandler{
 		Capabilities:   capabilties,
 		SessionStater:  sessionStater,
 		contextUserKey: contextUserKey,
 		AccountOpener:  accountOpener,
 		logger:         logger,
 	}
+	//logger.Debug("test", mlog.Field("a", (&spew.ConfigState{DisableMethods: true, DisablePointerMethods: true}).Sdump(result)))
+	return result
 }
+
+/*
+func (ah APIHandler) String() string {
+	return "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+}
+*/
 
 // ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	//populate the reponse with the CORS headers
-	addCORSAllowedOriginHeader(w, r)
+	AddCORSAllowedOriginHeader(w, r)
 
 	coreSettings := ah.Capabilities.CoreSettings()
 	if coreSettings == nil {
@@ -484,8 +492,6 @@ loopUsing:
 				Ids        []basetypes.Id `json:"ids"`
 				Properties []string       `json:"properties"`
 
-				AdditionalFields map[string]json.RawMessage
-
 				//FIXME the '#' fields should be determined dynamically however I am not 100% sure that should be the case
 				AccountIdResultRef  *ResultReference `json:"#accountId,omitempty"`
 				IdsResultRef        *ResultReference `json:"#ids,omitempty"`
@@ -588,7 +594,26 @@ loopUsing:
 				continue
 			}
 
-			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), finalAccountId, finalIds, finalProperties)
+			//unmarshal the bespoke parts
+			bespokeParams := dtGetter.CustomGetRequestParams()
+			if bespokeParams != nil {
+				if err := json.Unmarshal(invocation.Arguments, bespokeParams); err != nil {
+					//FIXME I am repeating this block a lot
+					if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
+						response.addMethodResponse(invocationResponse.withArgError(mle))
+						continue
+					}
+					if typeError, ok := err.(*json.UnmarshalTypeError); ok {
+						//this is needed to catch unmarshal type errors in accountId
+						response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
+						continue
+					}
+					response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
+					continue
+				}
+			}
+
+			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), finalAccountId, dedupIDSlice(finalIds), finalProperties, bespokeParams)
 			mAccount.Close()
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
@@ -600,7 +625,7 @@ loopUsing:
 			//id should be always returned even if it is not requested
 			//AAA
 			// ../../rfc/8620:1608
-			propertyFilteredList, err := filterProperties(list, append(finalProperties, "id"))
+			propertyFilteredList, err := filterProperties(list, append(finalProperties), []string{"id"})
 			if err != nil {
 				ah.logger.Error("applying filtering failed ", mlog.Field("err", err.Error()))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
@@ -890,7 +915,26 @@ loopUsing:
 			//FIXME need to decide when/how to close accounts. Probably I should have some map with open accounts so multi queries run more efficient
 			defer mAccount.Close()
 
-			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal)
+			//unmarshal the bespoke parts
+			bespokeParams := dtQuery.CustomQueryRequestParams()
+			if bespokeParams != nil {
+				if err := json.Unmarshal(invocation.Arguments, bespokeParams); err != nil {
+					//FIXME I am repeating this block a lot
+					if mle, ok := err.(*mlevelerrors.MethodLevelError); ok {
+						response.addMethodResponse(invocationResponse.withArgError(mle))
+						continue
+					}
+					if typeError, ok := err.(*json.UnmarshalTypeError); ok {
+						//this is needed to catch unmarshal type errors in accountId
+						response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("incorrect type for field %s", typeError.Field))))
+						continue
+					}
+					response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
+					continue
+				}
+			}
+
+			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal, bespokeParams)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -1018,7 +1062,7 @@ func isContentTypeJSON(ct string) bool {
 	return false
 }
 
-func filterProperties(list []any, properties []string) ([]any, error) {
+func filterProperties(list []any, properties []string, alwaysInclude []string) ([]any, error) {
 	if len(properties) == 0 {
 		//nothing to do
 		return list, nil
@@ -1048,6 +1092,14 @@ func filterProperties(list []any, properties []string) ([]any, error) {
 				}
 			}
 			if !propNeedsToBeIncluded {
+				for _, a := range alwaysInclude {
+					if a == k {
+						propNeedsToBeIncluded = true
+						break
+					}
+				}
+			}
+			if !propNeedsToBeIncluded {
 				delete(myMap, k)
 			}
 		}
@@ -1056,4 +1108,20 @@ func filterProperties(list []any, properties []string) ([]any, error) {
 	}
 
 	return result, nil
+}
+
+func dedupIDSlice(in []basetypes.Id) []basetypes.Id {
+	var result []basetypes.Id
+
+	helper := make(map[basetypes.Id]interface{})
+
+	for _, id := range in {
+		helper[id] = nil
+	}
+
+	for id := range helper {
+		result = append(result, id)
+	}
+
+	return result
 }

@@ -326,8 +326,8 @@ func getHandlerForPath(p, downloadPath, uploadPath, eventSourcePath string) hand
 	return handlerTypeUndefined
 }
 
-// addCORSAllowedOriginHeader sets a CORS header when a context value indicates we should do so
-func addCORSAllowedOriginHeader(w http.ResponseWriter, r *http.Request) {
+// AddCORSAllowedOriginHeader sets a CORS header when a context value indicates we should do so
+func AddCORSAllowedOriginHeader(w http.ResponseWriter, r *http.Request) {
 	if corsAllowOriging := r.Context().Value(corsAllowOriginCtxKey); corsAllowOriging != nil {
 		if corsAllowOrigingStr, ok := corsAllowOriging.(string); ok && corsAllowOrigingStr != "" {
 			w.Header().Set("Access-Control-Allow-Origin", corsAllowOrigingStr)
