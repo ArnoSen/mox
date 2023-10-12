@@ -13,6 +13,7 @@ Also see IANA assignments, https://www.iana.org/protocols
 2049	Multipurpose Internet Mail Extensions (MIME) Part Five: Conformance Criteria and Examples
 2183	Communicating Presentation Information in Internet Messages: The Content-Disposition Header Field
 2231	MIME Parameter Value and Encoded Word Extensions: Character Sets, Languages, and Continuations
+3282    Content Language Headers
 3629	UTF-8, a transformation format of ISO 10646
 3676	The Text/Plain Format and DelSp Parameters
 3834	Recommendations for Automatic Responses to Electronic Mail

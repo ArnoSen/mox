@@ -37,3 +37,7 @@ func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
 		mlog:     mlog,
 	}
 }
+
+func (ja JAccount) NewEmail(em store.Message) JEmail {
+	return newJEmail(ja.mAccount, em, ja.mlog)
+}

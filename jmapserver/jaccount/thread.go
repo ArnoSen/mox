@@ -26,6 +26,8 @@ func (ja *JAccount) GetThread(ctx context.Context, ids []basetypes.Id) (state st
 
 		q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
 		q.FilterEqual("ThreadID", idInt64)
+		q.FilterEqual("Deleted", false)
+		q.FilterEqual("Expunged", false)
 
 		th := Thread{
 			Id: id,

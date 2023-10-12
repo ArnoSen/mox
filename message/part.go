@@ -75,6 +75,7 @@ type Part struct {
 
 	r               io.ReaderAt
 	header          textproto.MIMEHeader // Parsed header.
+	orderedHeaders  OrderedHeaders       // Parsed header that maintain the original order
 	nextBoundOffset int64                // If >= 0, the offset where the next part header starts. We can set this when a user fully reads each part.
 	lastBoundOffset int64                // Start of header of last/previous part. Used to skip a part if ParseNextPart is called and nextBoundOffset is -1.
 	parent          *Part                // Parent part, for getting bound from, and setting nextBoundOffset when a part has finished reading. Only for subparts, not top-level parts.
@@ -403,6 +404,21 @@ func (p *Part) Header() (textproto.MIMEHeader, error) {
 	return h, err
 }
 
+// OrderedHeaders parses the headers and returns them in a slice maintaining to the original order
+func (p *Part) OrderedHeaders() (OrderedHeaders, error) {
+	if p.orderedHeaders != nil {
+		return p.orderedHeaders, nil
+	}
+	if p.HeaderOffset == p.BodyOffset {
+		p.orderedHeaders = OrderedHeaders{}
+		return p.orderedHeaders, nil
+	}
+
+	h, err := parseHeaderInOrder(p.HeaderReader())
+	p.orderedHeaders = h
+	return h, err
+}
+
 // HeaderReader returns a reader for the header section of this part, including ending bare CRLF.
 func (p *Part) HeaderReader() io.Reader {
 	return io.NewSectionReader(p.r, p.HeaderOffset, p.BodyOffset-p.HeaderOffset)
@@ -430,6 +446,53 @@ func parseHeader(r io.Reader) (textproto.MIMEHeader, error) {
 		return zero, err
 	}
 	return textproto.MIMEHeader(msg.Header), nil
+}
+
+func parseHeaderInOrder(ioR io.Reader) (OrderedHeaders, error) {
+	//copied from std lib from mail.readHeader
+	var m OrderedHeaders
+
+	r := textproto.NewReader(bufio.NewReader(ioR))
+
+	// The first line cannot start with a leading space.
+	if buf, err := r.R.Peek(1); err == nil && (buf[0] == ' ' || buf[0] == '\t') {
+		line, err := r.ReadLine()
+		if err != nil {
+			return m, err
+		}
+		return m, errors.New("malformed initial line: " + line)
+	}
+
+	for {
+		kv, err := r.ReadContinuedLine()
+		if kv == "" {
+			return m, err
+		}
+
+		// Key ends at first colon.
+		k, v, ok := strings.Cut(kv, ":")
+		if !ok {
+			return m, errors.New("malformed header line: " + kv)
+		}
+		key := textproto.CanonicalMIMEHeaderKey(k)
+
+		// Permit empty key, because that is what we did in the past.
+		if key == "" {
+			continue
+		}
+
+		// Skip initial spaces in value.
+		value := strings.TrimLeft(v, " \t")
+
+		m = append(m, Header{
+			Name:  key,
+			Value: value,
+		})
+
+		if err != nil {
+			return m, err
+		}
+	}
 }
 
 var wordDecoder = mime.WordDecoder{
@@ -471,19 +534,19 @@ func parseEnvelope(log *mlog.Log, h mail.Header) (*Envelope, error) {
 	env := &Envelope{
 		date,
 		subject,
-		parseAddressList(log, h, "from"),
-		parseAddressList(log, h, "sender"),
-		parseAddressList(log, h, "reply-to"),
-		parseAddressList(log, h, "to"),
-		parseAddressList(log, h, "cc"),
-		parseAddressList(log, h, "bcc"),
+		ParseAddressList(log, h, "from"),
+		ParseAddressList(log, h, "sender"),
+		ParseAddressList(log, h, "reply-to"),
+		ParseAddressList(log, h, "to"),
+		ParseAddressList(log, h, "cc"),
+		ParseAddressList(log, h, "bcc"),
 		h.Get("In-Reply-To"),
 		h.Get("Message-Id"),
 	}
 	return env, nil
 }
 
-func parseAddressList(log *mlog.Log, h mail.Header, k string) []Address {
+func ParseAddressList(log *mlog.Log, h mail.Header, k string) []Address {
 	// todo: possibly work around ios mail generating incorrect q-encoded "phrases" with unencoded double quotes? ../rfc/2047:382
 	l, err := h.AddressList(k)
 	if err != nil {
