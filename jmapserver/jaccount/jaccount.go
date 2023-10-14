@@ -38,6 +38,10 @@ func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
 	}
 }
 
-func (ja JAccount) NewEmail(em store.Message) JEmail {
-	return newJEmail(ja.mAccount, em, ja.mlog)
+func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
+	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
+	if err != nil {
+		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return NewJEmail(em, part, ja.mlog), nil
 }

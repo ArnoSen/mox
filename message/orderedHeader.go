@@ -2,13 +2,16 @@ package message
 
 import "net/textproto"
 
-type OrderedHeaders []Header
+// OrderedHeader represents headers in there original order
+type OrderedHeader []KV
 
-type Header struct {
+// KV is a key-value pair
+type KV struct {
 	Name, Value string
 }
 
-func (ohs OrderedHeaders) Last(header string) string {
+// Last returns the value of the last occurence of a particular header. This is a JMAP requirement
+func (ohs OrderedHeader) Last(header string) string {
 	var result string
 	for i := len(ohs) - 1; i >= 0; i-- {
 		if ohs[i].Name == header {
@@ -18,7 +21,8 @@ func (ohs OrderedHeaders) Last(header string) string {
 	return result
 }
 
-func (ohs OrderedHeaders) Values(header string) []string {
+// Values returns all the values for header
+func (ohs OrderedHeader) Values(header string) []string {
 	var result []string
 	for _, oh := range ohs {
 		if oh.Name == header {
@@ -29,11 +33,10 @@ func (ohs OrderedHeaders) Values(header string) []string {
 	return result
 }
 
-func (ohs OrderedHeaders) MIMEHeader() textproto.MIMEHeader {
+// MIMEHeader returns a MIMEHeader object. This adaptor is there to use some methods that are defined for MIMEHeader
+func (ohs OrderedHeader) MIMEHeader() textproto.MIMEHeader {
 	result := textproto.MIMEHeader{}
-
 	for _, oh := range ohs {
-
 		if _, exists := result[oh.Name]; exists {
 			result[oh.Name] = append(result[oh.Name], oh.Value)
 		}

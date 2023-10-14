@@ -75,7 +75,7 @@ type Part struct {
 
 	r               io.ReaderAt
 	header          textproto.MIMEHeader // Parsed header.
-	orderedHeaders  OrderedHeaders       // Parsed header that maintain the original order
+	orderedHeaders  OrderedHeader        // Parsed header that maintains the original order
 	nextBoundOffset int64                // If >= 0, the offset where the next part header starts. We can set this when a user fully reads each part.
 	lastBoundOffset int64                // Start of header of last/previous part. Used to skip a part if ParseNextPart is called and nextBoundOffset is -1.
 	parent          *Part                // Parent part, for getting bound from, and setting nextBoundOffset when a part has finished reading. Only for subparts, not top-level parts.
@@ -405,12 +405,12 @@ func (p *Part) Header() (textproto.MIMEHeader, error) {
 }
 
 // OrderedHeaders parses the headers and returns them in a slice maintaining to the original order
-func (p *Part) OrderedHeaders() (OrderedHeaders, error) {
+func (p *Part) OrderedHeaders() (OrderedHeader, error) {
 	if p.orderedHeaders != nil {
 		return p.orderedHeaders, nil
 	}
 	if p.HeaderOffset == p.BodyOffset {
-		p.orderedHeaders = OrderedHeaders{}
+		p.orderedHeaders = OrderedHeader{}
 		return p.orderedHeaders, nil
 	}
 
@@ -448,9 +448,11 @@ func parseHeader(r io.Reader) (textproto.MIMEHeader, error) {
 	return textproto.MIMEHeader(msg.Header), nil
 }
 
-func parseHeaderInOrder(ioR io.Reader) (OrderedHeaders, error) {
-	//copied from std lib from mail.readHeader
-	var m OrderedHeaders
+func parseHeaderInOrder(ioR io.Reader) (OrderedHeader, error) {
+	//below is copied from std lib from mail.readHeader
+	//the difference is that results are stored in a slice vs a map whereby the original order is maintained.
+	//this is a requirement for JMAP
+	var m OrderedHeader
 
 	r := textproto.NewReader(bufio.NewReader(ioR))
 
@@ -484,7 +486,7 @@ func parseHeaderInOrder(ioR io.Reader) (OrderedHeaders, error) {
 		// Skip initial spaces in value.
 		value := strings.TrimLeft(v, " \t")
 
-		m = append(m, Header{
+		m = append(m, KV{
 			Name:  key,
 			Value: value,
 		})

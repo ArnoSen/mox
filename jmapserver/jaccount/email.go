@@ -45,15 +45,15 @@ var defaultEmailBodyProperties = []string{
 	"disposition", "cid", "language", "location",
 }
 
-type EmailKnownFields struct {
+type EmailDefinedProperties struct {
 	EmailMetadata          //4.1.1
 	HeaderFieldsProperties //4.1.3
 	EmailBodyParts         //4.1.4
 }
 
 type Email struct {
-	EmailKnownFields
-	BespokeHeaderRequests map[string]any `json:"-"` // we need a custom marshaller for this
+	EmailDefinedProperties
+	DynamicProperties map[string]any `json:"-"` // we need a custom marshaller for this
 
 	//properties is used in MarshalJSON to filter the fields we need
 	properties []string
@@ -62,7 +62,7 @@ type Email struct {
 // Marshal is a custom marshaler that is needed to get requested properties in the result that are known only at runtime. Examples of custom properties are e.g. headers that the client is interested in. Also it limits the output to the properties that we need. This is done for performance reasons (otherwise we keep (un) marhalling all the time)
 func (e Email) MarshalJSON() ([]byte, error) {
 	//there must be a simpeler method than this
-	emailBytes, err := json.Marshal(e.EmailKnownFields)
+	emailBytes, err := json.Marshal(e.EmailDefinedProperties)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (e Email) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	for k, v := range e.BespokeHeaderRequests {
+	for k, v := range e.DynamicProperties {
 		emailMapStringAny[k] = v
 	}
 	return json.Marshal(emailMapStringAny)
@@ -375,14 +375,18 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
-		jem := ja.NewEmail(em)
+		jem, merr := ja.NewEmail(em)
+		ja.mlog.Error("error instantiating new JEmail", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+		if merr != nil {
+			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+		}
 
 		if len(properties) == 0 {
 			properties = defaultEmailPropertyFieds
 		}
 
 		resultElement := Email{
-			EmailKnownFields: EmailKnownFields{
+			EmailDefinedProperties: EmailDefinedProperties{
 				EmailMetadata: EmailMetadata{
 					Id:         jem.Id(),
 					ThreadId:   jem.ThreadId(),
@@ -500,7 +504,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 					//this format we do not recognize to skip it
 					continue
 				}
-				resultElement.BespokeHeaderRequests[prop], mErr = jem.HeaderAs(headerName, headerFormat, returnAll)
+				resultElement.DynamicProperties[prop], mErr = jem.HeaderAs(headerName, headerFormat, returnAll)
 				if mErr != nil {
 					ja.mlog.Error("error getting bespoke header", mlog.Field("id", idInt64), mlog.Field("prop", prop), mlog.Field("error", err.Error()))
 					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
@@ -541,35 +545,21 @@ func HasAny(haystack []string, needle ...string) bool {
 
 // JEmail is a helper object to efficiently return all the properties of the JMAP Email object to prevent a very long fn that does everything and is hard to test
 type JEmail struct {
-	acc    *store.Account
-	em     store.Message
-	logger *mlog.Log
+	//em is how the message is stored in db
+	em store.Message
 
-	//runtime vars
-	partWasLoaded bool
-	partErr       *mlevelerrors.MethodLevelError
-	part          message.Part
+	//part is contains parsed parts of the message
+	part message.Part
+
+	logger *mlog.Log
 }
 
-func newJEmail(acc *store.Account, em store.Message, logger *mlog.Log) JEmail {
+func NewJEmail(em store.Message, part message.Part, logger *mlog.Log) JEmail {
 	return JEmail{
-		acc:    acc,
 		em:     em,
+		part:   part,
 		logger: logger,
 	}
-}
-
-func (jem JEmail) getPart() (message.Part, *mlevelerrors.MethodLevelError) {
-	if !jem.partWasLoaded {
-		part, err := jem.em.LoadPart(jem.acc.MessageReader(jem.em))
-		if err != nil {
-			jem.partErr = mlevelerrors.NewMethodLevelErrorServerFail()
-		} else {
-			jem.part = part
-		}
-		jem.partWasLoaded = true
-	}
-	return jem.part, jem.partErr
 }
 
 func (jem JEmail) Id() basetypes.Id {
@@ -634,12 +624,7 @@ func (jem JEmail) Keywords() map[string]bool {
 
 // MessagedId returns the messageId property
 func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		return []string{
 			env.MessageID,
 		}, nil
@@ -649,12 +634,7 @@ func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
 
 // InReplyTo returns inReplyTo
 func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		return []string{
 			env.InReplyTo,
 		}, nil
@@ -664,12 +644,7 @@ func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
 
 // Date returns date
 func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		result := basetypes.Date(env.Date)
 		return &result, nil
 	}
@@ -678,12 +653,7 @@ func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
 
 // Subject returns the subject property
 func (jem JEmail) Subject() (*string, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		return &env.Subject, nil
 	}
 	return nil, nil
@@ -691,14 +661,10 @@ func (jem JEmail) Subject() (*string, *mlevelerrors.MethodLevelError) {
 
 // From returns from
 func (jem JEmail) From() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
 
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.From {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -709,14 +675,9 @@ func (jem JEmail) From() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 // To returns to
 func (jem JEmail) To() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.To {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -727,14 +688,9 @@ func (jem JEmail) To() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 // CC returns cc
 func (jem JEmail) CC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.CC {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -745,14 +701,9 @@ func (jem JEmail) CC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 // BCC returns bcc
 func (jem JEmail) BCC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
-
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.BCC {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -763,14 +714,10 @@ func (jem JEmail) BCC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 // Sender returns sender
 func (jem JEmail) Sender() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
 
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.Sender {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -781,14 +728,10 @@ func (jem JEmail) Sender() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 // ReplyTo returns reply to addresses
 func (jem JEmail) ReplyTo() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-	part, err := jem.getPart()
-	if err != nil {
-		return nil, err
-	}
 
 	var result []EmailAddress
 
-	if env := part.Envelope; env != nil {
+	if env := jem.part.Envelope; env != nil {
 		for _, addr := range env.ReplyTo {
 			result = append(result, msgAddressToEmailAddress(addr))
 		}
@@ -816,17 +759,10 @@ func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 
 // HeaderAs returns a header in a specific format
 func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
-
-	//looks like what we need is inforamtion that is placed in  <>
-	part, merr := jem.getPart()
-	if merr != nil {
-		return "", merr
-	}
-
-	//FIXME we need to parse our own orderedHeaders because they need to be in order
-	orderedHeaders, err := part.OrderedHeaders()
+	orderedHeaders, err := jem.part.OrderedHeaders()
 	if err != nil {
-		return "", merr
+		jem.logger.Debug("getting ordered headers failed", mlog.Field("err", err.Error()))
+		return "", mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
 	//return nil if empty header
@@ -937,14 +873,9 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 }
 
 func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
-	part, merr := jem.getPart()
-	if merr != nil {
-		return "", merr
-	}
-
-	partForPreview := part
-	if len(part.Parts) > 0 {
-		partForPreview = part.Parts[0]
+	partForPreview := jem.part
+	if len(jem.part.Parts) > 0 {
+		partForPreview = jem.part.Parts[0]
 	}
 
 	//read the whole body and see what we got
@@ -1044,8 +975,8 @@ func partToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties []stri
 					ebd.Name = &fileName
 				}
 			}
-
 		}
+
 		if ebd.Name == nil {
 			//fallback
 			val := orderedHeaders.Last("Content-Type")
