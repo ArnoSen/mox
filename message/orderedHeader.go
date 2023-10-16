@@ -1,6 +1,9 @@
 package message
 
-import "net/textproto"
+import (
+	"net/textproto"
+	"strings"
+)
 
 // OrderedHeader represents headers in there original order
 type OrderedHeader []KV
@@ -14,7 +17,8 @@ type KV struct {
 func (ohs OrderedHeader) Last(header string) string {
 	var result string
 	for i := len(ohs) - 1; i >= 0; i-- {
-		if ohs[i].Name == header {
+		//FIXME check with std lib if they use ToLower
+		if strings.ToLower(ohs[i].Name) == strings.ToLower(header) {
 			return ohs[i].Value
 		}
 	}

@@ -416,7 +416,13 @@ func (p *Part) OrderedHeaders() (OrderedHeader, error) {
 
 	h, err := parseHeaderInOrder(p.HeaderReader())
 	p.orderedHeaders = h
-	return h, err
+
+	if err != io.EOF {
+		//FIXME not sure about this. Need to check
+		return h, err
+
+	}
+	return h, nil
 }
 
 // HeaderReader returns a reader for the header section of this part, including ending bare CRLF.

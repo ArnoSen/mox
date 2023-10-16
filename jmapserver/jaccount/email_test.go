@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/message"
@@ -141,6 +142,7 @@ Content-Transfer-Encoding: 7bit
 		}
 
 		msgID, mErr := jem.MessagedId()
+		t.Helper()
 		RequireNoError(t, mErr)
 
 		eMsgID := "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl"
@@ -151,9 +153,16 @@ Content-Transfer-Encoding: 7bit
 
 		subject, mErr := jem.Subject()
 		RequireNoError(t, mErr)
-		if !(subject == nil || *subject != "first mail") {
+		if subject == nil || *subject != "first mail" {
 			t.Logf("was expecting subject 'first mail' but got %v", subject)
 			t.FailNow()
+		}
+
+		eSendAt := "2023-07-18 17:59:42 +0200 CEST"
+		sendAt, mErr := jem.SendAt()
+		RequireNoError(t, mErr)
+		if !AssertNil(t, sendAt) {
+			AssertEqualString(t, eSendAt, time.Time(*sendAt).String())
 		}
 	})
 }
@@ -163,4 +172,16 @@ func RequireNoError(t *testing.T, e error) {
 		t.Logf("was expecting no error but got %s", e.Error())
 		t.FailNow()
 	}
+}
+
+func AssertNil(t *testing.T, i any) bool {
+	return i == nil || reflect.ValueOf(i).IsNil()
+}
+
+func AssertEqualString(t *testing.T, expected, actual string) bool {
+	if expected != actual {
+		t.Logf("was expecting %s but got %s", expected, actual)
+		t.FailNow()
+	}
+	return true
 }

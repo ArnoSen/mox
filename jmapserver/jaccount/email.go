@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -543,6 +544,18 @@ func HasAny(haystack []string, needle ...string) bool {
 	return false
 }
 
+// HasAny returns true haystack has any needles
+func HasAnyCaseInsensitive(haystack []string, needle ...string) bool {
+	for _, h := range haystack {
+		for _, n := range needle {
+			if strings.ToLower(h) == strings.ToLower(n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // JEmail is a helper object to efficiently return all the properties of the JMAP Email object to prevent a very long fn that does everything and is hard to test
 type JEmail struct {
 	//em is how the message is stored in db
@@ -624,12 +637,13 @@ func (jem JEmail) Keywords() map[string]bool {
 
 // MessagedId returns the messageId property
 func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
-	if env := jem.part.Envelope; env != nil {
-		return []string{
-			env.MessageID,
-		}, nil
+	msgIDsIface, merr := jem.HeaderAs("Message-ID", "asMessageIds", false)
+
+	if msgIDs, ok := msgIDsIface.([]string); ok {
+		return msgIDs, nil
 	}
-	return nil, nil
+
+	return nil, merr
 }
 
 // InReplyTo returns inReplyTo
@@ -645,9 +659,11 @@ func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
 // Date returns date
 func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
 	if env := jem.part.Envelope; env != nil {
+		spew.Dump(env)
 		result := basetypes.Date(env.Date)
 		return &result, nil
 	}
+	fmt.Println("env is empty")
 	return nil, nil
 }
 
@@ -761,7 +777,7 @@ func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
 	orderedHeaders, err := jem.part.OrderedHeaders()
 	if err != nil {
-		jem.logger.Debug("getting ordered headers failed", mlog.Field("err", err.Error()))
+		jem.logger.Error("getting ordered headers failed", mlog.Field("err", err.Error()))
 		return "", mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
@@ -813,14 +829,14 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 		}
 		return orderedHeaders.Last(headerName), nil
 	case "asText":
-		if HasAny([]string{"subject", "comments", "keywords", "list-id"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+		if HasAnyCaseInsensitive([]string{"subject", "comments", "keywords", "list-id"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			if retAll {
 				return orderedHeaders.Values(headerName), nil
 			}
 			return orderedHeaders.Last(headerName), nil
 		}
 	case "asAddresses":
-		if HasAny([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", "resent-bcc"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+		if HasAnyCaseInsensitive([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", "resent-bcc"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			var result []EmailAddress
 
 			if !retAll {
@@ -834,19 +850,22 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 		}
 	case "asGroupedAddresses":
 		//same condidtions as asAddresses
-		if HasAny([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", " resent-bcc"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+		if HasAnyCaseInsensitive([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", " resent-bcc"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			//FIXME this is not supported (yet?) in mox
 		}
 	case "asMessageIds":
 		//The header field is parsed as a list of msg-id values, as specified in [@!RFC5322], Section 3.6.4, into the String[] type. Comments and/or folding white space (CFWS) and surrounding angle brackets (<>) are removed. If parsing fails, the value is null.
-		if HasAny([]string{"message-id", "in-reply-to", "references", "resent-message-id"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
-			if msgId := regexp.MustCompile("^<(\\S+>)$").FindString(orderedHeaders.Last(headerName)); msgId != "" {
-				return []string{msgId}, nil
+		if HasAnyCaseInsensitive([]string{"message-id", "in-reply-to", "references", "resent-message-id"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+			submatches := regexp.MustCompile("<(\\S+)>").FindStringSubmatch(orderedHeaders.Last(headerName))
+
+			if len(submatches) == 2 {
+				return submatches[1:], nil
 			}
+
 			//FIXME: need to implement retAll
 		}
 	case "asDate":
-		if HasAny([]string{"date", "resent-date"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+		if HasAnyCaseInsensitive([]string{"date", "resent-date"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			if val := orderedHeaders.Last(headerName); val != "" {
 				d, err := mail.ParseDate(val)
 				if err == nil {
@@ -856,7 +875,7 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 			//FIXME: need to implement retAll
 		}
 	case "asURLs":
-		if HasAny([]string{"list-help", "list-unsubscribe", "list-post", "list-owner", "list-archive"}, headerName) || !HasAny(headerFieldsDefinedInRFC5322RFC2369, headerName) {
+		if HasAnyCaseInsensitive([]string{"list-help", "list-unsubscribe", "list-post", "list-owner", "list-archive"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			var result []string
 			for _, headerVal := range orderedHeaders.Values(headerName) {
 				if headerVal != "" {
