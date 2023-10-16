@@ -113,7 +113,10 @@ Content-Transfer-Encoding: 7bit
 		part, err := message.Parse(mlog.New("test"), true, mReader)
 		RequireNoError(t, err)
 
-		jem := NewJEmail(store.Message{}, part, mlog.New("test"))
+		msg := store.Message{
+			Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+		}
+		jem := NewJEmail(msg, part, mlog.New("test"))
 
 		to, mErr := jem.To()
 		RequireNoError(t, mErr)
@@ -164,6 +167,36 @@ Content-Transfer-Encoding: 7bit
 		if !AssertNil(t, sendAt) {
 			AssertEqualString(t, eSendAt, time.Time(*sendAt).String())
 		}
+
+		eContentType := "text/plain; charset=UTF-8; format=flowed"
+		ctIface, mErr := jem.HeaderAs("Content-Type", "asText", false)
+		RequireNoError(t, mErr)
+		if ct, ok := ctIface.(string); !ok {
+			t.Logf("was expecting ctIface to be string but got %T", ctIface)
+			t.FailNow()
+		} else {
+			AssertEqualString(t, eContentType, ct)
+		}
+
+		eReceived := msg.Received
+		AssertEqualString(t, eReceived.String(), time.Time(jem.ReceivedAt()).String())
+
+		//this an email with no msg body so preview is empty
+		ePreview := ""
+		preview, mErr := jem.Preview()
+		RequireNoError(t, mErr)
+		AssertEqualString(t, ePreview, preview)
+
+		bs, mErr := jem.BodyStructure(nil)
+		RequireNoError(t, mErr)
+
+		if !AssertNil(t, bs.Type) {
+			AssertEqualString(t, "text/plain", *bs.Type)
+		}
+		if !AssertNil(t, bs.Language) {
+			//NB: | is an arbitrary token to stringify a string slice to make it comparable
+			AssertEqualString(t, strings.Join([]string{"en-US"}, "|"), strings.Join(bs.Language, "|"))
+		}
 	})
 }
 
@@ -180,7 +213,7 @@ func AssertNil(t *testing.T, i any) bool {
 
 func AssertEqualString(t *testing.T, expected, actual string) bool {
 	if expected != actual {
-		t.Logf("was expecting %s but got %s", expected, actual)
+		t.Logf("was expecting %q but got %q", expected, actual)
 		t.FailNow()
 	}
 	return true

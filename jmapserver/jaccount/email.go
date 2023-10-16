@@ -20,6 +20,8 @@ import (
 	"github.com/mjl-/mox/store"
 )
 
+const previewNotAvailableText = "<preview not available>"
+
 var validEmailFilters []string = []string{
 	"inMailbox", "inMailboxOtherThan", "before", "after", "minSize",
 	"maxSize", "allInThreadHaveKeyword", "someInThreadHaveKeyword", "noneInThreadHaveKeyword",
@@ -95,7 +97,7 @@ func (e Email) MarshalJSON() ([]byte, error) {
 }
 
 type EmailBodyParts struct {
-	BodyStructure EmailBodyPartKnownFields   `json:"bodyStructure"`
+	BodyStructure EmailBodyPart              `json:"bodyStructure"`
 	BodyValues    map[string]EmailBodyValue  `json:"bodyValues"`
 	TextBody      []EmailBodyPartKnownFields `json:"textBody"`
 	HTMLBody      []EmailBodyPartKnownFields `json:"htmlBody"`
@@ -906,13 +908,11 @@ func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
 		return string(fullBody), nil
 	}
 	return string(fullBody[:100]), nil
-
 }
 
-func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, error) {
-	//FIXME
-	//need to recurse over all parts and compile the result
-	panic("not implemented")
+func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
+	//FIXME: need to recurse over subparts and compile the result
+	return partToEmailBodyPart(jem.part, jem.em.ID, bodyProperties), nil
 }
 
 func (jem JEmail) BodyValues() (map[string]EmailBodyValue, error) {
