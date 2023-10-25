@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -189,7 +188,7 @@ type EmailBodyPartKnownFields struct {
 	Location *string `json:"location"`
 
 	//If the type is multipart/*, this contains the body parts of each child.
-	SubParts []EmailBodyPartKnownFields `json:"subParts"`
+	SubParts []EmailBodyPart `json:"subParts"`
 }
 
 // In addition, the client may request/send EmailBodyPart properties representing individual header fields, following the same syntax and semantics as for the Email object, e.g., header:Content-Type.
@@ -354,8 +353,7 @@ search:
 func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	//TODO:
-	// implement properties:  blobId, header:list-id:asText, header:list-post:asURLs, sentAt, bodyStructure, bodyValues
-	// implement body parameters: partId, blobId, size, name, type, charset, disposition, cid, location
+	// implement properties: bodyValues
 
 	for _, id := range ids {
 		idInt64, err := id.Int64()
@@ -397,6 +395,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 					Size:       jem.Size(),
 					ReceivedAt: jem.ReceivedAt(),
 					Keywords:   jem.Keywords(),
+					BlobId:     jem.Id(), //FIXME needs review
 				},
 				EmailBodyParts: EmailBodyParts{
 					Preview: "<preview not available>",
@@ -516,7 +515,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		if HasAny(properties, "bodyStructure") {
-			//resultElement.BodyStructure = partToEmailBodyPart(part, idInt64, bodyProperties)
+			resultElement.BodyStructure = partToEmailBodyPart(jem.part, 0, idInt64, bodyProperties)
 		}
 
 		result = append(result, resultElement)
@@ -650,22 +649,20 @@ func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
 
 // InReplyTo returns inReplyTo
 func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
-	if env := jem.part.Envelope; env != nil {
-		return []string{
-			env.InReplyTo,
-		}, nil
+	msgIDsIface, merr := jem.HeaderAs("In-Reply-To", "asMessageIds", false)
+	if msgIDs, ok := msgIDsIface.([]string); ok {
+		return msgIDs, nil
 	}
-	return nil, nil
+
+	return nil, merr
 }
 
 // Date returns date
 func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
 	if env := jem.part.Envelope; env != nil {
-		spew.Dump(env)
 		result := basetypes.Date(env.Date)
 		return &result, nil
 	}
-	fmt.Println("env is empty")
 	return nil, nil
 }
 
@@ -679,7 +676,6 @@ func (jem JEmail) Subject() (*string, *mlevelerrors.MethodLevelError) {
 
 // From returns from
 func (jem JEmail) From() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
-
 	var result []EmailAddress
 
 	if env := jem.part.Envelope; env != nil {
@@ -777,7 +773,7 @@ func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 
 // HeaderAs returns a header in a specific format
 func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
-	orderedHeaders, err := jem.part.OrderedHeaders()
+	orderedHeaders, err := jem.part.HeaderInOrder()
 	if err != nil {
 		jem.logger.Error("getting ordered headers failed", mlog.Field("err", err.Error()))
 		return "", mlevelerrors.NewMethodLevelErrorServerFail()
@@ -911,137 +907,361 @@ func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
 }
 
 func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
-	//FIXME: need to recurse over subparts and compile the result
-	return partToEmailBodyPart(jem.part, jem.em.ID, bodyProperties), nil
+
+	partID := 0
+
+	//do the top level part first
+	result := partToEmailBodyPart(jem.part, partID, jem.em.ID, bodyProperties)
+
+	//recurse over the subparts
+	recursePartToEmailBodyPart(jem.part.Parts, jem.em.ID, bodyProperties, &result, &partID)
+
+	return result, nil
 }
 
-func (jem JEmail) BodyValues() (map[string]EmailBodyValue, error) {
-	//FIXME
+func (jem JEmail) GetPartBody(partID string) (string, *mlevelerrors.MethodLevelError) {
+	//this can later be reused to get a particular BlobId
+	//since BlobIds have a Global Scope, we need to add a prefix
+
+	if partID == "0" {
+		fullBody, err := io.ReadAll(jem.part.Reader())
+		if err != nil {
+			return "", mlevelerrors.NewMethodLevelErrorServerFail()
+		}
+		return string(fullBody), nil
+	}
+
+	return searchPartRecursive(partID, jem.part.Parts, 1)
+}
+
+func searchPartRecursive(partID string, parts []message.Part, nextNum int) (string, *mlevelerrors.MethodLevelError) {
+	for _, p := range parts {
+		if partID == fmt.Sprintf("%d", nextNum) {
+			fullBody, err := io.ReadAll(p.Reader())
+			if err != nil {
+				return "", mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			return string(fullBody), nil
+		}
+		nextNum++
+		return searchPartRecursive(partID, p.Parts, nextNum)
+	}
+	return "", nil
+}
+
+func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllBodyValues bool, maxBodyValueBytes basetypes.Uint) (map[string]EmailBodyValue, *mlevelerrors.MethodLevelError) {
+	//FIXME implement maxBodyValueBytes
 	//This is a map of partId to an EmailBodyValue object for none, some, or all text/* parts. Which parts are included and whether the value is truncated is determined by various arguments to Email/get and Email/parse.
 
-	panic("not implemented")
+	result := make(map[string]EmailBodyValue, 0)
+
+	uniquePartsToGet := make(map[string]any, 0)
+
+	toIncludeFunc := func(contentType *string, partId *string) bool {
+		return contentType != nil && strings.HasPrefix(*contentType, "text/") && partId != nil
+	}
+
+	//fetchAllBodyValues is a combination of fetchTextBodyValues and fetchHTMLBodyValues
+
+	if fetchTextBodyValues || fetchAllBodyValues {
+		//get the part ids
+		textBodyParts, mErr := jem.TextBody([]string{"partId"})
+		if mErr != nil {
+			return nil, mErr
+		}
+
+		for _, bp := range textBodyParts {
+			if toIncludeFunc(bp.Type, bp.PartId) {
+				uniquePartsToGet[*bp.PartId] = nil
+			}
+		}
+	}
+
+	if fetchHTMLBodyValues || fetchAllBodyValues {
+		htmlBodyParts, mErr := jem.HTMLBody([]string{"partId"})
+		if mErr != nil {
+			return nil, mErr
+		}
+
+		for _, bp := range htmlBodyParts {
+			if toIncludeFunc(bp.Type, bp.PartId) {
+				uniquePartsToGet[*bp.PartId] = nil
+			}
+		}
+	}
+
+	for partId := range uniquePartsToGet {
+		bodyVal, mErr := jem.GetPartBody(partId)
+		if mErr == nil {
+			//FIXME make sure not to cut in a HREF link
+
+			var truncated bool
+			if len(bodyVal) > int(maxBodyValueBytes) {
+				bodyVal = string(bodyVal[:maxBodyValueBytes])
+				truncated = true
+			}
+
+			result[partId] = EmailBodyValue{
+				Value:       bodyVal,
+				IsTruncated: truncated,
+			}
+		}
+	}
+	return result, nil
 }
 
-func (jem JEmail) TextBody() (EmailBodyPartKnownFields, error) {
+func (jem JEmail) TextBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	// A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
-	panic("not implemented")
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeText), nil
 }
 
-func (jem JEmail) HTMLBody() (EmailBodyPartKnownFields, error) {
+func (jem JEmail) HTMLBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	//A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
-	panic("not implemented")
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeHTML), nil
 }
 
-func (jem JEmail) Attachments() (EmailBodyPartKnownFields, error) {
+func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	/*
 		A list, traversing depth-first, of all parts in bodyStructure that satisfy either of the following conditions:
 		- not of type multipart/* and not included in textBody or htmlBody
 		- of type image/*, audio/*, or video/* and not in both textBody and htmlBody
 	*/
-	panic("not implemented")
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeAttachments), nil
 }
 
-func partToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties []string) EmailBodyPart {
+// includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
+type flattenType int
+
+const (
+	flattenTypeText flattenType = iota
+	flattenTypeHTML
+	flattenTypeAttachments
+)
+
+func flattenPartToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties []string, flattenType flattenType) []EmailBodyPart {
+	//FIXME need to recurse and support flattenTypeAttachments
+
+	var result []EmailBodyPart
+
+	topLevelPart := partToEmailBodyPart(part, 0, idInt64, bodyProperties)
+
+	ct := topLevelPart.Type
+
+	var include bool
+
+	if ct != nil {
+		switch flattenType {
+		case flattenTypeText, flattenTypeHTML:
+			switch {
+			case HasAny([]string{"text/plain", "text/html"}, *ct):
+				include = true
+			case strings.HasPrefix(*ct, "image/"), strings.HasPrefix(*ct, "audio/"), strings.HasPrefix(*ct, "video/"):
+				include = true
+			}
+
+		}
+	}
+
+	if include {
+		result = append(result, topLevelPart)
+	}
+
+	return result
+}
+
+func recursePartToEmailBodyPart(subparts []message.Part, idInt64 int64, bodyProperties []string, result *EmailBodyPart, partId *int) {
+	if len(subparts) == 0 {
+		return
+	} else {
+
+		for _, p := range subparts {
+			*partId++
+			subPartBodyPart := partToEmailBodyPart(p, *partId, idInt64, bodyProperties)
+
+			if subPartBodyPart.Type != nil {
+				//This is the full MIME structure of the message body, without recursing into message/rfc822 or message/global parts
+				if *subPartBodyPart.Type == "message/rfc822" || *subPartBodyPart.Type == "message/global" {
+					continue
+				}
+			}
+
+			recursePartToEmailBodyPart(p.Parts, idInt64, bodyProperties, &subPartBodyPart, partId)
+
+			result.SubParts = append(result.SubParts, subPartBodyPart)
+		}
+	}
+}
+
+// partToEmailBodyPart returns the EmailBodyPart for the part (type message.Part)
+func partToEmailBodyPart(part message.Part, partID int, idInt64 int64, bodyProperties []string) EmailBodyPart {
 	ebd := EmailBodyPart{
-		EmailBodyPartKnownFields: EmailBodyPartKnownFields{
-			PartId:      nil,
-			BlobId:      nil,
-			Size:        basetypes.Uint(uint(part.DecodedSize)),
-			Headers:     []EmailHeader{},
-			Name:        nil,
-			Type:        nil,
-			CharSet:     nil,
-			Disposition: nil,
-			Cid:         &part.ContentID,
-			Location:    nil,
-			Language:    nil,
-		},
-		properties: bodyProperties,
+		EmailBodyPartKnownFields: EmailBodyPartKnownFields{},
+		properties:               bodyProperties,
 	}
 
 	//PartId
 	//we only have one part so we set partId to 0
-	partId := "0"
-	ebd.PartId = &partId
+	partIDStr := fmt.Sprintf("%d", partID)
+	ebd.PartId = &partIDStr
 
 	//BlobId
 	//FIXME just choosing a way to store things
 	//we have to come up with a way how to generate this
-	blobId := basetypes.Id(fmt.Sprintf("%d-%s", idInt64, partId))
+	blobId := basetypes.Id(fmt.Sprintf("%d-%s", idInt64, partIDStr))
 	ebd.BlobId = &blobId
 
-	//We need the orderedHeaders for that
-	orderedHeaders, err := part.OrderedHeaders()
-	if err == nil {
+	jPart, headerParseErr := NewJPart(part)
+	ebd.Size = jPart.Size()
+	ebd.Cid = jPart.Cid()
 
-		for _, h := range orderedHeaders {
-			ebd.Headers = append(ebd.Headers, EmailHeader{
-				Name:  h.Name,
-				Value: h.Value,
-			})
-		}
+	if headerParseErr == nil {
+		ebd.Headers = jPart.Headers()
+		ebd.Disposition = jPart.Disposition()
+		ebd.Name = jPart.Name()
+		ebd.Type = jPart.Type()
+		ebd.CharSet = jPart.Charset()
+		ebd.Location = jPart.Location()
+		ebd.Language = jPart.Language()
+	}
+	return ebd
+}
 
-		val := orderedHeaders.Last("Content-Disposition")
+// JPart is a helper to get the BodyPart properties we need
+type JPart struct {
+	p             message.Part
+	headerInOrder message.HeaderInOrder
+}
+
+func NewJPart(p message.Part) (JPart, *mlevelerrors.MethodLevelError) {
+	result := JPart{
+		p: p,
+	}
+
+	headers, err := p.HeaderInOrder()
+	if err != nil {
+		return result, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	result.headerInOrder = headers
+
+	return result, nil
+}
+
+func (jp JPart) Size() basetypes.Uint {
+	return basetypes.Uint(jp.p.BodyOffset - jp.p.HeaderOffset)
+}
+
+func (jp JPart) Cid() *string {
+	if jp.p.ContentID == "" {
+		return nil
+	}
+	return &jp.p.ContentID
+}
+
+func (jp JPart) Headers() []EmailHeader {
+	var result []EmailHeader
+	for _, h := range jp.headerInOrder {
+		result = append(result, EmailHeader{
+			Name:  h.Name,
+			Value: h.Value,
+		})
+	}
+	return result
+}
+
+func (jp JPart) Disposition() *string {
+	if jp.headerInOrder != nil {
+		val := jp.headerInOrder.Last("Content-Disposition")
 		if val != "" {
-			dispVal, params, err := mime.ParseMediaType(val)
+			dispVal, _, err := mime.ParseMediaType(val)
 			if err == nil {
 				//disposition
-				ebd.Disposition = &dispVal
-
-				//Name
-				fileName, ok := params["filename"]
-				if ok {
-					ebd.Name = &fileName
-				}
-			}
-		}
-
-		if ebd.Name == nil {
-			//fallback
-			val := orderedHeaders.Last("Content-Type")
-			if val != "" {
-				_, params, err := mime.ParseMediaType(val)
-				if err == nil {
-					name, ok := params["name"]
-					if ok {
-						ebd.Name = &name
-					}
-				}
-			}
-		}
-
-		//Type
-		if val := orderedHeaders.Last("Content-Type"); val != "" {
-			mediaType, params, err := mime.ParseMediaType(val)
-			if err == nil {
-				ebd.Type = &mediaType
-
-				//charset
-				if strings.HasPrefix(mediaType, "text/") {
-					if charset, ok := params["charset"]; ok {
-						ebd.CharSet = &charset
-					} else {
-						fallbackCharSet := "us-ascii"
-						ebd.CharSet = &fallbackCharSet
-					}
-				}
-			}
-
-		}
-
-		//Location
-		//FIXME need to validate this is correct
-		if loc := orderedHeaders.Last("Content-Location"); loc != "" {
-			ebd.Location = &loc
-		}
-
-		//Language
-		//FIXME need to check if I need to remove comment kind of things here
-		if languages := orderedHeaders.Last("Language"); languages != "" {
-			for _, l := range strings.Split(languages, ",") {
-				ebd.Language = append(ebd.Language, strings.Trim(l, " "))
+				return &dispVal
 			}
 		}
 	}
-	return ebd
+	return nil
+}
+
+func (jp JPart) Name() *string {
+	if jp.headerInOrder != nil {
+		val := jp.headerInOrder.Last("Content-Disposition")
+		if val != "" {
+			_, params, err := mime.ParseMediaType(val)
+			if err == nil {
+				//Name
+				fileName, ok := params["filename"]
+				if ok {
+					return &fileName
+				}
+
+				//name fallback
+				val := jp.headerInOrder.Last("Content-Type")
+				if val != "" {
+					_, params, err := mime.ParseMediaType(val)
+					if err == nil {
+						name, ok := params["name"]
+						if ok {
+							return &name
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (jp JPart) Type() *string {
+	if jp.headerInOrder != nil {
+		if val := jp.headerInOrder.Last("Content-Type"); val != "" {
+			mediaType, _, err := mime.ParseMediaType(val)
+			if err == nil {
+				return &mediaType
+			}
+		}
+	}
+	return nil
+}
+
+func (jp JPart) Charset() *string {
+	if jp.headerInOrder != nil {
+		if val := jp.headerInOrder.Last("Content-Type"); val != "" {
+			mediaType, params, err := mime.ParseMediaType(val)
+			if err == nil {
+				//charset
+				if strings.HasPrefix(mediaType, "text/") {
+					if charset, ok := params["charset"]; ok {
+						return &charset
+					} else {
+						fallbackCharSet := "us-ascii"
+						return &fallbackCharSet
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (jp JPart) Location() *string {
+	//FIXME need to validate this is correct
+	if jp.headerInOrder != nil {
+		if loc := jp.headerInOrder.Last("Content-Location"); loc != "" {
+			return &loc
+		}
+	}
+	return nil
+}
+
+func (jp JPart) Language() []string {
+	//FIXME need to check if I need to remove comment kind of things here
+	var result []string
+	if jp.headerInOrder != nil {
+		if languages := jp.headerInOrder.Last("Content-Language"); languages != "" {
+			for _, l := range strings.Split(languages, ",") {
+				result = append(result, strings.Trim(l, " "))
+			}
+		}
+	}
+	return result
 }

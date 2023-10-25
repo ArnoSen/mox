@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// OrderedHeader represents headers in there original order
-type OrderedHeader []KV
+// HeaderInOrder represents headers in there original order
+type HeaderInOrder []KV
 
 // KV is a key-value pair
 type KV struct {
@@ -14,7 +14,7 @@ type KV struct {
 }
 
 // Last returns the value of the last occurence of a particular header. This is a JMAP requirement
-func (ohs OrderedHeader) Last(header string) string {
+func (ohs HeaderInOrder) Last(header string) string {
 	var result string
 	for i := len(ohs) - 1; i >= 0; i-- {
 		//FIXME check with std lib if they use ToLower
@@ -26,7 +26,7 @@ func (ohs OrderedHeader) Last(header string) string {
 }
 
 // Values returns all the values for header
-func (ohs OrderedHeader) Values(header string) []string {
+func (ohs HeaderInOrder) Values(header string) []string {
 	var result []string
 	for _, oh := range ohs {
 		if oh.Name == header {
@@ -38,7 +38,7 @@ func (ohs OrderedHeader) Values(header string) []string {
 }
 
 // MIMEHeader returns a MIMEHeader object. This adaptor is there to use some methods that are defined for MIMEHeader
-func (ohs OrderedHeader) MIMEHeader() textproto.MIMEHeader {
+func (ohs HeaderInOrder) MIMEHeader() textproto.MIMEHeader {
 	result := textproto.MIMEHeader{}
 	for _, oh := range ohs {
 		if _, exists := result[oh.Name]; exists {

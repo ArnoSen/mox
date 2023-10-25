@@ -75,7 +75,7 @@ type Part struct {
 
 	r               io.ReaderAt
 	header          textproto.MIMEHeader // Parsed header.
-	orderedHeaders  OrderedHeader        // Parsed header that maintains the original order
+	orderedHeaders  HeaderInOrder        // Parsed header that maintains the original order
 	nextBoundOffset int64                // If >= 0, the offset where the next part header starts. We can set this when a user fully reads each part.
 	lastBoundOffset int64                // Start of header of last/previous part. Used to skip a part if ParseNextPart is called and nextBoundOffset is -1.
 	parent          *Part                // Parent part, for getting bound from, and setting nextBoundOffset when a part has finished reading. Only for subparts, not top-level parts.
@@ -405,12 +405,12 @@ func (p *Part) Header() (textproto.MIMEHeader, error) {
 }
 
 // OrderedHeaders parses the headers and returns them in a slice maintaining to the original order
-func (p *Part) OrderedHeaders() (OrderedHeader, error) {
+func (p *Part) HeaderInOrder() (HeaderInOrder, error) {
 	if p.orderedHeaders != nil {
 		return p.orderedHeaders, nil
 	}
 	if p.HeaderOffset == p.BodyOffset {
-		p.orderedHeaders = OrderedHeader{}
+		p.orderedHeaders = HeaderInOrder{}
 		return p.orderedHeaders, nil
 	}
 
@@ -454,11 +454,11 @@ func parseHeader(r io.Reader) (textproto.MIMEHeader, error) {
 	return textproto.MIMEHeader(msg.Header), nil
 }
 
-func parseHeaderInOrder(ioR io.Reader) (OrderedHeader, error) {
+func parseHeaderInOrder(ioR io.Reader) (HeaderInOrder, error) {
 	//below is copied from std lib from mail.readHeader
 	//the difference is that results are stored in a slice vs a map whereby the original order is maintained.
 	//this is a requirement for JMAP
-	var m OrderedHeader
+	var m HeaderInOrder
 
 	r := textproto.NewReader(bufio.NewReader(ioR))
 
