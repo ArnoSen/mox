@@ -75,7 +75,9 @@ func (e Email) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	//remove all the fields we do not need
+	e.properties = append(e.properties, "id")
+
+	//remove all the fields we do not need exepct for 'id'
 	for k := range emailMapStringAny {
 		var keepProperty bool
 		for _, p := range e.properties {
@@ -350,10 +352,10 @@ search:
 	return "stubstate", false, position, ids, total, nil
 }
 
-func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	//TODO:
-	// implement properties: bodyValues
+	ja.mlog.Debug("custom get params", mlog.Field("bodyProperties", strings.Join(bodyProperties, ",")), mlog.Field("FetchTextBodyValues", FetchTextBodyValues), mlog.Field("FetchHTMLBodyValues", FetchHTMLBodyValues), mlog.Field("FetchAllBodyValues", FetchAllBodyValues), mlog.Field("MaxBodyValueBytes", MaxBodyValueBytes))
 
 	for _, id := range ids {
 		idInt64, err := id.Int64()
@@ -506,6 +508,11 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 					//this format we do not recognize to skip it
 					continue
 				}
+
+				if resultElement.DynamicProperties == nil {
+					resultElement.DynamicProperties = make(map[string]any, 1)
+				}
+
 				resultElement.DynamicProperties[prop], mErr = jem.HeaderAs(headerName, headerFormat, returnAll)
 				if mErr != nil {
 					ja.mlog.Error("error getting bespoke header", mlog.Field("id", idInt64), mlog.Field("prop", prop), mlog.Field("error", err.Error()))
@@ -516,6 +523,15 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 
 		if HasAny(properties, "bodyStructure") {
 			resultElement.BodyStructure = partToEmailBodyPart(jem.part, 0, idInt64, bodyProperties)
+		}
+
+		if HasAny(properties, "bodyValues") {
+			bvs, mErr := jem.BodyValues(FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues, MaxBodyValueBytes)
+			if mErr != nil {
+				ja.mlog.Error("error getting body values", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.BodyValues = bvs
 		}
 
 		result = append(result, resultElement)
@@ -950,7 +966,7 @@ func searchPartRecursive(partID string, parts []message.Part, nextNum int) (stri
 	return "", nil
 }
 
-func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllBodyValues bool, maxBodyValueBytes basetypes.Uint) (map[string]EmailBodyValue, *mlevelerrors.MethodLevelError) {
+func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllBodyValues bool, maxBodyValueBytes *basetypes.Uint) (map[string]EmailBodyValue, *mlevelerrors.MethodLevelError) {
 	//FIXME implement maxBodyValueBytes
 	//This is a map of partId to an EmailBodyValue object for none, some, or all text/* parts. Which parts are included and whether the value is truncated is determined by various arguments to Email/get and Email/parse.
 
@@ -997,9 +1013,11 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 			//FIXME make sure not to cut in a HREF link
 
 			var truncated bool
-			if len(bodyVal) > int(maxBodyValueBytes) {
-				bodyVal = string(bodyVal[:maxBodyValueBytes])
-				truncated = true
+			if maxBodyValueBytes != nil {
+				if len(bodyVal) > int(*maxBodyValueBytes) {
+					bodyVal = string(bodyVal[:*maxBodyValueBytes])
+					truncated = true
+				}
 			}
 
 			result[partId] = EmailBodyValue{

@@ -82,11 +82,11 @@ func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountI
 }
 
 type CustomGetRequestParams struct {
-	BodyProperties      []string       `json:"bodyProperties"`
-	FetchTextBodyValues bool           `json:"fetchTextBodyValues"`
-	FetchHTMLBodyValues bool           `json:"fetchHTMLBodyValues"`
-	FetchAllBodyValues  bool           `json:"fetchAllBodyValues"`
-	MaxBodyValueBytes   basetypes.Uint `json:"maxBodyValueBytes"`
+	BodyProperties      []string        `json:"bodyProperties"`
+	FetchTextBodyValues bool            `json:"fetchTextBodyValues"`
+	FetchHTMLBodyValues bool            `json:"fetchHTMLBodyValues"`
+	FetchAllBodyValues  bool            `json:"fetchAllBodyValues"`
+	MaxBodyValueBytes   *basetypes.Uint `json:"maxBodyValueBytes"`
 }
 
 func (m EmailDT) CustomGetRequestParams() any {
