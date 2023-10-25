@@ -377,8 +377,8 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		jem, merr := ja.NewEmail(em)
-		ja.mlog.Error("error instantiating new JEmail", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
 		if merr != nil {
+			ja.mlog.Error("error instantiating new JEmail", mlog.Field("id", idInt64), mlog.Field("error", merr.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
@@ -890,6 +890,7 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 }
 
 func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
+
 	partForPreview := jem.part
 	if len(jem.part.Parts) > 0 {
 		partForPreview = jem.part.Parts[0]
