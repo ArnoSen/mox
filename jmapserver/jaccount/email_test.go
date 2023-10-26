@@ -125,12 +125,9 @@ Content-Transfer-Encoding: 7bit
 			if len(to) != 1 {
 				t.Logf("was expecting one to address but got %d", len(to))
 				t.FailNow()
-
-				if !(to[0].Name == nil && to[0].Email == "jmap@km42.nl") {
-					t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
-					t.FailNow()
-				}
 			}
+			AssertNotNil(t, to[0].Name)
+			AssertEqualString(t, "jmap@km42.nl", to[0].Email)
 
 			from, mErr := jem.From()
 			RequireNoError(t, mErr)
@@ -139,10 +136,10 @@ Content-Transfer-Encoding: 7bit
 				t.Logf("was expecting one to address but got %d", len(to))
 				t.FailNow()
 
-				if !(to[0].Name != nil && *to[0].Name == "me" && to[0].Email == "me@km42.nl") {
-					t.Logf("unexpected from. From name: %v email: %s", to[0].Name, to[0].Email)
-					t.FailNow()
-				}
+			}
+			if !(from[0].Name != nil && *from[0].Name == "me" && from[0].Email == "me@km42.nl") {
+				t.Logf("unexpected from. From name: %v email: %s", from[0].Name, from[0].Email)
+				t.FailNow()
 			}
 
 			msgID, mErr := jem.MessagedId()
@@ -243,10 +240,10 @@ On 18-07-2023 17:59, me wrote:
 				t.Logf("was expecting one to address but got %d", len(to))
 				t.FailNow()
 
-				if !(*to[0].Name == "me" && to[0].Email == "me@km42.nl") {
-					t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
-					t.FailNow()
-				}
+			}
+			if !(*to[0].Name == "me" && to[0].Email == "me@km42.nl") {
+				t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
+				t.FailNow()
 			}
 
 			inReplyTo, mErr := jem.InReplyTo()
@@ -266,7 +263,7 @@ On 18-07-2023 17:59, me wrote:
 			AssertEqualString(t, "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl", references[0])
 
 			//Body value no truncating
-			bv, mErr := jem.BodyValues(true, false, false, 99999)
+			bv, mErr := jem.BodyValues(true, false, false, nil)
 			RequireNoError(t, mErr)
 
 			if len(bv) != 1 {
@@ -281,7 +278,8 @@ On 18-07-2023 17:59, me wrote:
 			}
 
 			//Body value with truncating
-			bv2, mErr := jem.BodyValues(true, false, false, 4)
+			maxBytes := basetypes.Uint(4)
+			bv2, mErr := jem.BodyValues(true, false, false, &maxBytes)
 			RequireNoError(t, mErr)
 
 			if len(bv2) != 1 {
@@ -297,7 +295,7 @@ On 18-07-2023 17:59, me wrote:
 			}
 
 			//BodyValue html
-			bvHTML, mErr := jem.BodyValues(false, true, false, 4)
+			bvHTML, mErr := jem.BodyValues(false, true, false, &maxBytes)
 			RequireNoError(t, mErr)
 
 			if len(bvHTML) != 1 {
@@ -368,8 +366,8 @@ On 18-07-2023 17:59, me wrote:
 
 		})
 
-		t.Run("Mail to JEmail. Message with only text body", func(t *testing.T) {
-			_ = `Content-Type: multipart/alternative;
+		t.Run("Mail to JEmail. Mulitpart alternative", func(t *testing.T) {
+			mail := `Content-Type: multipart/alternative;
  boundary="------------Z8pBLNP8kO35FOYVOKN5cUf4"
 Message-ID: <73720afb-fbad-2feb-1866-12a91cc8defa@km42.nl>
 Date: Fri, 6 Oct 2023 19:16:42 +0200
@@ -546,6 +544,37 @@ e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCrea
 </html>
 
 --------------Z8pBLNP8kO35FOYVOKN5cUf4--`
+
+			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+
+			part, err := message.Parse(mlog.New("test"), true, mReader)
+			RequireNoError(t, err)
+
+			msg := store.Message{
+				ID:       1,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test"))
+
+			to, mErr := jem.To()
+			RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			if to[0].Email != "support@mailtemi.com" {
+				t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
+				t.FailNow()
+			}
+
+			bodyStructure, mErr := jem.BodyStructure(defaultEmailBodyProperties)
+			RequireNoError(t, mErr)
+
+			AssertEqualInt(t, 2, len(bodyStructure.SubParts))
+
+			//FIXME do the bodyvalues part
 		})
 	})
 }
@@ -591,6 +620,15 @@ func AssertEqualString(t *testing.T, expected, actual string) bool {
 	if expected != actual {
 		t.Helper()
 		t.Logf("was expecting %q but got %q", expected, actual)
+		t.Fail()
+	}
+	return true
+}
+
+func AssertEqualInt(t *testing.T, expected, actual int) bool {
+	if expected != actual {
+		t.Helper()
+		t.Logf("was expecting %d but got %d", expected, actual)
 		t.Fail()
 	}
 	return true

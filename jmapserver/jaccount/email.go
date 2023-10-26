@@ -354,7 +354,6 @@ search:
 
 func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
-	//TODO:
 	ja.mlog.Debug("custom get params", mlog.Field("bodyProperties", strings.Join(bodyProperties, ",")), mlog.Field("FetchTextBodyValues", FetchTextBodyValues), mlog.Field("FetchHTMLBodyValues", FetchHTMLBodyValues), mlog.Field("FetchAllBodyValues", FetchAllBodyValues), mlog.Field("MaxBodyValueBytes", MaxBodyValueBytes))
 
 	for _, id := range ids {
@@ -522,13 +521,19 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		if HasAny(properties, "bodyStructure") {
-			resultElement.BodyStructure = partToEmailBodyPart(jem.part, 0, idInt64, bodyProperties)
+			bs, mErr := jem.BodyStructure(properties)
+			if mErr != nil {
+				ja.mlog.Error("error getting body structure", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+
+			}
+			resultElement.BodyStructure = bs
 		}
 
 		if HasAny(properties, "bodyValues") {
 			bvs, mErr := jem.BodyValues(FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues, MaxBodyValueBytes)
 			if mErr != nil {
-				ja.mlog.Error("error getting body values", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+				ja.mlog.Error("error getting body values", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.BodyValues = bvs
@@ -582,6 +587,11 @@ type JEmail struct {
 	part message.Part
 
 	logger *mlog.Log
+
+	//partsHaveBeenWalked is set to true when the subparts of part have been 'walked' meaning that the subparts have been populated
+	partsHaveBeenWalked bool
+
+	errorWhileWalkingParts bool
 }
 
 func NewJEmail(em store.Message, part message.Part, logger *mlog.Log) JEmail {
@@ -925,15 +935,98 @@ func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
 
 func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
 
+	if walkErr := jem.walkParts(); walkErr != nil {
+		return EmailBodyPart{}, walkErr
+	}
+
 	partID := 0
 
 	//do the top level part first
-	result := partToEmailBodyPart(jem.part, partID, jem.em.ID, bodyProperties)
+	result := partToEmailBodyPart(jem.part, &partID, jem.em.ID, bodyProperties)
 
 	//recurse over the subparts
 	recursePartToEmailBodyPart(jem.part.Parts, jem.em.ID, bodyProperties, &result, &partID)
 
 	return result, nil
+}
+
+func (jem *JEmail) walkParts() *mlevelerrors.MethodLevelError {
+	if !jem.partsHaveBeenWalked {
+		jem.partsHaveBeenWalked = true
+		if walkErr := jem.part.Walk(jem.logger, nil); walkErr != nil {
+			jem.errorWhileWalkingParts = true
+			jem.logger.Error("error walking part", mlog.Field("err", walkErr.Error()))
+			return mlevelerrors.NewMethodLevelErrorServerFail()
+		}
+		return nil
+	}
+	if jem.errorWhileWalkingParts {
+		return mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return nil
+}
+
+// partToEmailBodyPart returns the EmailBodyPart for the part (type message.Part)
+func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, bodyProperties []string) EmailBodyPart {
+	ebd := EmailBodyPart{
+		EmailBodyPartKnownFields: EmailBodyPartKnownFields{},
+		properties:               bodyProperties,
+	}
+
+	jPart, headerParseErr := NewJPart(part)
+	ebd.Size = jPart.Size()
+	ebd.Cid = jPart.Cid()
+
+	if headerParseErr == nil {
+		ebd.Headers = jPart.Headers()
+		ebd.Disposition = jPart.Disposition()
+		ebd.Name = jPart.Name()
+		ebd.Type = jPart.Type()
+		ebd.CharSet = jPart.Charset()
+		ebd.Location = jPart.Location()
+		ebd.Language = jPart.Language()
+
+		if t := jPart.Type(); t != nil && !strings.HasPrefix(strings.ToLower(*t), "multipart/") {
+			//This is null if, and only if, the part is of type multipart/*
+			partIDStr := fmt.Sprintf("%d", *nextPartID)
+			ebd.PartId = &partIDStr
+
+			//increase the partID counter
+
+			//BlobId
+			//FIXME just choosing a way to store things
+			//we have to come up with a way how to generate this
+
+			blobId := basetypes.Id(fmt.Sprintf("%d-%s", idInt64, partIDStr))
+			ebd.BlobId = &blobId
+
+			*nextPartID++
+		}
+
+	}
+	return ebd
+}
+
+func recursePartToEmailBodyPart(subparts []message.Part, idInt64 int64, bodyProperties []string, result *EmailBodyPart, nextPartId *int) {
+	if len(subparts) == 0 {
+		return
+	} else {
+
+		for _, p := range subparts {
+			subPartBodyPart := partToEmailBodyPart(p, nextPartId, idInt64, bodyProperties)
+
+			if subPartBodyPart.Type != nil {
+				//This is the full MIME structure of the message body, without recursing into message/rfc822 or message/global parts
+				if *subPartBodyPart.Type == "message/rfc822" || *subPartBodyPart.Type == "message/global" {
+					continue
+				}
+			}
+
+			recursePartToEmailBodyPart(p.Parts, idInt64, bodyProperties, &subPartBodyPart, nextPartId)
+
+			result.SubParts = append(result.SubParts, subPartBodyPart)
+		}
+	}
 }
 
 func (jem JEmail) GetPartBody(partID string) (string, *mlevelerrors.MethodLevelError) {
@@ -967,7 +1060,6 @@ func searchPartRecursive(partID string, parts []message.Part, nextNum int) (stri
 }
 
 func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllBodyValues bool, maxBodyValueBytes *basetypes.Uint) (map[string]EmailBodyValue, *mlevelerrors.MethodLevelError) {
-	//FIXME implement maxBodyValueBytes
 	//This is a map of partId to an EmailBodyValue object for none, some, or all text/* parts. Which parts are included and whether the value is truncated is determined by various arguments to Email/get and Email/parse.
 
 	result := make(map[string]EmailBodyValue, 0)
@@ -1029,11 +1121,13 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 	return result, nil
 }
 
+// TextBody returns a list of EmailBodyParts of type text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
 func (jem JEmail) TextBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	// A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
 	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeText), nil
 }
 
+// TextBody returns a list of EmailBodyParts of type text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
 func (jem JEmail) HTMLBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	//A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
 	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeHTML), nil
@@ -1062,7 +1156,8 @@ func flattenPartToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties
 
 	var result []EmailBodyPart
 
-	topLevelPart := partToEmailBodyPart(part, 0, idInt64, bodyProperties)
+	partID := 0
+	topLevelPart := partToEmailBodyPart(part, &partID, idInt64, bodyProperties)
 
 	ct := topLevelPart.Type
 
@@ -1086,63 +1181,6 @@ func flattenPartToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties
 	}
 
 	return result
-}
-
-func recursePartToEmailBodyPart(subparts []message.Part, idInt64 int64, bodyProperties []string, result *EmailBodyPart, partId *int) {
-	if len(subparts) == 0 {
-		return
-	} else {
-
-		for _, p := range subparts {
-			*partId++
-			subPartBodyPart := partToEmailBodyPart(p, *partId, idInt64, bodyProperties)
-
-			if subPartBodyPart.Type != nil {
-				//This is the full MIME structure of the message body, without recursing into message/rfc822 or message/global parts
-				if *subPartBodyPart.Type == "message/rfc822" || *subPartBodyPart.Type == "message/global" {
-					continue
-				}
-			}
-
-			recursePartToEmailBodyPart(p.Parts, idInt64, bodyProperties, &subPartBodyPart, partId)
-
-			result.SubParts = append(result.SubParts, subPartBodyPart)
-		}
-	}
-}
-
-// partToEmailBodyPart returns the EmailBodyPart for the part (type message.Part)
-func partToEmailBodyPart(part message.Part, partID int, idInt64 int64, bodyProperties []string) EmailBodyPart {
-	ebd := EmailBodyPart{
-		EmailBodyPartKnownFields: EmailBodyPartKnownFields{},
-		properties:               bodyProperties,
-	}
-
-	//PartId
-	//we only have one part so we set partId to 0
-	partIDStr := fmt.Sprintf("%d", partID)
-	ebd.PartId = &partIDStr
-
-	//BlobId
-	//FIXME just choosing a way to store things
-	//we have to come up with a way how to generate this
-	blobId := basetypes.Id(fmt.Sprintf("%d-%s", idInt64, partIDStr))
-	ebd.BlobId = &blobId
-
-	jPart, headerParseErr := NewJPart(part)
-	ebd.Size = jPart.Size()
-	ebd.Cid = jPart.Cid()
-
-	if headerParseErr == nil {
-		ebd.Headers = jPart.Headers()
-		ebd.Disposition = jPart.Disposition()
-		ebd.Name = jPart.Name()
-		ebd.Type = jPart.Type()
-		ebd.CharSet = jPart.Charset()
-		ebd.Location = jPart.Location()
-		ebd.Language = jPart.Language()
-	}
-	return ebd
 }
 
 // JPart is a helper to get the BodyPart properties we need

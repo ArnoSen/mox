@@ -41,6 +41,7 @@ func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
 func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
 	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
 	if err != nil {
+		ja.mlog.Error("error loading part", mlog.Field("err", err.Error()))
 		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 	return NewJEmail(em, part, ja.mlog), nil
