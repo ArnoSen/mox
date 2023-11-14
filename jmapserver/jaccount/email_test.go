@@ -64,7 +64,7 @@ func TestMarshalEmailBodyPart(t *testing.T) {
 		t.FailNow()
 	}
 
-	expected := []byte(`{"h1":"h1value","name":"name"}`)
+	expected := []byte(`{"h1":"h1value","name":"name","subParts":null}`)
 
 	if !bytes.Equal(ebpBytes, expected) {
 		t.Logf("was expecting %s but got %s", expected, ebpBytes)
@@ -385,162 +385,13 @@ Content-Transfer-Encoding: 7bit
 
 Hi,
 
-I am developing a JMAP server Mox (https://github.com/mjl-/mox) and I am 
-have some difficulty configuring a JMAP account in the MailTemi ios app.
-
-The steps I follow are:
-
-JMAP -> New Account
-
-I enter email: jmap@km42.nl and the password. Then it says 'Searching 
-....' and comes back with "Server Resolve Failed 
-(https://mail.km42.nl:443/.well-known.jmap)".
-
-However at the server end, I see a successful retrieval of the session 
-object:
-
-Oct 06 19:10:32 mail mox[1403275]: l=debug m="http request" 
-cid=18b05e815bd pkg=http httpaccess= handler=jmap method=get 
-url=/jmap/session host=mail.km42.nl duration=9.286008ms statuscode=200 pro
-to=http/2.0 remoteaddr=83.80.152.96:60721 tlsinfo=tls1.3 
-useragent="Mailtemi/1 CFNetwork/1410.0.3 Darwin/22.6.0" referrr= 
-size=524 uncompressedsize=1200
-
-Also I see an incoming request for the mailboxes that is properly answered:
-
-Oct 06 19:10:32 mail mox[1403275]: l=debug m="dump http request" 
-pkg=jmap payload="POST /jmap/api HTTP/2.0\r\nHost: 
-mail.km42.nl\r\nAccept: application/json\r\nAccept-Encoding: gzip, 
-deflate, br\
-r\nAccept-Language: nl-NL,nl;q=0.9\r\nContent-Length: 
-110\r\nContent-Type: application/json\r\nUser-Agent: Mailtemi/1 
-CFNetwork/1410.0.3 
-Darwin/22.6.0\r\n\r\n{\"methodCalls\":[[\"Mailbox/get\",{\
-"accountId\":\"000\",\"ids\":null},\"92cb0\"]],\"using\":[\"urn:ietf:params:jmap:mail\"]}"
-
-Response payload:
-Oct 06 19:10:32 mail mox[1403275]: l=debug m="http response" pkg=jmap 
-response="{\"methodResponses\":[[\"Mailbox/get\",{\"accountId\":\"000\",\"list\":[{\"id\":\"1\",\"name\":\"Inbox\",\"parentId
-\":null,\"role\":\"Inbox\",\"sortOrder\":1,\"totalEmails\":2,\"unreadEmails\":1,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemoveItems\":
-true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"2\",\"name\":\"Sent\",\"paren
-tId\":null,\"role\":\"Sent\",\"sortOrder\":2,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemoveItems\
-":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"3\",\"name\":\"Archive\",\"
-parentId\":null,\"role\":\"Archive\",\"sortOrder\":3,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemo
-veItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"4\",\"name\":\"Tras
-h\",\"parentId\":null,\"role\":\"Trash\",\"sortOrder\":4,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"may
-RemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"5\",\"name\":\"
-Drafts\",\"parentId\":null,\"role\":\"Draft\",\"sortOrder\":5,\"totalEmails\":1,\"unreadEmails\":1,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,
-\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"6\",\"name
-\":\"Junk\",\"parentId\":null,\"role\":\"Junk\",\"sortOrder\":6,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":tru
-e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true}],\"notFound\":[],\
-"state\":\"stubState\"},\"92cb0\"]],\"sessionState\":\"stubstate\"}"
-
-Response header details:
-
-Oct 06 19:10:32 mail mox[1403275]: l=debug m="http request" 
-cid=18b05e815be pkg=http httpaccess= handler=jmap method=post 
-url=/jmap/api host=mail.km42.nl duration=1.737832ms statuscode=200 proto=
-http/2.0 remoteaddr=83.80.152.96:60722 tlsinfo=tls1.3 
-useragent="Mailtemi/1 CFNetwork/1410.0.3 Darwin/22.6.0" referrr= 
-size=446 uncompressedsize=2224
-
-This is working in the reference jmap client 
-https://jmap.io/jmap-demo-webmail/ but I cannot get it to work with 
-Mailtemi.
-Is this someting not right at my end or is this not going well at your end?
-
-Looking forward to your response, regards,
-
 A.
 
 --------------Z8pBLNP8kO35FOYVOKN5cUf4
 Content-Type: text/html; charset=UTF-8
 Content-Transfer-Encoding: 7bit
 
-<html>
-  <head>
-
-    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
-  </head>
-  <body>
-    <p>Hi,</p>
-    <p>I am developing a JMAP server Mox (<a class="moz-txt-link-freetext" href="https://github.com/mjl-/mox">https://github.com/mjl-/mox</a>)
-      and I am have some difficulty configuring a JMAP account in the
-      MailTemi ios app.</p>
-    <p>The steps I follow are:</p>
-    <p>JMAP -&gt; New Account</p>
-    <p>I enter email: <a class="moz-txt-link-abbreviated" href="mailto:jmap@km42.nl">jmap@km42.nl</a> and the password. Then it says
-      'Searching ....' and comes back with "Server Resolve Failed
-      (<a class="moz-txt-link-freetext" href="https://mail.km42.nl:443/.well-known.jmap">https://mail.km42.nl:443/.well-known.jmap</a>)". </p>
-    <p>However at the server end, I see a successful retrieval of the
-      session object:</p>
-    <p><span style="font-family:monospace"><span
-          style="color:#000000;background-color:#ffffff;">Oct 06
-          19:10:32 mail mox[1403275]: l=debug m="http request"
-          cid=18b05e815bd pkg=http httpaccess= handler=jmap method=get
-          url=/jmap/session host=mail.km42.nl duration=9.286008ms
-          statuscode=200 pro</span><br>
-        to=http/2.0 remoteaddr=83.80.152.96:60721 tlsinfo=tls1.3
-        useragent="Mailtemi/1 CFNetwork/1410.0.3 Darwin/22.6.0" referrr=
-        size=524 uncompressedsize=1200</span></p>
-    <p>Also I see an incoming request for the mailboxes that is properly
-      answered:</p>
-    <p><span style="font-family:monospace"><span
-          style="color:#000000;background-color:#ffffff;">Oct 06
-          19:10:32 mail mox[1403275]: l=debug m="dump http request"
-          pkg=jmap payload="POST /jmap/api HTTP/2.0\r\nHost:
-          mail.km42.nl\r\nAccept: application/json\r\nAccept-Encoding:
-          gzip, deflate, br\</span><br>
-        r\nAccept-Language: nl-NL,nl;q=0.9\r\nContent-Length:
-        110\r\nContent-Type: application/json\r\nUser-Agent: Mailtemi/1
-        CFNetwork/1410.0.3
-        Darwin/22.6.0\r\n\r\n{\"methodCalls\":[[\"Mailbox/get\",{\<br>
-"accountId\":\"000\",\"ids\":null},\"92cb0\"]],\"using\":[\"urn:ietf:params:jmap:mail\"]}"</span></p>
-    <p>Response payload:<br>
-      <span style="font-family:monospace"><span
-          style="font-family:monospace"><span
-            style="color:#000000;background-color:#ffffff;">Oct 06
-            19:10:32 mail mox[1403275]: l=debug m="http response"
-            pkg=jmap
-response="{\"methodResponses\":[[\"Mailbox/get\",{\"accountId\":\"000\",\"list\":[{\"id\":\"1\",\"name\":\"Inbox\",\"parentId</span><br>
-\":null,\"role\":\"Inbox\",\"sortOrder\":1,\"totalEmails\":2,\"unreadEmails\":1,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemoveItems\":<br>
-true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"2\",\"name\":\"Sent\",\"paren<br>
-tId\":null,\"role\":\"Sent\",\"sortOrder\":2,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemoveItems\<br>
-":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"3\",\"name\":\"Archive\",\"<br>
-parentId\":null,\"role\":\"Archive\",\"sortOrder\":3,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"mayRemo<br>
-veItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"4\",\"name\":\"Tras<br>
-h\",\"parentId\":null,\"role\":\"Trash\",\"sortOrder\":4,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,\"may<br>
-RemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"5\",\"name\":\"<br>
-Drafts\",\"parentId\":null,\"role\":\"Draft\",\"sortOrder\":5,\"totalEmails\":1,\"unreadEmails\":1,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":true,<br>
-\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true},{\"id\":\"6\",\"name<br>
-\":\"Junk\",\"parentId\":null,\"role\":\"Junk\",\"sortOrder\":6,\"totalEmails\":0,\"unreadEmails\":0,\"totalThreads\":0,\"unreadThreads\":0,\"myRights\":{\"mayReadItems\":true,\"mayAddItems\":tru<br>
-e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCreateChild\":true,\"mayRename\":true,\"mayDelete\":false,\"maySubmit\":true},\"isSubscribed\":true}],\"notFound\":[],\<br>
-"state\":\"stubState\"},\"92cb0\"]],\"sessionState\":\"stubstate\"}"
-          <br>
-        </span></span></p>
-    <p>Response header details:<br>
-      <span style="font-family:monospace"><span
-          style="font-family:monospace"></span></span></p>
-    <p><span style="font-family:monospace"><span
-          style="font-family:monospace">Oct 06 19:10:32 mail
-          mox[1403275]: l=debug m="http request" cid=18b05e815be
-          pkg=http httpaccess= handler=jmap method=post url=/jmap/api
-          host=mail.km42.nl duration=1.737832ms statuscode=200 proto=<br>
-          http/2.0 remoteaddr=83.80.152.96:60722 tlsinfo=tls1.3
-          useragent="Mailtemi/1 CFNetwork/1410.0.3 Darwin/22.6.0"
-          referrr= size=446 uncompressedsize=2224<br>
-        </span></span></p>
-    <p>This is working in the reference jmap client
-      <a class="moz-txt-link-freetext" href="https://jmap.io/jmap-demo-webmail/">https://jmap.io/jmap-demo-webmail/</a> but I cannot get it to work
-      with Mailtemi. <br>
-      Is this someting not right at my end or is this not going well at
-      your end?<br>
-      <br>
-      Looking forward to your response, regards,</p>
-    <p>A.<br>
-    </p>
-  </body>
-</html>
+<html></html>
 
 --------------Z8pBLNP8kO35FOYVOKN5cUf4--`
 
@@ -584,6 +435,28 @@ e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCrea
 			}
 
 			//FIXME do the bodyvalues part
+
+			bvTxt, mErr := jem.BodyValues(true, false, false, nil)
+			RequireNoError(t, mErr)
+			AssertEqualInt(t, 1, len(bvTxt))
+
+			if textValue, ok := bvTxt["0"]; !ok {
+				t.Logf("was expecting partId 0 in body values map")
+				t.FailNow()
+			} else {
+				AssertEqualString(t, "Hi,\r\n\r\nA.\r\n", textValue.Value)
+			}
+
+			bvHTML, mErr := jem.BodyValues(false, true, false, nil)
+			RequireNoError(t, mErr)
+			AssertEqualInt(t, 1, len(bvHTML))
+
+			if textValue, ok := bvHTML["1"]; !ok {
+				t.Logf("was expecting partId 0 in body values map")
+				t.FailNow()
+			} else {
+				AssertEqualString(t, "<html></html>\r\n", textValue.Value)
+			}
 		})
 	})
 }

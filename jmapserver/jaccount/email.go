@@ -1018,28 +1018,40 @@ func (jem JEmail) GetPartBody(partID string) (string, *mlevelerrors.MethodLevelE
 	//this can later be reused to get a particular BlobId
 	//since BlobIds have a Global Scope, we need to add a prefix
 
-	if partID == "0" {
-		fullBody, err := io.ReadAll(jem.part.Reader())
-		if err != nil {
-			return "", mlevelerrors.NewMethodLevelErrorServerFail()
-		}
-		return string(fullBody), nil
-	}
+	//FIXME I would need the structure so I can parse at least the content type
 
-	return searchPartRecursive(partID, jem.part.Parts, 1)
-}
-
-func searchPartRecursive(partID string, parts []message.Part, nextNum int) (string, *mlevelerrors.MethodLevelError) {
-	for _, p := range parts {
-		if partID == fmt.Sprintf("%d", nextNum) {
-			fullBody, err := io.ReadAll(p.Reader())
+	if jem.part.MediaType != "MULTIPART" {
+		if partID == "0" {
+			//FIXME this does not work for a multipart body
+			fullBody, err := io.ReadAll(jem.part.Reader())
 			if err != nil {
 				return "", mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			return string(fullBody), nil
 		}
-		nextNum++
-		return searchPartRecursive(partID, p.Parts, nextNum)
+		return searchPartRecursive(partID, jem.part.Parts, 1)
+	}
+	return searchPartRecursive(partID, jem.part.Parts, 0)
+
+}
+
+func searchPartRecursive(partID string, parts []message.Part, nextNum int) (string, *mlevelerrors.MethodLevelError) {
+	//FIXME need an error to indicate the part was not found
+	for _, p := range parts {
+		if p.MediaType != "MULTIPART" {
+			if partID == fmt.Sprintf("%d", nextNum) {
+				fullBody, err := io.ReadAll(p.Reader())
+				if err != nil {
+					return "", mlevelerrors.NewMethodLevelErrorServerFail()
+				}
+				return string(fullBody), nil
+			}
+			nextNum++
+
+			if len(p.Parts) > 0 {
+				searchPartRecursive(partID, p.Parts, nextNum)
+			}
+		}
 	}
 	return "", nil
 }
@@ -1063,6 +1075,8 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		if mErr != nil {
 			return nil, mErr
 		}
+
+		fmt.Printf("got %d texbody parts\n", len(textBodyParts))
 
 		for _, bp := range textBodyParts {
 			if toIncludeFunc(bp.Type, bp.PartId) {
@@ -1144,25 +1158,50 @@ func flattenPartToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties
 	partID := 0
 	topLevelPart := partToEmailBodyPart(part, &partID, idInt64, bodyProperties)
 
-	ct := topLevelPart.Type
+	//FIXME this is far from complete but we need something as a start
 
-	var include bool
+	fmt.Println("check for multipart alternative")
+	fmt.Printf("content type is %q\n", *topLevelPart.Type)
+	fmt.Printf("is multipart/alternative: %v\n", strings.HasPrefix(*topLevelPart.Type, "multipart/alternative"))
+	if topLevelPart.Type != nil && strings.HasPrefix(*topLevelPart.Type, "multipart/alternative") {
+		//we have something to chose from
+		fmt.Println("here")
 
-	if ct != nil {
-		switch flattenType {
-		case flattenTypeText, flattenTypeHTML:
-			switch {
-			case HasAny([]string{"text/plain", "text/html"}, *ct):
-				include = true
-			case strings.HasPrefix(*ct, "image/"), strings.HasPrefix(*ct, "audio/"), strings.HasPrefix(*ct, "video/"):
-				include = true
+		for _, p := range part.Parts {
+			partBodyPart := partToEmailBodyPart(p, &partID, idInt64, bodyProperties)
+
+			switch flattenType {
+			case flattenTypeHTML:
+				if partBodyPart.Type != nil && *partBodyPart.Type == "text/html" {
+					result = append(result, partBodyPart)
+				}
+			case flattenTypeText:
+				if partBodyPart.Type != nil && *partBodyPart.Type == "text/plain" {
+					result = append(result, partBodyPart)
+				}
 			}
-
 		}
-	}
+	} else {
+		ct := topLevelPart.Type
 
-	if include {
-		result = append(result, topLevelPart)
+		var include bool
+
+		if ct != nil {
+			switch flattenType {
+			case flattenTypeText, flattenTypeHTML:
+				switch {
+				case HasAny([]string{"text/plain", "text/html"}, *ct):
+					include = true
+				case strings.HasPrefix(*ct, "image/"), strings.HasPrefix(*ct, "audio/"), strings.HasPrefix(*ct, "video/"):
+					include = true
+				}
+
+			}
+		}
+
+		if include {
+			result = append(result, topLevelPart)
+		}
 	}
 
 	return result
