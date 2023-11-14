@@ -3,7 +3,6 @@ package jaccount
 import (
 	"bytes"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -550,6 +549,8 @@ e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCrea
 			part, err := message.Parse(mlog.New("test"), true, mReader)
 			RequireNoError(t, err)
 
+			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+
 			msg := store.Message{
 				ID:       1,
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
@@ -574,62 +575,15 @@ e,\"mayRemoveItems\":true,\"maySetSeen\":true,\"maySetKeywords\":false,\"mayCrea
 
 			AssertEqualInt(t, 2, len(bodyStructure.SubParts))
 
+			if AssertNotNil(t, bodyStructure.SubParts[0].Type) {
+				AssertEqualString(t, "text/plain", *bodyStructure.SubParts[0].Type)
+			}
+
+			if AssertNotNil(t, bodyStructure.SubParts[1].Type) {
+				AssertEqualString(t, "text/html", *bodyStructure.SubParts[1].Type)
+			}
+
 			//FIXME do the bodyvalues part
 		})
 	})
-}
-
-func RequireNoError(t *testing.T, e error) {
-	if !(e == nil || reflect.ValueOf(e).IsNil()) {
-		t.Helper()
-		t.Logf("was expecting no error but got %s", e.Error())
-		t.FailNow()
-	}
-}
-
-func AssertNil(t *testing.T, i any) bool {
-	if i == nil || reflect.ValueOf(i).IsNil() {
-		return true
-	}
-
-	t.Helper()
-	t.Logf("was expecting nil but got %+v", i)
-	t.Fail()
-	return false
-}
-
-func AssertNotNil(t *testing.T, i any) bool {
-	if i == nil {
-		t.Logf("was expecting not nil but nil")
-		t.Fail()
-		return false
-	}
-	return true
-}
-
-func AssertTrue(t *testing.T, b bool) bool {
-	if !b {
-		t.Helper()
-		t.Logf("was expecting true but got false")
-		t.Fail()
-	}
-	return b
-}
-
-func AssertEqualString(t *testing.T, expected, actual string) bool {
-	if expected != actual {
-		t.Helper()
-		t.Logf("was expecting %q but got %q", expected, actual)
-		t.Fail()
-	}
-	return true
-}
-
-func AssertEqualInt(t *testing.T, expected, actual int) bool {
-	if expected != actual {
-		t.Helper()
-		t.Logf("was expecting %d but got %d", expected, actual)
-		t.Fail()
-	}
-	return true
 }

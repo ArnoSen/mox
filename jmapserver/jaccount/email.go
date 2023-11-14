@@ -35,7 +35,7 @@ var validSortProperties []string = []string{
 	"someInThreadHaveKeyword",
 }
 
-var defaultEmailPropertyFieds = []string{
+var defaultEmailPropertyFields = []string{
 	"id", "blobId", "threadId", "mailboxIds", "keywords", "size",
 	"receivedAt", "messageId", "inReplyTo", "references", "sender", "from",
 	"to", "cc", "bcc", "replyTo", "subject", "sentAt", "hasAttachment",
@@ -219,6 +219,11 @@ func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
 
 	//remove all the fields we do not need
 	for k := range edpMapStringAny {
+		if k == "subParts" {
+			//although not made very explicit in the standard, we should always keep subParts
+			continue
+		}
+
 		var keepProperty bool
 		for _, p := range ebp.properties {
 			if k == p {
@@ -384,7 +389,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		if len(properties) == 0 {
-			properties = defaultEmailPropertyFieds
+			properties = defaultEmailPropertyFields
 		}
 
 		resultElement := Email{
@@ -521,7 +526,8 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		if HasAny(properties, "bodyStructure") {
-			bs, mErr := jem.BodyStructure(properties)
+			//FIXME In addition, the client may request/send EmailBodyPart properties representing individual header fields, following the same syntax and semantics as for the Email object, e.g., header:Content-Type.
+			bs, mErr := jem.BodyStructure(bodyProperties)
 			if mErr != nil {
 				ja.mlog.Error("error getting body structure", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
@@ -935,10 +941,6 @@ func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
 
 func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
 
-	if walkErr := jem.walkParts(); walkErr != nil {
-		return EmailBodyPart{}, walkErr
-	}
-
 	partID := 0
 
 	//do the top level part first
@@ -948,22 +950,6 @@ func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevel
 	recursePartToEmailBodyPart(jem.part.Parts, jem.em.ID, bodyProperties, &result, &partID)
 
 	return result, nil
-}
-
-func (jem *JEmail) walkParts() *mlevelerrors.MethodLevelError {
-	if !jem.partsHaveBeenWalked {
-		jem.partsHaveBeenWalked = true
-		if walkErr := jem.part.Walk(jem.logger, nil); walkErr != nil {
-			jem.errorWhileWalkingParts = true
-			jem.logger.Error("error walking part", mlog.Field("err", walkErr.Error()))
-			return mlevelerrors.NewMethodLevelErrorServerFail()
-		}
-		return nil
-	}
-	if jem.errorWhileWalkingParts {
-		return mlevelerrors.NewMethodLevelErrorServerFail()
-	}
-	return nil
 }
 
 // partToEmailBodyPart returns the EmailBodyPart for the part (type message.Part)
@@ -1002,7 +988,6 @@ func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, body
 
 			*nextPartID++
 		}
-
 	}
 	return ebd
 }
