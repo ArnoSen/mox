@@ -66,8 +66,10 @@ during those commands instead of during "data".
 	}
 
 	var dir, ip string
+	var initOnly bool
 	c.flag.StringVar(&dir, "dir", filepath.Join(userConfDir, "mox-localserve"), "configuration storage directory")
 	c.flag.StringVar(&ip, "ip", "", "serve on this ip instead of default 127.0.0.1 and ::1. only used when writing configuration, at first launch.")
+	c.flag.BoolVar(&initOnly, "initonly", false, "write configuration files and exit")
 	args := c.Parse()
 	if len(args) != 0 {
 		c.Usage()
@@ -76,6 +78,18 @@ during those commands instead of during "data".
 	log := mlog.New("localserve")
 
 	mox.FilesImmediate = true
+
+	if initOnly {
+		if _, err := os.Stat(dir); err == nil {
+			log.Print("warning: directory for configuration files already exists, continuing")
+		}
+		log.Print("creating mox localserve config", mlog.Field("dir", dir))
+		err := writeLocalConfig(log, dir, ip)
+		if err != nil {
+			log.Fatalx("creating mox localserve config", err, mlog.Field("dir", dir))
+		}
+		return
+	}
 
 	// Load config, creating a new one if needed.
 	var existingConfig bool
@@ -124,8 +138,10 @@ during those commands instead of during "data".
 	queue.Localserve = true
 
 	const mtastsdbRefresher = false
+	const sendDMARCReports = false
+	const sendTLSReports = false
 	const skipForkExec = true
-	if err := start(mtastsdbRefresher, skipForkExec); err != nil {
+	if err := start(mtastsdbRefresher, sendDMARCReports, sendTLSReports, skipForkExec); err != nil {
 		log.Fatalx("starting mox", err)
 	}
 	golog.Printf("mox, version %s", moxvar.Version)
@@ -324,11 +340,15 @@ func writeLocalConfig(log *mlog.Log, dir, ip string) (rerr error) {
 	local.WebserverHTTPS.Enabled = true
 	local.WebserverHTTPS.Port = 1443
 
+	uid := os.Getuid()
+	if uid < 0 {
+		uid = 1 // For windows.
+	}
 	static := config.Static{
 		DataDir:           ".",
 		LogLevel:          "traceauth",
 		Hostname:          "localhost",
-		User:              fmt.Sprintf("%d", os.Getuid()),
+		User:              fmt.Sprintf("%d", uid),
 		AdminPasswordFile: "adminpasswd",
 		Pedantic:          true,
 		Listeners: map[string]config.Listener{

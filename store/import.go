@@ -84,10 +84,7 @@ func (mr *MboxReader) Next() (*Message, *os.File, string, error) {
 	}
 	defer func() {
 		if f != nil {
-			err := os.Remove(f.Name())
-			mr.log.Check(err, "removing temporary message file after mbox read error", mlog.Field("path", f.Name()))
-			err = f.Close()
-			mr.log.Check(err, "closing temporary message file after mbox read error")
+			CloseRemoveTempFile(mr.log, f, "message after mbox read error")
 		}
 	}()
 
@@ -272,10 +269,11 @@ func (mr *MaildirReader) Next() (*Message, *os.File, string, error) {
 	}
 	defer func() {
 		if f != nil {
-			err := os.Remove(f.Name())
-			mr.log.Check(err, "removing temporary message file after maildir read error", mlog.Field("path", f.Name()))
-			err = f.Close()
+			name := f.Name()
+			err := f.Close()
 			mr.log.Check(err, "closing temporary message file after maildir read error")
+			err = os.Remove(name)
+			mr.log.Check(err, "removing temporary message file after maildir read error", mlog.Field("path", name))
 		}
 	}()
 

@@ -136,9 +136,11 @@ describe-static" and "mox config describe-domains":
 				# (optional)
 				ACME:
 
-				# Key and certificate files are opened by the privileged root process and passed
-				# to the unprivileged mox process, so no special permissions are required.
-				# (optional)
+				# Keys and certificates to use for this listener. The files are opened by the
+				# privileged root process and passed to the unprivileged mox process, so no
+				# special permissions are required on the files. If the private key will not be
+				# replaced when refreshing certificates, also consider adding the private key to
+				# HostPrivateKeyFiles and configuring DANE TLSA DNS records. (optional)
 				KeyCerts:
 					-
 
@@ -151,6 +153,17 @@ describe-static" and "mox config describe-domains":
 
 				# Minimum TLS version. Default: TLSv1.2. (optional)
 				MinVersion:
+
+				# Private keys used for ACME certificates. Specified explicitly so DANE TLSA DNS
+				# records can be generated, even before the certificates are requested. DANE is a
+				# mechanism to authenticate remote TLS certificates based on a public key or
+				# certificate specified in DNS, protected with DNSSEC. DANE is opportunistic and
+				# attempted when delivering SMTP with STARTTLS. The private key files must be in
+				# PEM format. PKCS8 is recommended, but PKCS1 and EC private keys are recognized
+				# as well. Only RSA 2048 bit and ECDSA P-256 keys are currently used. The first of
+				# each is used when requesting new certificates through ACME. (optional)
+				HostPrivateKeyFiles:
+					-
 
 			# Maximum size in bytes for incoming and outgoing messages. Default is 100MB.
 			# (optional)
@@ -166,10 +179,18 @@ describe-static" and "mox config describe-domains":
 				# Do not offer STARTTLS to secure the connection. Not recommended. (optional)
 				NoSTARTTLS: false
 
-				# Do not accept incoming messages if STARTTLS is not active. Can be used in
-				# combination with a strict MTA-STS policy. A remote SMTP server may not support
-				# TLS and may not be able to deliver messages. (optional)
+				# Do not accept incoming messages if STARTTLS is not active. Consider using in
+				# combination with an MTA-STS policy and/or DANE. A remote SMTP server may not
+				# support TLS and may not be able to deliver messages. Incoming messages for TLS
+				# reporting addresses ignore this setting and do not require TLS. (optional)
 				RequireSTARTTLS: false
+
+				# Do not announce the REQUIRETLS SMTP extension. Messages delivered using the
+				# REQUIRETLS extension should only be distributed onwards to servers also
+				# implementing the REQUIRETLS extension. In some situations, such as hosting
+				# mailing lists, this may not be feasible due to lack of support for the extension
+				# by mailing list subscribers. (optional)
+				NoRequireTLS: false
 
 				# Addresses of DNS block lists for incoming messages. Block lists are only
 				# consulted for connections/messages without enough reputation to make an
@@ -371,6 +392,22 @@ describe-static" and "mox config describe-domains":
 		# E.g. Postmaster or Inbox.
 		Mailbox:
 
+	# Destination for per-host TLS reports (TLSRPT). TLS reports can be per recipient
+	# domain (for MTA-STS), or per MX host (for DANE). The per-domain TLS reporting
+	# configuration is in domains.conf. This is the TLS reporting configuration for
+	# this host. If absent, no host-based TLSRPT address is configured, and no host
+	# TLSRPT DNS record is suggested. (optional)
+	HostTLSRPT:
+
+		# Account to deliver TLS reports to. Typically same account as for postmaster.
+		Account:
+
+		# Mailbox to deliver TLS reports to. Recommended value: TLSRPT.
+		Mailbox:
+
+		# Localpart at hostname to accept TLS reports at. Recommended value: tls-reports.
+		Localpart:
+
 	# Mailboxes to create for new accounts. Inbox is always created. Mailboxes can be
 	# given a 'special-use' role, which are understood by most mail clients. If
 	# absent/empty, the following mailboxes are created: Sent, Archive, Trash, Drafts
@@ -528,6 +565,18 @@ describe-static" and "mox config describe-domains":
 				# Hostname belonging to RemoteIPs. This name is used during in SMTP EHLO. This is
 				# typically the hostname of the host in the Address field.
 				RemoteHostname:
+
+	# Do not send DMARC reports (aggregate only). By default, aggregate reports on
+	# DMARC evaluations are sent to domains if their DMARC policy requests them.
+	# Reports are sent at whole hours, with a minimum of 1 hour and maximum of 24
+	# hours, rounded up so a whole number of intervals cover 24 hours, aligned at
+	# whole days in UTC. (optional)
+	NoOutgoingDMARCReports: false
+
+	# Do not send TLS reports. By default, reports about successful and failed SMTP
+	# STARTTLS connections are sent to domains if their TLSRPT DNS record requests
+	# them. Reports covering a 24 hour UTC interval are sent daily. (optional)
+	NoOutgoingTLSReports: false
 
 # domains.conf
 

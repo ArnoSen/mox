@@ -27,7 +27,13 @@ import (
 
 // todo: add option to trust imported messages, causing us to look at Authentication-Results and Received-SPF headers and add eg verified spf/dkim/dmarc domains to our store, to jumpstart reputation.
 
-const importCommonHelp = `By default, messages will train the junk filter based on their flags and, if
+const importCommonHelp = `The mbox/maildir archive is accessed and imported by the running mox process, so
+it must have access to the archive files. The default suggested systemd service
+file isolates mox from most of the file system, with only the "data/" directory
+accessible, so you may want to put the mbox/maildir archive files in a
+directory like "data/import/" to make it available to mox.
+
+By default, messages will train the junk filter based on their flags and, if
 "automatic junk flags" configuration is set, based on mailbox naming.
 
 If the destination mailbox is the Sent mailbox, the recipients of the messages
@@ -45,9 +51,6 @@ func cmdImportMaildir(c *cmd) {
 ` + importCommonHelp + `
 Mailbox flags, like "seen", "answered", will be imported. An optional
 dovecot-keywords file can specify additional flags, like Forwarded/Junk/NotJunk.
-
-The maildir files/directories are read by the mox process, so make sure it has
-access to the maildir directories/files.
 `
 	args := c.Parse()
 	if len(args) != 3 {
@@ -63,11 +66,7 @@ func cmdImportMbox(c *cmd) {
 
 Using mbox is not recommended, maildir is a better defined format.
 
-` + importCommonHelp + `
-
-The mailbox is read by the mox process, so make sure it has access to the
-maildir directories/files.
-`
+` + importCommonHelp
 	args := c.Parse()
 	if len(args) != 3 {
 		c.Usage()
@@ -277,11 +276,10 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 	xdeliver := func(m *store.Message, mf *os.File) {
 		// todo: possibly set dmarcdomain to the domain of the from address? at least for non-spams that have been seen. otherwise user would start without any reputations. the assumption would be that the user has accepted email and deemed it legit, coming from the indicated sender.
 
-		const consumeFile = true
 		const sync = false
 		const notrain = true
 		const nothreads = true
-		err := a.DeliverMessage(ctl.log, tx, m, mf, consumeFile, sync, notrain, nothreads)
+		err := a.DeliverMessage(ctl.log, tx, m, mf, sync, notrain, nothreads)
 		ctl.xcheck(err, "delivering message")
 		deliveredIDs = append(deliveredIDs, m.ID)
 		ctl.log.Debug("delivered message", mlog.Field("id", m.ID))
@@ -313,15 +311,7 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 		conf, _ := a.Conf()
 
 		process := func(m *store.Message, msgf *os.File, origPath string) {
-			defer func() {
-				if msgf == nil {
-					return
-				}
-				err := os.Remove(msgf.Name())
-				ctl.log.Check(err, "removing temporary message after failing to import")
-				err = msgf.Close()
-				ctl.log.Check(err, "closing temporary message after failing to import")
-			}()
+			defer store.CloseRemoveTempFile(ctl.log, msgf, "message to import")
 
 			for _, kw := range m.Keywords {
 				mailboxKeywords[kw] = true
@@ -374,9 +364,6 @@ func importctl(ctx context.Context, ctl *ctl, mbox bool) {
 			m.CreateSeq = modseq
 			m.ModSeq = modseq
 			xdeliver(m, msgf)
-			err = msgf.Close()
-			ctl.log.Check(err, "closing message after delivery")
-			msgf = nil
 
 			n++
 			if n%1000 == 0 {

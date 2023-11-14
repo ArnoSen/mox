@@ -36,8 +36,19 @@ var api;
 		AttachmentType["AttachmentDocument"] = "document";
 		AttachmentType["AttachmentPresentation"] = "presentation";
 	})(AttachmentType = api.AttachmentType || (api.AttachmentType = {}));
-	api.structTypes = { "Address": true, "Attachment": true, "ChangeMailboxAdd": true, "ChangeMailboxCounts": true, "ChangeMailboxKeywords": true, "ChangeMailboxRemove": true, "ChangeMailboxRename": true, "ChangeMailboxSpecialUse": true, "ChangeMsgAdd": true, "ChangeMsgFlags": true, "ChangeMsgRemove": true, "ChangeMsgThread": true, "Domain": true, "DomainAddressConfig": true, "Envelope": true, "EventStart": true, "EventViewChanges": true, "EventViewErr": true, "EventViewMsgs": true, "EventViewReset": true, "File": true, "Filter": true, "Flags": true, "ForwardAttachments": true, "Mailbox": true, "Message": true, "MessageAddress": true, "MessageEnvelope": true, "MessageItem": true, "NotFilter": true, "Page": true, "ParsedMessage": true, "Part": true, "Query": true, "Request": true, "SpecialUse": true, "SubmitMessage": true };
-	api.stringsTypes = { "AttachmentType": true, "Localpart": true, "ThreadMode": true };
+	// SecurityResult indicates whether a security feature is supported.
+	let SecurityResult;
+	(function (SecurityResult) {
+		SecurityResult["SecurityResultError"] = "error";
+		SecurityResult["SecurityResultNo"] = "no";
+		SecurityResult["SecurityResultYes"] = "yes";
+		// Unknown whether supported. Finding out may only be (reasonably) possible when
+		// trying (e.g. SMTP STARTTLS). Once tried, the result may be cached for future
+		// lookups.
+		SecurityResult["SecurityResultUnknown"] = "unknown";
+	})(SecurityResult = api.SecurityResult || (api.SecurityResult = {}));
+	api.structTypes = { "Address": true, "Attachment": true, "ChangeMailboxAdd": true, "ChangeMailboxCounts": true, "ChangeMailboxKeywords": true, "ChangeMailboxRemove": true, "ChangeMailboxRename": true, "ChangeMailboxSpecialUse": true, "ChangeMsgAdd": true, "ChangeMsgFlags": true, "ChangeMsgRemove": true, "ChangeMsgThread": true, "Domain": true, "DomainAddressConfig": true, "Envelope": true, "EventStart": true, "EventViewChanges": true, "EventViewErr": true, "EventViewMsgs": true, "EventViewReset": true, "File": true, "Filter": true, "Flags": true, "ForwardAttachments": true, "Mailbox": true, "Message": true, "MessageAddress": true, "MessageEnvelope": true, "MessageItem": true, "NotFilter": true, "Page": true, "ParsedMessage": true, "Part": true, "Query": true, "RecipientSecurity": true, "Request": true, "SpecialUse": true, "SubmitMessage": true };
+	api.stringsTypes = { "AttachmentType": true, "Localpart": true, "SecurityResult": true, "ThreadMode": true };
 	api.intsTypes = { "ModSeq": true, "UID": true, "Validation": true };
 	api.types = {
 		"Request": { "Name": "Request", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "SSEID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Cancel", "Docs": "", "Typewords": ["bool"] }, { "Name": "Query", "Docs": "", "Typewords": ["Query"] }, { "Name": "Page", "Docs": "", "Typewords": ["Page"] }] },
@@ -51,17 +62,18 @@ var api;
 		"Address": { "Name": "Address", "Docs": "", "Fields": [{ "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "User", "Docs": "", "Typewords": ["string"] }, { "Name": "Host", "Docs": "", "Typewords": ["string"] }] },
 		"MessageAddress": { "Name": "MessageAddress", "Docs": "", "Fields": [{ "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "User", "Docs": "", "Typewords": ["string"] }, { "Name": "Domain", "Docs": "", "Typewords": ["Domain"] }] },
 		"Domain": { "Name": "Domain", "Docs": "", "Fields": [{ "Name": "ASCII", "Docs": "", "Typewords": ["string"] }, { "Name": "Unicode", "Docs": "", "Typewords": ["string"] }] },
-		"SubmitMessage": { "Name": "SubmitMessage", "Docs": "", "Fields": [{ "Name": "From", "Docs": "", "Typewords": ["string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Cc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Bcc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "TextBody", "Docs": "", "Typewords": ["string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "File"] }, { "Name": "ForwardAttachments", "Docs": "", "Typewords": ["ForwardAttachments"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "ResponseMessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "UserAgent", "Docs": "", "Typewords": ["string"] }] },
+		"SubmitMessage": { "Name": "SubmitMessage", "Docs": "", "Fields": [{ "Name": "From", "Docs": "", "Typewords": ["string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Cc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Bcc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "TextBody", "Docs": "", "Typewords": ["string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "File"] }, { "Name": "ForwardAttachments", "Docs": "", "Typewords": ["ForwardAttachments"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "ResponseMessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "UserAgent", "Docs": "", "Typewords": ["string"] }, { "Name": "RequireTLS", "Docs": "", "Typewords": ["nullable", "bool"] }] },
 		"File": { "Name": "File", "Docs": "", "Fields": [{ "Name": "Filename", "Docs": "", "Typewords": ["string"] }, { "Name": "DataURI", "Docs": "", "Typewords": ["string"] }] },
 		"ForwardAttachments": { "Name": "ForwardAttachments", "Docs": "", "Fields": [{ "Name": "MessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Paths", "Docs": "", "Typewords": ["[]", "[]", "int32"] }] },
 		"Mailbox": { "Name": "Mailbox", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "UIDValidity", "Docs": "", "Typewords": ["uint32"] }, { "Name": "UIDNext", "Docs": "", "Typewords": ["UID"] }, { "Name": "Archive", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Sent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Trash", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "HaveCounts", "Docs": "", "Typewords": ["bool"] }, { "Name": "Total", "Docs": "", "Typewords": ["int64"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["int64"] }, { "Name": "Unread", "Docs": "", "Typewords": ["int64"] }, { "Name": "Unseen", "Docs": "", "Typewords": ["int64"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }] },
+		"RecipientSecurity": { "Name": "RecipientSecurity", "Docs": "", "Fields": [{ "Name": "STARTTLS", "Docs": "", "Typewords": ["SecurityResult"] }, { "Name": "MTASTS", "Docs": "", "Typewords": ["SecurityResult"] }, { "Name": "DNSSEC", "Docs": "", "Typewords": ["SecurityResult"] }, { "Name": "DANE", "Docs": "", "Typewords": ["SecurityResult"] }, { "Name": "RequireTLS", "Docs": "", "Typewords": ["SecurityResult"] }] },
 		"EventStart": { "Name": "EventStart", "Docs": "", "Fields": [{ "Name": "SSEID", "Docs": "", "Typewords": ["int64"] }, { "Name": "LoginAddress", "Docs": "", "Typewords": ["MessageAddress"] }, { "Name": "Addresses", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "DomainAddressConfigs", "Docs": "", "Typewords": ["{}", "DomainAddressConfig"] }, { "Name": "MailboxName", "Docs": "", "Typewords": ["string"] }, { "Name": "Mailboxes", "Docs": "", "Typewords": ["[]", "Mailbox"] }] },
 		"DomainAddressConfig": { "Name": "DomainAddressConfig", "Docs": "", "Fields": [{ "Name": "LocalpartCatchallSeparator", "Docs": "", "Typewords": ["string"] }, { "Name": "LocalpartCaseSensitive", "Docs": "", "Typewords": ["bool"] }] },
 		"EventViewErr": { "Name": "EventViewErr", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Err", "Docs": "", "Typewords": ["string"] }] },
 		"EventViewReset": { "Name": "EventViewReset", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }] },
 		"EventViewMsgs": { "Name": "EventViewMsgs", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "RequestID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MessageItems", "Docs": "", "Typewords": ["[]", "[]", "MessageItem"] }, { "Name": "ParsedMessage", "Docs": "", "Typewords": ["nullable", "ParsedMessage"] }, { "Name": "ViewEnd", "Docs": "", "Typewords": ["bool"] }] },
 		"MessageItem": { "Name": "MessageItem", "Docs": "", "Fields": [{ "Name": "Message", "Docs": "", "Typewords": ["Message"] }, { "Name": "Envelope", "Docs": "", "Typewords": ["MessageEnvelope"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "Attachment"] }, { "Name": "IsSigned", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsEncrypted", "Docs": "", "Typewords": ["bool"] }, { "Name": "FirstLine", "Docs": "", "Typewords": ["string"] }, { "Name": "MatchQuery", "Docs": "", "Typewords": ["bool"] }] },
-		"Message": { "Name": "Message", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "CreateSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Expunged", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsReject", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailboxOrigID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MailboxDestinedID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Received", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "RemoteIP", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked1", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked2", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked3", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFrom", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MailFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "RcptToLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "RcptToDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MsgFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromOrgDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLOValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MsgFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "EHLOValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MailFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MsgFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "DKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "OrigEHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "OrigDKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }, { "Name": "SubjectBase", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageHash", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ThreadID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ThreadParentIDs", "Docs": "", "Typewords": ["[]", "int64"] }, { "Name": "ThreadMissingLink", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadMuted", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadCollapsed", "Docs": "", "Typewords": ["bool"] }, { "Name": "Seen", "Docs": "", "Typewords": ["bool"] }, { "Name": "Answered", "Docs": "", "Typewords": ["bool"] }, { "Name": "Flagged", "Docs": "", "Typewords": ["bool"] }, { "Name": "Forwarded", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Notjunk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Phishing", "Docs": "", "Typewords": ["bool"] }, { "Name": "MDNSent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }, { "Name": "TrainedJunk", "Docs": "", "Typewords": ["nullable", "bool"] }, { "Name": "MsgPrefix", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ParsedBuf", "Docs": "", "Typewords": ["nullable", "string"] }] },
+		"Message": { "Name": "Message", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "UID", "Docs": "", "Typewords": ["UID"] }, { "Name": "MailboxID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ModSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "CreateSeq", "Docs": "", "Typewords": ["ModSeq"] }, { "Name": "Expunged", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsReject", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailboxOrigID", "Docs": "", "Typewords": ["int64"] }, { "Name": "MailboxDestinedID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Received", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "RemoteIP", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked1", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked2", "Docs": "", "Typewords": ["string"] }, { "Name": "RemoteIPMasked3", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFrom", "Docs": "", "Typewords": ["string"] }, { "Name": "MailFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MailFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "RcptToLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "RcptToDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromLocalpart", "Docs": "", "Typewords": ["Localpart"] }, { "Name": "MsgFromDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "MsgFromOrgDomain", "Docs": "", "Typewords": ["string"] }, { "Name": "EHLOValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MailFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "MsgFromValidated", "Docs": "", "Typewords": ["bool"] }, { "Name": "EHLOValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MailFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "MsgFromValidation", "Docs": "", "Typewords": ["Validation"] }, { "Name": "DKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "OrigEHLODomain", "Docs": "", "Typewords": ["string"] }, { "Name": "OrigDKIMDomains", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }, { "Name": "SubjectBase", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageHash", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ThreadID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ThreadParentIDs", "Docs": "", "Typewords": ["[]", "int64"] }, { "Name": "ThreadMissingLink", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadMuted", "Docs": "", "Typewords": ["bool"] }, { "Name": "ThreadCollapsed", "Docs": "", "Typewords": ["bool"] }, { "Name": "IsMailingList", "Docs": "", "Typewords": ["bool"] }, { "Name": "ReceivedTLSVersion", "Docs": "", "Typewords": ["uint16"] }, { "Name": "ReceivedTLSCipherSuite", "Docs": "", "Typewords": ["uint16"] }, { "Name": "ReceivedRequireTLS", "Docs": "", "Typewords": ["bool"] }, { "Name": "Seen", "Docs": "", "Typewords": ["bool"] }, { "Name": "Answered", "Docs": "", "Typewords": ["bool"] }, { "Name": "Flagged", "Docs": "", "Typewords": ["bool"] }, { "Name": "Forwarded", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Notjunk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Phishing", "Docs": "", "Typewords": ["bool"] }, { "Name": "MDNSent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }, { "Name": "TrainedJunk", "Docs": "", "Typewords": ["nullable", "bool"] }, { "Name": "MsgPrefix", "Docs": "", "Typewords": ["nullable", "string"] }, { "Name": "ParsedBuf", "Docs": "", "Typewords": ["nullable", "string"] }] },
 		"MessageEnvelope": { "Name": "MessageEnvelope", "Docs": "", "Fields": [{ "Name": "Date", "Docs": "", "Typewords": ["timestamp"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "From", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "Sender", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "CC", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "BCC", "Docs": "", "Typewords": ["[]", "MessageAddress"] }, { "Name": "InReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "MessageID", "Docs": "", "Typewords": ["string"] }] },
 		"Attachment": { "Name": "Attachment", "Docs": "", "Fields": [{ "Name": "Path", "Docs": "", "Typewords": ["[]", "int32"] }, { "Name": "Filename", "Docs": "", "Typewords": ["string"] }, { "Name": "Part", "Docs": "", "Typewords": ["Part"] }] },
 		"EventViewChanges": { "Name": "EventViewChanges", "Docs": "", "Fields": [{ "Name": "ViewID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Changes", "Docs": "", "Typewords": ["[]", "[]", "any"] }] },
@@ -82,6 +94,7 @@ var api;
 		"Validation": { "Name": "Validation", "Docs": "", "Values": [{ "Name": "ValidationUnknown", "Value": 0, "Docs": "" }, { "Name": "ValidationStrict", "Value": 1, "Docs": "" }, { "Name": "ValidationDMARC", "Value": 2, "Docs": "" }, { "Name": "ValidationRelaxed", "Value": 3, "Docs": "" }, { "Name": "ValidationPass", "Value": 4, "Docs": "" }, { "Name": "ValidationNeutral", "Value": 5, "Docs": "" }, { "Name": "ValidationTemperror", "Value": 6, "Docs": "" }, { "Name": "ValidationPermerror", "Value": 7, "Docs": "" }, { "Name": "ValidationFail", "Value": 8, "Docs": "" }, { "Name": "ValidationSoftfail", "Value": 9, "Docs": "" }, { "Name": "ValidationNone", "Value": 10, "Docs": "" }] },
 		"ThreadMode": { "Name": "ThreadMode", "Docs": "", "Values": [{ "Name": "ThreadOff", "Value": "off", "Docs": "" }, { "Name": "ThreadOn", "Value": "on", "Docs": "" }, { "Name": "ThreadUnread", "Value": "unread", "Docs": "" }] },
 		"AttachmentType": { "Name": "AttachmentType", "Docs": "", "Values": [{ "Name": "AttachmentIndifferent", "Value": "", "Docs": "" }, { "Name": "AttachmentNone", "Value": "none", "Docs": "" }, { "Name": "AttachmentAny", "Value": "any", "Docs": "" }, { "Name": "AttachmentImage", "Value": "image", "Docs": "" }, { "Name": "AttachmentPDF", "Value": "pdf", "Docs": "" }, { "Name": "AttachmentArchive", "Value": "archive", "Docs": "" }, { "Name": "AttachmentSpreadsheet", "Value": "spreadsheet", "Docs": "" }, { "Name": "AttachmentDocument", "Value": "document", "Docs": "" }, { "Name": "AttachmentPresentation", "Value": "presentation", "Docs": "" }] },
+		"SecurityResult": { "Name": "SecurityResult", "Docs": "", "Values": [{ "Name": "SecurityResultError", "Value": "error", "Docs": "" }, { "Name": "SecurityResultNo", "Value": "no", "Docs": "" }, { "Name": "SecurityResultYes", "Value": "yes", "Docs": "" }, { "Name": "SecurityResultUnknown", "Value": "unknown", "Docs": "" }] },
 		"Localpart": { "Name": "Localpart", "Docs": "", "Values": null },
 	};
 	api.parser = {
@@ -100,6 +113,7 @@ var api;
 		File: (v) => api.parse("File", v),
 		ForwardAttachments: (v) => api.parse("ForwardAttachments", v),
 		Mailbox: (v) => api.parse("Mailbox", v),
+		RecipientSecurity: (v) => api.parse("RecipientSecurity", v),
 		EventStart: (v) => api.parse("EventStart", v),
 		DomainAddressConfig: (v) => api.parse("DomainAddressConfig", v),
 		EventViewErr: (v) => api.parse("EventViewErr", v),
@@ -127,6 +141,7 @@ var api;
 		Validation: (v) => api.parse("Validation", v),
 		ThreadMode: (v) => api.parse("ThreadMode", v),
 		AttachmentType: (v) => api.parse("AttachmentType", v),
+		SecurityResult: (v) => api.parse("SecurityResult", v),
 		Localpart: (v) => api.parse("Localpart", v),
 	};
 	let defaultOptions = { slicesNullable: true, mapsNullable: true, nullableOptional: true };
@@ -288,6 +303,15 @@ var api;
 			const paramTypes = [["[]", "int64"], ["bool"]];
 			const returnTypes = [];
 			const params = [messageIDs, mute];
+			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
+		}
+		// RecipientSecurity looks up security properties of the address in the
+		// single-address message addressee (as it appears in a To/Cc/Bcc/etc header).
+		async RecipientSecurity(messageAddressee) {
+			const fn = "RecipientSecurity";
+			const paramTypes = [["string"]];
+			const returnTypes = [["RecipientSecurity"]];
+			const params = [messageAddressee];
 			return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params);
 		}
 		// SSETypes exists to ensure the generated API contains the types, for use in SSE events.
@@ -711,6 +735,11 @@ const [dom, style, attr, prop] = (function () {
 			if (typeof c === 'string') {
 				formatText(e, c);
 			}
+			else if (c instanceof String) {
+				// String is an escape-hatch for text that should not be formatted with
+				// unicode-block-change-highlighting, e.g. for textarea values.
+				e.appendChild(document.createTextNode('' + c));
+			}
 			else if (c instanceof Element) {
 				e.appendChild(c);
 			}
@@ -930,10 +959,11 @@ const formatAddressFull = (a) => {
 	}
 	return s;
 };
-// format just the name, or otherwies just the email address.
+// format just the name if present and it doesn't look like an address, or otherwise just the email address.
 const formatAddressShort = (a) => {
-	if (a.Name) {
-		return a.Name;
+	const n = a.Name;
+	if (n && !n.includes('<') && !n.includes('@') && !n.includes('>')) {
+		return n;
 	}
 	return '<' + a.User + '@' + a.Domain.ASCII + '>';
 };
@@ -950,10 +980,10 @@ const equalAddress = (a, b) => {
 const loadMsgheaderView = (msgheaderelem, mi, moreHeaders, refineKeyword) => {
 	const msgenv = mi.Envelope;
 	const received = mi.Message.Received;
-	const receivedlocal = new Date(received.getTime() - received.getTimezoneOffset() * 60 * 1000);
+	const receivedlocal = new Date(received.getTime());
 	dom._kids(msgheaderelem, 
 	// todo: make addresses clickable, start search (keep current mailbox if any)
-	dom.tr(dom.td('From:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(style({ width: '100%' }), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(join((msgenv.From || []).map(a => formatAddressFull(a)), () => ', ')), dom.div(attr.title('Received: ' + received.toString() + ';\nDate header in message: ' + (msgenv.Date ? msgenv.Date.toString() : '(missing/invalid)')), receivedlocal.toDateString() + ' ' + receivedlocal.toTimeString().split(' ')[0])))), (msgenv.ReplyTo || []).length === 0 ? [] : dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.ReplyTo || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.To || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.CC || []).length === 0 ? [] : dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.CC || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.BCC || []).length === 0 ? [] : dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.BCC || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(msgenv.Subject || ''), dom.div(mi.IsSigned ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message has a signature') : [], mi.IsEncrypted ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message is encrypted') : [], refineKeyword ? (mi.Message.Keywords || []).map(kw => dom.clickbutton(dom._class('keyword'), kw, async function click() {
+	dom.tr(dom.td('From:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(style({ width: '100%' }), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(join((msgenv.From || []).map(a => formatAddressFull(a)), () => ', ')), dom.div(attr.title('Received: ' + received.toString() + ';\nDate header in message: ' + (msgenv.Date ? msgenv.Date.toString() : '(missing/invalid)')), receivedlocal.toDateString() + ' ' + receivedlocal.toTimeString().split(' ')[0])))), (msgenv.ReplyTo || []).length === 0 ? [] : dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.ReplyTo || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.To || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.CC || []).length === 0 ? [] : dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.CC || []).map(a => formatAddressFull(a)), () => ', '))), (msgenv.BCC || []).length === 0 ? [] : dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.BCC || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(msgenv.Subject || ''), dom.div(mi.Message.IsForward ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Forwarded', attr.title('Message came in from a forwarded address. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.IsMailingList ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Mailing list', attr.title('Message was received from a mailing list. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.ReceivedTLSVersion === 1 ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #e15d1c' }), 'Without TLS', attr.title('Message received (last hop) without TLS.')) : [], mi.Message.ReceivedTLSVersion > 1 && !mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #50c40f' }), 'With TLS', attr.title('Message received (last hop) with TLS.')) : [], mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '.1em .3em', fontSize: '.9em', backgroundColor: '#d2f791', border: '1px solid #ccc', borderRadius: '3px' }), 'With RequireTLS', attr.title('Transported with RequireTLS, ensuring TLS along the entire delivery path from sender to recipient, with TLS certificate verification through MTA-STS and/or DANE.')) : [], mi.IsSigned ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message has a signature') : [], mi.IsEncrypted ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message is encrypted') : [], refineKeyword ? (mi.Message.Keywords || []).map(kw => dom.clickbutton(dom._class('keyword'), kw, async function click() {
 		await refineKeyword(kw);
 	})) : [])))), moreHeaders.map(k => dom.tr(dom.td(k + ':', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td())));
 };
@@ -1010,7 +1040,7 @@ To simulate slow API calls and SSE events:
 
 Show additional headers of messages:
 
-	settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id', 'List-Id', 'List-Post', 'X-Mox-Reason']})
+	settingsPut({...settings, showHeaders: ['Delivered-To', 'User-Agent', 'X-Mailer', 'Message-Id', 'List-Id', 'List-Post', 'X-Mox-Reason', 'TLS-Required']})
 
 Enable logging and reload afterwards:
 
@@ -1680,7 +1710,7 @@ let statusElem;
 const withStatus = async (action, promise, disablable, noAlert) => {
 	let elem;
 	let id = window.setTimeout(() => {
-		elem = dom.span(action + '...');
+		elem = dom.span(action + '... ');
 		statusElem.appendChild(elem);
 		id = 0;
 	}, 1000);
@@ -1954,9 +1984,11 @@ const compose = (opts) => {
 	let fieldset;
 	let from;
 	let customFrom = null;
+	let subjectAutosize;
 	let subject;
 	let body;
 	let attachments;
+	let requiretls;
 	let toBtn, ccBtn, bccBtn, replyToBtn, customFromBtn;
 	let replyToCell, toCell, ccCell, bccCell; // Where we append new address views.
 	let toRow, replyToRow, ccRow, bccRow; // We show/hide rows as needed.
@@ -2005,6 +2037,7 @@ const compose = (opts) => {
 			ForwardAttachments: forwardAttachmentPaths.length === 0 ? { MessageID: 0, Paths: [] } : { MessageID: opts.attachmentsMessageItem.Message.ID, Paths: forwardAttachmentPaths },
 			IsForward: opts.isForward || false,
 			ResponseMessageID: opts.responseMessageID || 0,
+			RequireTLS: requiretls.value === '' ? null : requiretls.value === 'yes',
 		};
 		await client.MessageSubmit(message);
 		cmdCancel();
@@ -2012,10 +2045,10 @@ const compose = (opts) => {
 	const cmdSend = async () => {
 		await withStatus('Sending email', submit(), fieldset);
 	};
-	const cmdAddTo = async () => { newAddrView('', toViews, toBtn, toCell, toRow); };
-	const cmdAddCc = async () => { newAddrView('', ccViews, ccBtn, ccCell, ccRow); };
-	const cmdAddBcc = async () => { newAddrView('', bccViews, bccBtn, bccCell, bccRow); };
-	const cmdReplyTo = async () => { newAddrView('', replytoViews, replyToBtn, replyToCell, replyToRow, true); };
+	const cmdAddTo = async () => { newAddrView('', true, toViews, toBtn, toCell, toRow); };
+	const cmdAddCc = async () => { newAddrView('', true, ccViews, ccBtn, ccCell, ccRow); };
+	const cmdAddBcc = async () => { newAddrView('', true, bccViews, bccBtn, bccCell, bccRow); };
+	const cmdReplyTo = async () => { newAddrView('', false, replytoViews, replyToBtn, replyToCell, replyToRow, true); };
 	const cmdCustomFrom = async () => {
 		if (customFrom) {
 			return;
@@ -2033,29 +2066,126 @@ const compose = (opts) => {
 		'ctrl Y': cmdReplyTo,
 		// ctrl - and ctrl = (+) not included, they are handled by keydown handlers on in the inputs they remove/add.
 	};
-	const newAddrView = (addr, views, btn, cell, row, single) => {
+	const newAddrView = (addr, isRecipient, views, btn, cell, row, single) => {
 		if (single && views.length !== 0) {
 			return;
 		}
-		let input;
-		const root = dom.span(input = dom.input(focusPlaceholder('Jane <jane@example.org>'), style({ width: 'auto' }), attr.value(addr), newAddressComplete(), function keydown(e) {
+		let rcptSecPromise = null;
+		let rcptSecAddr = '';
+		let rcptSecAborter = {};
+		let autosizeElem, inputElem, securityBar;
+		const fetchRecipientSecurity = () => {
+			if (inputElem.value === rcptSecAddr) {
+				return;
+			}
+			securityBar.style.borderImage = '';
+			rcptSecAddr = inputElem.value;
+			if (!inputElem.value) {
+				return;
+			}
+			if (rcptSecAborter.abort) {
+				rcptSecAborter.abort();
+				rcptSecAborter.abort = undefined;
+			}
+			const color = (v) => {
+				if (v === api.SecurityResult.SecurityResultYes) {
+					return '#50c40f';
+				}
+				else if (v === api.SecurityResult.SecurityResultNo) {
+					return '#e15d1c';
+				}
+				else if (v === api.SecurityResult.SecurityResultUnknown) {
+					return 'white';
+				}
+				return '#aaa';
+			};
+			const setBar = (c0, c1, c2, c3, c4) => {
+				const stops = [
+					c0 + ' 0%', c0 + ' 19%', 'white 19%', 'white 20%',
+					c1 + ' 20%', c1 + ' 39%', 'white 39%', 'white 40%',
+					c2 + ' 40%', c2 + ' 59%', 'white 59%', 'white 60%',
+					c3 + ' 60%', c3 + ' 79%', 'white 79%', 'white 80%',
+					c4 + ' 80%', c4 + ' 100%',
+				].join(', ');
+				securityBar.style.borderImage = 'linear-gradient(to right, ' + stops + ') 1';
+			};
+			const aborter = {};
+			rcptSecAborter = aborter;
+			rcptSecPromise = client.withOptions({ aborter: aborter }).RecipientSecurity(inputElem.value);
+			rcptSecPromise.then((rs) => {
+				setBar(color(rs.STARTTLS), color(rs.MTASTS), color(rs.DNSSEC), color(rs.DANE), color(rs.RequireTLS));
+				const implemented = [];
+				const check = (v, s) => {
+					if (v) {
+						implemented.push(s);
+					}
+				};
+				check(rs.STARTTLS === api.SecurityResult.SecurityResultYes, 'STARTTLS');
+				check(rs.MTASTS === api.SecurityResult.SecurityResultYes, 'MTASTS');
+				check(rs.DNSSEC === api.SecurityResult.SecurityResultYes, 'DNSSEC');
+				check(rs.DANE === api.SecurityResult.SecurityResultYes, 'DANE');
+				check(rs.RequireTLS === api.SecurityResult.SecurityResultYes, 'RequireTLS');
+				const status = 'Security mechanisms known to be implemented by the recipient domain: ' + (implemented.length === 0 ? '(none)' : implemented.join(', ')) + '.';
+				inputElem.setAttribute('title', status + '\n\n' + recipientSecurityTitle);
+				aborter.abort = undefined;
+				v.recipientSecurity = rs;
+				if (isRecipient) {
+					// If we are not replying to a message from a mailing list, and all recipients
+					// implement REQUIRETLS, we enable it.
+					let reqtls = opts.isList !== true;
+					const walk = (l) => {
+						for (const v of l) {
+							if (v.recipientSecurity?.RequireTLS !== api.SecurityResult.SecurityResultYes || v.recipientSecurity?.MTASTS !== api.SecurityResult.SecurityResultYes && v.recipientSecurity?.DANE !== api.SecurityResult.SecurityResultYes) {
+								reqtls = false;
+								break;
+							}
+						}
+					};
+					walk(toViews);
+					walk(ccViews);
+					walk(bccViews);
+					if (requiretls.value === '' || requiretls.value === 'yes') {
+						requiretls.value = reqtls ? 'yes' : '';
+					}
+				}
+			}, () => {
+				setBar('#888', '#888', '#888', '#888', '#888');
+				inputElem.setAttribute('title', 'Error fetching security mechanisms known to be implemented by the recipient domain...\n\n' + recipientSecurityTitle);
+				aborter.abort = undefined;
+				if (requiretls.value === 'yes') {
+					requiretls.value = '';
+				}
+			});
+		};
+		const recipientSecurityTitle = 'Description of security mechanisms recipient domains may implement:\n1. STARTTLS: Opportunistic (unverified) TLS with STARTTLS, successfully negotiated during the most recent delivery attempt.\n2. MTA-STS: For PKIX/WebPKI-verified TLS.\n3. DNSSEC: MX DNS records are DNSSEC-signed.\n4. DANE: First delivery destination host implements DANE for verified TLS.\n5. RequireTLS: SMTP extension for verified TLS delivery into recipient mailbox, support detected during the most recent delivery attempt.\n\nChecks STARTTLS, DANE and RequireTLS cover the most recently used delivery path, not necessarily all possible delivery paths.\n\nThe bars below the input field indicate implementation status by the recipient domain:\n- Red, not implemented/unsupported\n- Green, implemented/supported\n- Gray, error while determining\n- Absent/white, unknown or skipped (e.g. no previous delivery attempt, or DANE check skipped due to DNSSEC-lookup error)';
+		const root = dom.span(autosizeElem = dom.span(dom._class('autosize'), inputElem = dom.input(focusPlaceholder('Jane <jane@example.org>'), style({ width: 'auto' }), attr.value(addr), newAddressComplete(), attr.title(recipientSecurityTitle), function keydown(e) {
 			if (e.key === '-' && e.ctrlKey) {
 				remove();
 			}
 			else if (e.key === '=' && e.ctrlKey) {
-				newAddrView('', views, btn, cell, row, single);
+				newAddrView('', isRecipient, views, btn, cell, row, single);
 			}
 			else {
 				return;
 			}
 			e.preventDefault();
 			e.stopPropagation();
-		}), ' ', dom.clickbutton('-', style({ padding: '0 .25em' }), attr.arialabel('Remove address.'), attr.title('Remove address.'), function click() {
+		}, function input() {
+			// data-value is used for size of ::after css pseudo-element to stretch input field.
+			autosizeElem.dataset.value = inputElem.value;
+		}, function change() {
+			fetchRecipientSecurity();
+		}), securityBar = dom.span(dom._class('securitybar'), style({
+			margin: '0 1px',
+			borderBottom: '1.5px solid',
+			borderBottomColor: 'transparent',
+		}))), ' ', dom.clickbutton('-', style({ padding: '0 .25em' }), attr.arialabel('Remove address.'), attr.title('Remove address.'), function click() {
 			remove();
 			if (single && views.length === 0) {
 				btn.style.display = '';
 			}
 		}), ' ');
+		autosizeElem.dataset.value = inputElem.value;
 		const remove = () => {
 			const i = views.indexOf(v);
 			views.splice(i, 1);
@@ -2082,14 +2212,15 @@ const compose = (opts) => {
 				next.focus();
 			}
 		};
-		const v = { root: root, input: input };
+		const v = { root: root, input: inputElem, isRecipient: isRecipient, recipientSecurity: null };
+		fetchRecipientSecurity();
 		views.push(v);
 		cell.appendChild(v.root);
 		row.style.display = '';
 		if (single) {
 			btn.style.display = 'none';
 		}
-		input.focus();
+		inputElem.focus();
 		return v;
 	};
 	let noAttachmentsWarning;
@@ -2142,10 +2273,15 @@ const compose = (opts) => {
 		border: '1px solid #ccc',
 		padding: '1em',
 		minWidth: '40em',
-		maxWidth: '70em',
-		width: '40%',
+		maxWidth: '95vw',
 		borderRadius: '.25em',
-	}), dom.form(fieldset = dom.fieldset(dom.table(style({ width: '100%' }), dom.tr(dom.td(style({ textAlign: 'right', color: '#555' }), dom.span('From:')), dom.td(dom.clickbutton('Cancel', style({ float: 'right' }), attr.title('Close window, discarding message.'), clickCmd(cmdCancel, shortcuts)), from = dom.select(attr.required(''), style({ width: 'auto' }), fromOptions), ' ', toBtn = dom.clickbutton('To', clickCmd(cmdAddTo, shortcuts)), ' ', ccBtn = dom.clickbutton('Cc', clickCmd(cmdAddCc, shortcuts)), ' ', bccBtn = dom.clickbutton('Bcc', clickCmd(cmdAddBcc, shortcuts)), ' ', replyToBtn = dom.clickbutton('ReplyTo', clickCmd(cmdReplyTo, shortcuts)), ' ', customFromBtn = dom.clickbutton('From', attr.title('Set custom From address/name.'), clickCmd(cmdCustomFrom, shortcuts)))), toRow = dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555' })), toCell = dom.td(style({ width: '100%' }))), replyToRow = dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555' })), replyToCell = dom.td(style({ width: '100%' }))), ccRow = dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555' })), ccCell = dom.td(style({ width: '100%' }))), bccRow = dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555' })), bccCell = dom.td(style({ width: '100%' }))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555' })), dom.td(style({ width: '100%' }), subject = dom.input(focusPlaceholder('subject...'), attr.value(opts.subject || ''), attr.required(''), style({ width: '100%' }))))), body = dom.textarea(dom._class('mono'), attr.rows('15'), style({ width: '100%' }), opts.body || '', opts.body && !opts.isForward ? prop({ selectionStart: opts.body.length, selectionEnd: opts.body.length }) : [], function keyup(e) {
+	}), dom.form(fieldset = dom.fieldset(dom.table(style({ width: '100%' }), dom.tr(dom.td(style({ textAlign: 'right', color: '#555' }), dom.span('From:')), dom.td(dom.clickbutton('Cancel', style({ float: 'right', marginLeft: '1em', marginTop: '.15em' }), attr.title('Close window, discarding message.'), clickCmd(cmdCancel, shortcuts)), from = dom.select(attr.required(''), style({ width: 'auto' }), fromOptions), ' ', toBtn = dom.clickbutton('To', clickCmd(cmdAddTo, shortcuts)), ' ', ccBtn = dom.clickbutton('Cc', clickCmd(cmdAddCc, shortcuts)), ' ', bccBtn = dom.clickbutton('Bcc', clickCmd(cmdAddBcc, shortcuts)), ' ', replyToBtn = dom.clickbutton('ReplyTo', clickCmd(cmdReplyTo, shortcuts)), ' ', customFromBtn = dom.clickbutton('From', attr.title('Set custom From address/name.'), clickCmd(cmdCustomFrom, shortcuts)))), toRow = dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555' })), toCell = dom.td(style({ lineHeight: '1.5' }))), replyToRow = dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555' })), replyToCell = dom.td(style({ lineHeight: '1.5' }))), ccRow = dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555' })), ccCell = dom.td(style({ lineHeight: '1.5' }))), bccRow = dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555' })), bccCell = dom.td(style({ lineHeight: '1.5' }))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555' })), dom.td(subjectAutosize = dom.span(dom._class('autosize'), style({ width: '100%' }), // Without 100% width, the span takes minimal width for input, we want the full table cell.
+	subject = dom.input(style({ width: '100%' }), attr.value(opts.subject || ''), attr.required(''), focusPlaceholder('subject...'), function input() {
+		subjectAutosize.dataset.value = subject.value;
+	}))))), body = dom.textarea(dom._class('mono'), attr.rows('15'), style({ width: '100%' }), 
+	// Explicit string object so it doesn't get the highlight-unicode-block-changes
+	// treatment, which would cause characters to disappear.
+	new String(opts.body || ''), opts.body && !opts.isForward && !opts.body.startsWith('\n\n') ? prop({ selectionStart: opts.body.length, selectionEnd: opts.body.length }) : [], function keyup(e) {
 		if (e.key === 'Enter') {
 			checkAttachments();
 		}
@@ -2162,15 +2298,16 @@ const compose = (opts) => {
 		return v;
 	}), dom.label(style({ color: '#666' }), dom.input(attr.type('checkbox'), function change(e) {
 		forwardAttachmentViews.forEach(v => v.checkbox.checked = e.target.checked);
-	}), ' (Toggle all)')), noAttachmentsWarning = dom.div(style({ display: 'none', backgroundColor: '#fcd284', padding: '0.15em .25em', margin: '.5em 0' }), 'Message mentions attachments, but no files are attached.'), dom.div(style({ margin: '1ex 0' }), 'Attachments ', attachments = dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments(); })), dom.submitbutton('Send')), async function submit(e) {
+	}), ' (Toggle all)')), noAttachmentsWarning = dom.div(style({ display: 'none', backgroundColor: '#fcd284', padding: '0.15em .25em', margin: '.5em 0' }), 'Message mentions attachments, but no files are attached.'), dom.label(style({ margin: '1ex 0', display: 'block' }), 'Attachments ', attachments = dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments(); })), dom.label(style({ margin: '1ex 0', display: 'block' }), attr.title('How to use TLS for message delivery over SMTP:\n\nDefault: Delivery attempts follow the policies published by the recipient domain: Verification with MTA-STS and/or DANE, or optional opportunistic unverified STARTTLS if the domain does not specify a policy.\n\nWith RequireTLS: For sensitive messages, you may want to require verified TLS. The recipient destination domain SMTP server must support the REQUIRETLS SMTP extension for delivery to succeed. It is automatically chosen when the destination domain mail servers of all recipients are known to support it.\n\nFallback to insecure: If delivery fails due to MTA-STS and/or DANE policies specified by the recipient domain, and the content is not sensitive, you may choose to ignore the recipient domain TLS policies so delivery can succeed.'), 'TLS ', requiretls = dom.select(dom.option(attr.value(''), 'Default'), dom.option(attr.value('yes'), 'With RequireTLS'), dom.option(attr.value('no'), 'Fallback to insecure'))), dom.div(style({ margin: '3ex 0 1ex 0', display: 'block' }), dom.submitbutton('Send'))), async function submit(e) {
 		e.preventDefault();
 		shortcutCmd(cmdSend, shortcuts);
 	}));
-	(opts.to && opts.to.length > 0 ? opts.to : ['']).forEach(s => newAddrView(s, toViews, toBtn, toCell, toRow));
-	(opts.cc || []).forEach(s => newAddrView(s, ccViews, ccBtn, ccCell, ccRow));
-	(opts.bcc || []).forEach(s => newAddrView(s, bccViews, bccBtn, bccCell, bccRow));
+	subjectAutosize.dataset.value = subject.value;
+	(opts.to && opts.to.length > 0 ? opts.to : ['']).forEach(s => newAddrView(s, true, toViews, toBtn, toCell, toRow));
+	(opts.cc || []).forEach(s => newAddrView(s, true, ccViews, ccBtn, ccCell, ccRow));
+	(opts.bcc || []).forEach(s => newAddrView(s, true, bccViews, bccBtn, bccCell, bccRow));
 	if (opts.replyto) {
-		newAddrView(opts.replyto, replytoViews, replyToBtn, replyToCell, replyToRow, true);
+		newAddrView(opts.replyto, false, replytoViews, replyToBtn, replyToCell, replyToRow, true);
 	}
 	if (!opts.cc || !opts.cc.length) {
 		ccRow.style.display = 'none';
@@ -2571,8 +2708,10 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		const pm = await parsedMessagePromise;
 		let body = '';
 		const sel = window.getSelection();
+		let haveSel = false;
 		if (sel && sel.toString()) {
 			body = sel.toString();
+			haveSel = true;
 		}
 		else if (pm.Texts && pm.Texts.length > 0) {
 			body = pm.Texts[0];
@@ -2582,7 +2721,20 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 			body = '\n\n---- Forwarded Message ----\n\n' + body;
 		}
 		else {
-			body = body.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+			body = body.split('\n').map(line => '> ' + line).join('\n');
+			if (haveSel) {
+				body += '\n\n';
+			}
+			else {
+				let onWroteLine = '';
+				if (mi.Envelope.Date && mi.Envelope.From && mi.Envelope.From.length === 1) {
+					const from = mi.Envelope.From[0];
+					const name = from.Name || formatEmailAddress(from);
+					const datetime = mi.Envelope.Date.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" }) + ' at ' + mi.Envelope.Date.toLocaleTimeString();
+					onWroteLine = 'On ' + datetime + ', ' + name + ' wrote:\n';
+				}
+				body = '\n\n' + onWroteLine + body;
+			}
 		}
 		const subjectPrefix = forward ? 'Fwd:' : 'Re:';
 		let subject = mi.Envelope.Subject || '';
@@ -2597,6 +2749,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 			isForward: forward,
 			attachmentsMessageItem: forward ? mi : undefined,
 			responseMessageID: m.ID,
+			isList: m.IsMailingList,
 		};
 		if (all) {
 			opts.to = (to || []).concat((mi.Envelope.To || []).filter(a => !envelopeIdentity([a]))).map(a => formatAddress(a));
@@ -2715,7 +2868,10 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 	let urlType; // text, html, htmlexternal; for opening in new tab/print
 	let msgbuttonElem, msgheaderElem, msgattachmentElem, msgmodeElem;
 	let msgheaderdetailsElem = null; // When full headers are visible, or some headers are requested through settings.
-	const msgmetaElem = dom.div(style({ backgroundColor: '#f8f8f8', borderBottom: '1px solid #ccc', maxHeight: '90%', overflowY: 'auto' }), attr.role('region'), attr.arialabel('Buttons and headers for message'), msgbuttonElem = dom.div(), dom.div(attr.arialive('assertive'), msgheaderElem = dom.table(style({ marginBottom: '1ex', width: '100%' })), msgattachmentElem = dom.div(), msgmodeElem = dom.div()));
+	const msgmetaElem = dom.div(style({ backgroundColor: '#f8f8f8', borderBottom: '5px solid white', maxHeight: '90%', overflowY: 'auto' }), attr.role('region'), attr.arialabel('Buttons and headers for message'), msgbuttonElem = dom.div(), dom.div(attr.arialive('assertive'), msgheaderElem = dom.table(dom._class('msgheaders'), style({ marginBottom: '1ex', width: '100%' })), msgattachmentElem = dom.div(), msgmodeElem = dom.div()), 
+	// Explicit gray line with white border below that separates headers from body, to
+	// prevent HTML messages from faking UI elements.
+	dom.div(style({ height: '2px', backgroundColor: '#ccc' })));
 	const msgscrollElem = dom.div(dom._class('pad', 'yscrollauto'), attr.role('region'), attr.arialabel('Message body'), style({ backgroundColor: 'white' }));
 	const msgcontentElem = dom.div(dom._class('scrollparent'), style({ flexGrow: '1' }));
 	const trashMailboxID = listMailboxes().find(mb => mb.Trash)?.ID;
@@ -2765,7 +2921,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		'image/apng',
 		'image/svg+xml',
 	];
-	const isText = (a) => a.Part.MediaType.toLowerCase() === 'text';
+	const isText = (a) => ['text', 'message'].includes(a.Part.MediaType.toLowerCase());
 	const isImage = (a) => imageTypes.includes((a.Part.MediaType + '/' + a.Part.MediaSubType).toLowerCase());
 	const isPDF = (a) => (a.Part.MediaType + '/' + a.Part.MediaSubType).toLowerCase() === 'application/pdf';
 	const isViewable = (a) => isText(a) || isImage(a) || isPDF(a);
@@ -2821,7 +2977,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 		}, attr.tabindex('0'), !(index > 0) ? [] : dom.div(style({ position: 'absolute', left: '1em', top: 0, bottom: 0, fontSize: '1.5em', width: '2em', display: 'flex', alignItems: 'center', cursor: 'pointer' }), dom.div(dom._class('silenttitle'), style({ backgroundColor: 'rgba(0, 0, 0, .8)', color: 'white', width: '2em', height: '2em', borderRadius: '1em', lineHeight: '2em', textAlign: 'center', fontWeight: 'bold' }), attr.title('To previous viewable attachment.'), '←'), attr.tabindex('0'), clickCmd(cmdViewPrev, attachShortcuts), enterCmd(cmdViewPrev, attachShortcuts)), dom.div(style({ textAlign: 'center', paddingBottom: '30px' }), dom.span(dom._class('pad'), function click(e) {
 			e.stopPropagation();
 		}, style({ backgroundColor: 'white', borderRadius: '.25em', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', border: '1px solid #ddd' }), a.Filename || '(unnamed)', ' - ', formatSize(a.Part.DecodedSize), ' - ', dom.a('Download', attr.download(''), attr.href('msg/' + m.ID + '/download/' + pathStr), function click(e) { e.stopPropagation(); }))), isImage(a) ?
-			dom.div(style({ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 5em' }), dom.img(attr.src('msg/' + m.ID + '/view/' + pathStr), style({ backgroundColor: 'white', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', margin: '0 30px' }))) : (isText(a) ?
+			dom.div(style({ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', maxHeight: 'calc(100% - 50px)', margin: '0 5em' }), dom.img(attr.src('msg/' + m.ID + '/view/' + pathStr), style({ backgroundColor: 'white', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', margin: '0 30px' }))) : (isText(a) ?
 			dom.iframe(attr.title('Attachment shown as text.'), style({ flexGrow: 1, boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em' }), attr.src('msg/' + m.ID + '/viewtext/' + pathStr)) : (isPDF(a) ?
 			dom.iframe(style({ flexGrow: 1, boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', backgroundColor: 'white', margin: '0 5em' }), attr.title('Attachment as PDF.'), attr.src('msg/' + m.ID + '/view/' + pathStr)) :
 			content = dom.div(function click(e) {

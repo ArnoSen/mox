@@ -1,6 +1,6 @@
 // Javascript is generated from typescript, do not modify generated javascript because changes will be overwritten.
 
-type ElemArg = string | Element | Function | {_class: string[]} | {_attrs: {[k: string]: string}} | {_styles: {[k: string]: string | number}} | {_props: {[k: string]: any}} | {root: HTMLElement} | ElemArg[]
+type ElemArg = string | String | Element | Function | {_class: string[]} | {_attrs: {[k: string]: string}} | {_styles: {[k: string]: string | number}} | {_props: {[k: string]: any}} | {root: HTMLElement} | ElemArg[]
 
 const [dom, style, attr, prop] = (function() {
 
@@ -95,6 +95,10 @@ const _domKids = <T extends HTMLElement>(e: T, l: ElemArg[]): T => {
 		const xc = c as {[k: string]: any}
 		if (typeof c === 'string') {
 			formatText(e, c)
+		} else if (c instanceof String) {
+			// String is an escape-hatch for text that should not be formatted with
+			// unicode-block-change-highlighting, e.g. for textarea values.
+			e.appendChild(document.createTextNode(''+c))
 		} else if (c instanceof Element) {
 			e.appendChild(c)
 		} else if (c instanceof Function) {
@@ -312,10 +316,11 @@ const formatAddressFull = (a: api.MessageAddress): string => {
 	return s
 }
 
-// format just the name, or otherwies just the email address.
+// format just the name if present and it doesn't look like an address, or otherwise just the email address.
 const formatAddressShort = (a: api.MessageAddress): string => {
-	if (a.Name) {
-		return a.Name
+	const n = a.Name
+	if (n && !n.includes('<') && !n.includes('@') && !n.includes('>')) {
+		return n
 	}
 	return '<' + a.User + '@' + a.Domain.ASCII + '>'
 }
@@ -335,7 +340,7 @@ const equalAddress = (a: api.MessageAddress, b: api.MessageAddress) => {
 const loadMsgheaderView = (msgheaderelem: HTMLElement, mi: api.MessageItem, moreHeaders: string[], refineKeyword: null | ((kw: string) => Promise<void>)) => {
 	const msgenv = mi.Envelope
 	const received = mi.Message.Received
-	const receivedlocal = new Date(received.getTime() - received.getTimezoneOffset()*60*1000)
+	const receivedlocal = new Date(received.getTime())
 	dom._kids(msgheaderelem,
 		// todo: make addresses clickable, start search (keep current mailbox if any)
 		dom.tr(
@@ -373,6 +378,11 @@ const loadMsgheaderView = (msgheaderelem: HTMLElement, mi: api.MessageItem, more
 				dom.div(style({display: 'flex', justifyContent: 'space-between'}),
 					dom.div(msgenv.Subject || ''),
 					dom.div(
+						mi.Message.IsForward ? dom.span(style({padding: '0px 0.15em', fontSize: '.9em'}), 'Forwarded', attr.title('Message came in from a forwarded address. Some message authentication policies, like DMARC, were not evaluated.')) : [],
+						mi.Message.IsMailingList ? dom.span(style({padding: '0px 0.15em', fontSize: '.9em'}), 'Mailing list', attr.title('Message was received from a mailing list. Some message authentication policies, like DMARC, were not evaluated.')) : [],
+						mi.Message.ReceivedTLSVersion === 1 ? dom.span(style({padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #e15d1c'}), 'Without TLS', attr.title('Message received (last hop) without TLS.')) : [],
+						mi.Message.ReceivedTLSVersion > 1 && !mi.Message.ReceivedRequireTLS ? dom.span(style({padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #50c40f'}), 'With TLS', attr.title('Message received (last hop) with TLS.')) : [],
+						mi.Message.ReceivedRequireTLS ? dom.span(style({padding: '.1em .3em', fontSize: '.9em', backgroundColor: '#d2f791', border: '1px solid #ccc', borderRadius: '3px'}), 'With RequireTLS', attr.title('Transported with RequireTLS, ensuring TLS along the entire delivery path from sender to recipient, with TLS certificate verification through MTA-STS and/or DANE.')) : [],
 						mi.IsSigned ? dom.span(style({backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em'}), 'Message has a signature') : [],
 						mi.IsEncrypted ? dom.span(style({backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em'}), 'Message is encrypted') : [],
 						refineKeyword ? (mi.Message.Keywords || []).map(kw =>

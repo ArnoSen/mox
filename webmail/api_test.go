@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"testing"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/sherpa"
 
+	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/queue"
 	"github.com/mjl-/mox/store"
@@ -43,7 +45,7 @@ func TestAPI(t *testing.T) {
 	mox.LimitersInit()
 	os.RemoveAll("../testdata/webmail/data")
 	mox.Context = ctxbg
-	mox.ConfigStaticPath = "../testdata/webmail/mox.conf"
+	mox.ConfigStaticPath = filepath.FromSlash("../testdata/webmail/mox.conf")
 	mox.MustLoadConfig(true, false)
 	defer store.Switchboard()()
 
@@ -361,4 +363,15 @@ func TestAPI(t *testing.T) {
 	l, full = api.CompleteRecipient(ctx, "cc2")
 	tcompare(t, l, []string{"mjl cc2 <mjl+cc2@mox.example>"})
 	tcompare(t, full, true)
+
+	// RecipientSecurity
+	resolver := dns.MockResolver{}
+	rs, err := recipientSecurity(ctx, resolver, "mjl@a.mox.example")
+	tcompare(t, err, nil)
+	tcompare(t, rs, RecipientSecurity{SecurityResultUnknown, SecurityResultNo, SecurityResultNo, SecurityResultNo, SecurityResultUnknown})
+	err = acc.DB.Insert(ctx, &store.RecipientDomainTLS{Domain: "a.mox.example", STARTTLS: true, RequireTLS: false})
+	tcheck(t, err, "insert recipient domain tls info")
+	rs, err = recipientSecurity(ctx, resolver, "mjl@a.mox.example")
+	tcompare(t, err, nil)
+	tcompare(t, rs, RecipientSecurity{SecurityResultYes, SecurityResultNo, SecurityResultNo, SecurityResultNo, SecurityResultNo})
 }

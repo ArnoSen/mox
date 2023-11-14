@@ -24,6 +24,7 @@ package store
 import (
 	"context"
 	"crypto/md5"
+	cryptorand "crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding"
@@ -73,8 +74,6 @@ var (
 	ErrUnknownCredentials = errors.New("credentials not found")
 	ErrAccountUnknown     = errors.New("no such account")
 )
-
-var subjectpassRand = mox.NewRand()
 
 var DefaultInitialMailboxes = config.InitialMailboxes{
 	SpecialUse: config.SpecialUseMailboxes{
@@ -489,6 +488,14 @@ type Message struct {
 	// Changes are propagated to the webmail client.
 	ThreadCollapsed bool
 
+	// If received message was known to match a mailing list rule (with modified junk
+	// filtering).
+	IsMailingList bool
+
+	ReceivedTLSVersion     uint16 // 0 if unknown, 1 if plaintext/no TLS, otherwise TLS cipher suite.
+	ReceivedTLSCipherSuite uint16
+	ReceivedRequireTLS     bool // Whether RequireTLS was known to be used for incoming delivery.
+
 	Flags
 	// For keywords other than system flags or the basic well-known $-flags. Only in
 	// "atom" syntax (IMAP), they are case-insensitive, always stored in lower-case
@@ -571,6 +578,7 @@ func (m *Message) PrepareExpunge() {
 		CreateSeq: m.CreateSeq,
 		ModSeq:    m.ModSeq,
 		Expunged:  true,
+		ThreadID:  m.ThreadID,
 	}
 }
 
@@ -676,8 +684,17 @@ type Outgoing struct {
 	Submitted time.Time `bstore:"nonzero,default now"`
 }
 
+// RecipientDomainTLS stores TLS capabilities of a recipient domain as encountered
+// during most recent connection (delivery attempt).
+type RecipientDomainTLS struct {
+	Domain     string    // Unicode.
+	Updated    time.Time `bstore:"default now"`
+	STARTTLS   bool      // Supports STARTTLS.
+	RequireTLS bool      // Supports RequireTLS SMTP extension.
+}
+
 // Types stored in DB.
-var DBTypes = []any{NextUIDValidity{}, Message{}, Recipient{}, Mailbox{}, Subscription{}, Outgoing{}, Password{}, Subjectpass{}, SyncState{}, Upgrade{}}
+var DBTypes = []any{NextUIDValidity{}, Message{}, Recipient{}, Mailbox{}, Subscription{}, Outgoing{}, Password{}, Subjectpass{}, SyncState{}, Upgrade{}, RecipientDomainTLS{}}
 
 // Account holds the information about a user, includings mailboxes, messages, imap subscriptions.
 type Account struct {
@@ -1196,9 +1213,6 @@ func (a *Account) WithRLock(fn func()) {
 
 // DeliverMessage delivers a mail message to the account.
 //
-// If consumeFile is set, the original msgFile is moved/renamed or copied and
-// removed as part of delivery.
-//
 // The message, with msg.MsgPrefix and msgFile combined, must have a header
 // section. The caller is responsible for adding a header separator to
 // msg.MsgPrefix if missing from an incoming message.
@@ -1217,7 +1231,7 @@ func (a *Account) WithRLock(fn func()) {
 // Caller must broadcast new message.
 //
 // Caller must update mailbox counts.
-func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFile *os.File, consumeFile, sync, notrain, nothreads bool) error {
+func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFile *os.File, sync, notrain, nothreads bool) error {
 	if m.Expunged {
 		return fmt.Errorf("cannot deliver expunged message")
 	}
@@ -1353,17 +1367,14 @@ func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFi
 		}
 	}
 
-	if consumeFile {
-		if err := os.Rename(msgFile.Name(), msgPath); err != nil {
-			// Could be due to cross-filesystem rename. Users shouldn't configure their systems that way.
-			return fmt.Errorf("moving msg file to destination directory: %w", err)
-		}
-	} else if err := moxio.LinkOrCopy(log, msgPath, msgFile.Name(), &moxio.AtReader{R: msgFile}, true); err != nil {
+	if err := moxio.LinkOrCopy(log, msgPath, msgFile.Name(), &moxio.AtReader{R: msgFile}, true); err != nil {
 		return fmt.Errorf("linking/copying message to new file: %w", err)
 	}
 
 	if sync {
 		if err := moxio.SyncDir(msgDir); err != nil {
+			xerr := os.Remove(msgPath)
+			log.Check(xerr, "removing message after syncdir error", mlog.Field("path", msgPath))
 			return fmt.Errorf("sync directory: %w", err)
 		}
 	}
@@ -1371,6 +1382,8 @@ func (a *Account) DeliverMessage(log *mlog.Log, tx *bstore.Tx, m *Message, msgFi
 	if !notrain && m.NeedsTraining() {
 		l := []Message{*m}
 		if err := a.RetrainMessages(context.TODO(), log, tx, l, false); err != nil {
+			xerr := os.Remove(msgPath)
+			log.Check(xerr, "removing message after syncdir error", mlog.Field("path", msgPath))
 			return fmt.Errorf("training junkfilter: %w", err)
 		}
 		*m = l[0]
@@ -1453,8 +1466,12 @@ func (a *Account) Subjectpass(email string) (key string, err error) {
 		}
 		key = ""
 		const chars = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-		for i := 0; i < 16; i++ {
-			key += string(chars[subjectpassRand.Intn(len(chars))])
+		buf := make([]byte, 16)
+		if _, err := cryptorand.Read(buf); err != nil {
+			return err
+		}
+		for _, b := range buf {
+			key += string(chars[int(b)%len(chars)])
 		}
 		v.Key = key
 		return tx.Insert(&v)
@@ -1654,7 +1671,7 @@ ruleset:
 
 // MessagePath returns the file system path of a message.
 func (a *Account) MessagePath(messageID int64) string {
-	return strings.Join(append([]string{a.Dir, "msg"}, messagePathElems(messageID)...), "/")
+	return strings.Join(append([]string{a.Dir, "msg"}, messagePathElems(messageID)...), string(filepath.Separator))
 }
 
 // MessageReader opens a message for reading, transparently combining the
@@ -1668,7 +1685,7 @@ func (a *Account) MessageReader(m Message) *MsgReader {
 // Caller must hold account wlock (mailbox may be created).
 // Message delivery, possible mailbox creation, and updated mailbox counts are
 // broadcasted.
-func (a *Account) DeliverDestination(log *mlog.Log, dest config.Destination, m *Message, msgFile *os.File, consumeFile bool) error {
+func (a *Account) DeliverDestination(log *mlog.Log, dest config.Destination, m *Message, msgFile *os.File) error {
 	var mailbox string
 	rs := MessageRuleset(log, dest, m, m.MsgPrefix, msgFile)
 	if rs != nil {
@@ -1678,7 +1695,7 @@ func (a *Account) DeliverDestination(log *mlog.Log, dest config.Destination, m *
 	} else {
 		mailbox = dest.Mailbox
 	}
-	return a.DeliverMailbox(log, mailbox, m, msgFile, consumeFile)
+	return a.DeliverMailbox(log, mailbox, m, msgFile)
 }
 
 // DeliverMailbox delivers an email to the specified mailbox.
@@ -1686,7 +1703,7 @@ func (a *Account) DeliverDestination(log *mlog.Log, dest config.Destination, m *
 // Caller must hold account wlock (mailbox may be created).
 // Message delivery, possible mailbox creation, and updated mailbox counts are
 // broadcasted.
-func (a *Account) DeliverMailbox(log *mlog.Log, mailbox string, m *Message, msgFile *os.File, consumeFile bool) error {
+func (a *Account) DeliverMailbox(log *mlog.Log, mailbox string, m *Message, msgFile *os.File) error {
 	var changes []Change
 	err := a.DB.Write(context.TODO(), func(tx *bstore.Tx) error {
 		mb, chl, err := a.MailboxEnsure(tx, mailbox, true)
@@ -1703,7 +1720,7 @@ func (a *Account) DeliverMailbox(log *mlog.Log, mailbox string, m *Message, msgF
 			return fmt.Errorf("updating mailbox for delivery: %w", err)
 		}
 
-		if err := a.DeliverMessage(log, tx, m, msgFile, consumeFile, true, false, false); err != nil {
+		if err := a.DeliverMessage(log, tx, m, msgFile, true, false, false); err != nil {
 			return err
 		}
 
@@ -1984,10 +2001,11 @@ func OpenEmail(email string) (*Account, config.Destination, error) {
 // 64 characters, must be power of 2 for MessagePath
 const msgDirChars = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-_"
 
-// MessagePath returns the filename of the on-disk filename, relative to the containing directory such as <account>/msg or queue.
+// MessagePath returns the filename of the on-disk filename, relative to the
+// containing directory such as <account>/msg or queue.
 // Returns names like "AB/1".
 func MessagePath(messageID int64) string {
-	return strings.Join(messagePathElems(messageID), "/")
+	return strings.Join(messagePathElems(messageID), string(filepath.Separator))
 }
 
 // messagePathElems returns the elems, for a single join without intermediate

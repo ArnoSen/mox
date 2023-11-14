@@ -52,7 +52,7 @@ To simulate slow API calls and SSE events:
 
 Show additional headers of messages:
 
-	settingsPut({...settings, showHeaders: ['User-Agent', 'X-Mailer', 'Message-Id', 'List-Id', 'List-Post', 'X-Mox-Reason']})
+	settingsPut({...settings, showHeaders: ['Delivered-To', 'User-Agent', 'X-Mailer', 'Message-Id', 'List-Id', 'List-Post', 'X-Mox-Reason', 'TLS-Required']})
 
 Enable logging and reload afterwards:
 
@@ -761,7 +761,7 @@ let statusElem: HTMLElement
 const withStatus = async <T>(action: string, promise: Promise<T>, disablable?: Disablable, noAlert?: boolean): Promise<T> => {
 	let elem: HTMLElement | undefined
 	let id = window.setTimeout(() => {
-		elem = dom.span(action+'...')
+		elem = dom.span(action+'... ')
 		statusElem.appendChild(elem)
 		id = 0
 	}, 1000)
@@ -1127,6 +1127,8 @@ type ComposeOptions = {
 	// Message is marked as replied/answered or forwarded after submitting, and
 	// In-Reply-To and References headers are added pointing to this message.
 	responseMessageID?: number
+	// Whether message is to a list, due to List-Id header.
+	isList?: boolean
 }
 
 interface ComposeView {
@@ -1154,14 +1156,18 @@ const compose = (opts: ComposeOptions) => {
 	type AddrView = {
 		root: HTMLElement
 		input: HTMLInputElement
+		isRecipient: boolean
+		recipientSecurity: null | api.RecipientSecurity
 	}
 
 	let fieldset: HTMLFieldSetElement
 	let from: HTMLSelectElement
 	let customFrom: HTMLInputElement | null = null
+	let subjectAutosize: HTMLElement
 	let subject: HTMLInputElement
 	let body: HTMLTextAreaElement
 	let attachments: HTMLInputElement
+	let requiretls: HTMLSelectElement
 
 	let toBtn: HTMLButtonElement, ccBtn: HTMLButtonElement, bccBtn: HTMLButtonElement, replyToBtn: HTMLButtonElement, customFromBtn: HTMLButtonElement
 	let replyToCell: HTMLElement, toCell: HTMLElement, ccCell: HTMLElement, bccCell: HTMLElement // Where we append new address views.
@@ -1216,6 +1222,7 @@ const compose = (opts: ComposeOptions) => {
 			ForwardAttachments: forwardAttachmentPaths.length === 0 ? {MessageID: 0, Paths: []} : {MessageID: opts.attachmentsMessageItem!.Message.ID, Paths: forwardAttachmentPaths},
 			IsForward: opts.isForward || false,
 			ResponseMessageID: opts.responseMessageID || 0,
+			RequireTLS: requiretls.value === '' ? null : requiretls.value === 'yes',
 		}
 		await client.MessageSubmit(message)
 		cmdCancel()
@@ -1225,10 +1232,10 @@ const compose = (opts: ComposeOptions) => {
 		await withStatus('Sending email', submit(), fieldset)
 	}
 
-	const cmdAddTo = async () => { newAddrView('', toViews, toBtn, toCell, toRow) }
-	const cmdAddCc = async () => { newAddrView('', ccViews, ccBtn, ccCell, ccRow) }
-	const cmdAddBcc = async () => { newAddrView('', bccViews, bccBtn, bccCell, bccRow) }
-	const cmdReplyTo = async () => { newAddrView('', replytoViews, replyToBtn, replyToCell, replyToRow, true) }
+	const cmdAddTo = async () => { newAddrView('', true, toViews, toBtn, toCell, toRow) }
+	const cmdAddCc = async () => { newAddrView('', true, ccViews, ccBtn, ccCell, ccRow) }
+	const cmdAddBcc = async () => { newAddrView('', true, bccViews, bccBtn, bccCell, bccRow) }
+	const cmdReplyTo = async () => { newAddrView('', false, replytoViews, replyToBtn, replyToCell, replyToRow, true) }
 	const cmdCustomFrom = async () => {
 		if (customFrom) {
 			return
@@ -1248,29 +1255,141 @@ const compose = (opts: ComposeOptions) => {
 		// ctrl - and ctrl = (+) not included, they are handled by keydown handlers on in the inputs they remove/add.
 	}
 
-	const newAddrView = (addr: string, views: AddrView[], btn: HTMLButtonElement, cell: HTMLElement, row: HTMLElement, single?: boolean) => {
+	const newAddrView = (addr: string, isRecipient: boolean, views: AddrView[], btn: HTMLButtonElement, cell: HTMLElement, row: HTMLElement, single?: boolean) => {
 		if (single && views.length !== 0) {
 			return
 		}
 
-		let input: HTMLInputElement
-		const root = dom.span(
-			input=dom.input(
-				focusPlaceholder('Jane <jane@example.org>'),
-				style({width: 'auto'}),
-				attr.value(addr),
-				newAddressComplete(),
-				function keydown(e: KeyboardEvent) {
-					if (e.key === '-' && e.ctrlKey) {
-						remove()
-					} else if (e.key === '=' && e.ctrlKey) {
-						newAddrView('', views, btn, cell, row, single)
-					} else {
-						return
+		let rcptSecPromise: Promise<api.RecipientSecurity> | null = null
+		let rcptSecAddr: string = ''
+		let rcptSecAborter: {abort?: () => void} = {}
+
+		let autosizeElem: HTMLElement, inputElem: HTMLInputElement, securityBar: HTMLElement
+
+		const fetchRecipientSecurity = () => {
+			if (inputElem.value === rcptSecAddr) {
+				return
+			}
+			securityBar.style.borderImage = ''
+			rcptSecAddr = inputElem.value
+			if (!inputElem.value) {
+				return
+			}
+
+			if (rcptSecAborter.abort) {
+				rcptSecAborter.abort()
+				rcptSecAborter.abort = undefined
+			}
+
+			const color = (v: api.SecurityResult) => {
+				if (v === api.SecurityResult.SecurityResultYes) {
+					return '#50c40f'
+				} else if (v === api.SecurityResult.SecurityResultNo) {
+					return '#e15d1c'
+				} else if (v === api.SecurityResult.SecurityResultUnknown) {
+					return 'white'
+				}
+				return '#aaa'
+			}
+			const setBar = (c0: string, c1: string, c2: string, c3: string, c4: string) => {
+				const stops = [
+					c0 + ' 0%', c0 + ' 19%', 'white 19%', 'white 20%',
+					c1 + ' 20%', c1 + ' 39%', 'white 39%', 'white 40%',
+					c2 + ' 40%', c2 + ' 59%', 'white 59%', 'white 60%',
+					c3 + ' 60%', c3 + ' 79%', 'white 79%', 'white 80%',
+					c4 + ' 80%', c4 + ' 100%',
+				].join(', ')
+				securityBar.style.borderImage = 'linear-gradient(to right, ' + stops + ') 1'
+			}
+
+			const aborter: {abort?: () => void} = {}
+			rcptSecAborter = aborter
+			rcptSecPromise = client.withOptions({aborter: aborter}).RecipientSecurity(inputElem.value)
+			rcptSecPromise.then((rs) => {
+				setBar(color(rs.STARTTLS), color(rs.MTASTS), color(rs.DNSSEC), color(rs.DANE), color(rs.RequireTLS))
+
+				const implemented: string[] = []
+				const check = (v: boolean, s: string) => {
+					if (v) {
+						implemented.push(s)
 					}
-					e.preventDefault()
-					e.stopPropagation()
-				},
+				}
+				check(rs.STARTTLS === api.SecurityResult.SecurityResultYes, 'STARTTLS')
+				check(rs.MTASTS === api.SecurityResult.SecurityResultYes, 'MTASTS')
+				check(rs.DNSSEC === api.SecurityResult.SecurityResultYes, 'DNSSEC')
+				check(rs.DANE === api.SecurityResult.SecurityResultYes, 'DANE')
+				check(rs.RequireTLS === api.SecurityResult.SecurityResultYes, 'RequireTLS')
+				const status = 'Security mechanisms known to be implemented by the recipient domain: '+ (implemented.length === 0 ? '(none)' : implemented.join(', ')) + '.'
+				inputElem.setAttribute('title', status+'\n\n'+recipientSecurityTitle)
+
+				aborter.abort = undefined
+				v.recipientSecurity = rs
+				if (isRecipient) {
+					// If we are not replying to a message from a mailing list, and all recipients
+					// implement REQUIRETLS, we enable it.
+					let reqtls = opts.isList !== true
+					const walk = (l: AddrView[]) => {
+						for (const v of l) {
+							if (v.recipientSecurity?.RequireTLS !== api.SecurityResult.SecurityResultYes || v.recipientSecurity?.MTASTS !== api.SecurityResult.SecurityResultYes && v.recipientSecurity?.DANE !== api.SecurityResult.SecurityResultYes) {
+								reqtls = false
+								break
+							}
+						}
+					}
+					walk(toViews)
+					walk(ccViews)
+					walk(bccViews)
+					if (requiretls.value === '' || requiretls.value === 'yes') {
+						requiretls.value = reqtls ? 'yes' : ''
+					}
+				}
+			}, () => {
+				setBar('#888', '#888', '#888', '#888', '#888')
+				inputElem.setAttribute('title', 'Error fetching security mechanisms known to be implemented by the recipient domain...\n\n'+recipientSecurityTitle)
+				aborter.abort = undefined
+				if (requiretls.value === 'yes') {
+					requiretls.value = ''
+				}
+			})
+		}
+
+		const recipientSecurityTitle = 'Description of security mechanisms recipient domains may implement:\n1. STARTTLS: Opportunistic (unverified) TLS with STARTTLS, successfully negotiated during the most recent delivery attempt.\n2. MTA-STS: For PKIX/WebPKI-verified TLS.\n3. DNSSEC: MX DNS records are DNSSEC-signed.\n4. DANE: First delivery destination host implements DANE for verified TLS.\n5. RequireTLS: SMTP extension for verified TLS delivery into recipient mailbox, support detected during the most recent delivery attempt.\n\nChecks STARTTLS, DANE and RequireTLS cover the most recently used delivery path, not necessarily all possible delivery paths.\n\nThe bars below the input field indicate implementation status by the recipient domain:\n- Red, not implemented/unsupported\n- Green, implemented/supported\n- Gray, error while determining\n- Absent/white, unknown or skipped (e.g. no previous delivery attempt, or DANE check skipped due to DNSSEC-lookup error)'
+		const root = dom.span(
+			autosizeElem=dom.span(
+				dom._class('autosize'),
+				inputElem=dom.input(
+					focusPlaceholder('Jane <jane@example.org>'),
+					style({width: 'auto'}),
+					attr.value(addr),
+					newAddressComplete(),
+					attr.title(recipientSecurityTitle),
+					function keydown(e: KeyboardEvent) {
+						if (e.key === '-' && e.ctrlKey) {
+							remove()
+						} else if (e.key === '=' && e.ctrlKey) {
+							newAddrView('', isRecipient, views, btn, cell, row, single)
+						} else {
+							return
+						}
+						e.preventDefault()
+						e.stopPropagation()
+					},
+					function input() {
+						// data-value is used for size of ::after css pseudo-element to stretch input field.
+						autosizeElem.dataset.value = inputElem.value
+					},
+					function change() {
+						fetchRecipientSecurity()
+					},
+				),
+				securityBar=dom.span(
+					dom._class('securitybar'),
+					style({
+						margin: '0 1px',
+						borderBottom: '1.5px solid',
+						borderBottomColor: 'transparent',
+					}),
+				),
 			),
 			' ',
 			dom.clickbutton('-', style({padding: '0 .25em'}), attr.arialabel('Remove address.'), attr.title('Remove address.'), function click() {
@@ -1281,6 +1400,7 @@ const compose = (opts: ComposeOptions) => {
 			}),
 			' ',
 		)
+		autosizeElem.dataset.value = inputElem.value
 
 		const remove = () => {
 			const i = views.indexOf(v)
@@ -1310,14 +1430,17 @@ const compose = (opts: ComposeOptions) => {
 			}
 		}
 
-		const v: AddrView = {root: root, input: input}
+		const v: AddrView = {root: root, input: inputElem, isRecipient: isRecipient, recipientSecurity: null}
+
+		fetchRecipientSecurity()
+
 		views.push(v)
 		cell.appendChild(v.root)
 		row.style.display = ''
 		if (single) {
 			btn.style.display = 'none'
 		}
-		input.focus()
+		inputElem.focus()
 		return v
 	}
 
@@ -1375,8 +1498,7 @@ const compose = (opts: ComposeOptions) => {
 			border: '1px solid #ccc',
 			padding: '1em',
 			minWidth: '40em',
-			maxWidth: '70em',
-			width: '40%',
+			maxWidth: '95vw',
 			borderRadius: '.25em',
 		}),
 		dom.form(
@@ -1389,7 +1511,7 @@ const compose = (opts: ComposeOptions) => {
 							dom.span('From:'),
 						),
 						dom.td(
-							dom.clickbutton('Cancel', style({float: 'right'}), attr.title('Close window, discarding message.'), clickCmd(cmdCancel, shortcuts)),
+							dom.clickbutton('Cancel', style({float: 'right', marginLeft: '1em', marginTop: '.15em'}), attr.title('Close window, discarding message.'), clickCmd(cmdCancel, shortcuts)),
 							from=dom.select(
 								attr.required(''),
 								style({width: 'auto'}),
@@ -1405,30 +1527,44 @@ const compose = (opts: ComposeOptions) => {
 					),
 					toRow=dom.tr(
 						dom.td('To:', style({textAlign: 'right', color: '#555'})),
-						toCell=dom.td(style({width: '100%'})),
+						toCell=dom.td(style({lineHeight: '1.5'})),
 					),
 					replyToRow=dom.tr(
 						dom.td('Reply-To:', style({textAlign: 'right', color: '#555'})),
-						replyToCell=dom.td(style({width: '100%'})),
+						replyToCell=dom.td(style({lineHeight: '1.5'})),
 					),
 					ccRow=dom.tr(
 						dom.td('Cc:', style({textAlign: 'right', color: '#555'})),
-						ccCell=dom.td(style({width: '100%'})),
+						ccCell=dom.td(style({lineHeight: '1.5'})),
 					),
 					bccRow=dom.tr(
 						dom.td('Bcc:', style({textAlign: 'right', color: '#555'})),
-						bccCell=dom.td(style({width: '100%'})),
+						bccCell=dom.td(style({lineHeight: '1.5'})),
 					),
 					dom.tr(
 						dom.td('Subject:', style({textAlign: 'right', color: '#555'})),
-						dom.td(style({width: '100%'}),
-							subject=dom.input(focusPlaceholder('subject...'), attr.value(opts.subject || ''), attr.required(''), style({width: '100%'})),
+						dom.td(
+							subjectAutosize=dom.span(
+								dom._class('autosize'),
+								style({width: '100%'}), // Without 100% width, the span takes minimal width for input, we want the full table cell.
+								subject=dom.input(
+									style({width: '100%'}),
+									attr.value(opts.subject || ''),
+									attr.required(''),
+									focusPlaceholder('subject...'),
+									function input() {
+										subjectAutosize.dataset.value = subject.value
+									},
+								),
+							),
 						),
 					),
 				),
 				body=dom.textarea(dom._class('mono'), attr.rows('15'), style({width: '100%'}),
-					opts.body || '',
-					opts.body && !opts.isForward ? prop({selectionStart: opts.body.length, selectionEnd: opts.body.length}) : [],
+					// Explicit string object so it doesn't get the highlight-unicode-block-changes
+					// treatment, which would cause characters to disappear.
+					new String(opts.body || ''),
+					opts.body && !opts.isForward && !opts.body.startsWith('\n\n') ? prop({selectionStart: opts.body.length, selectionEnd: opts.body.length}) : [],
 					function keyup(e: KeyboardEvent) {
 						if (e.key === 'Enter') {
 							checkAttachments()
@@ -1455,8 +1591,21 @@ const compose = (opts: ComposeOptions) => {
 					}), ' (Toggle all)')
 				),
 				noAttachmentsWarning=dom.div(style({display: 'none', backgroundColor: '#fcd284', padding: '0.15em .25em', margin: '.5em 0'}), 'Message mentions attachments, but no files are attached.'),
-				dom.div(style({margin: '1ex 0'}), 'Attachments ', attachments=dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments() })),
-				dom.submitbutton('Send'),
+				dom.label(style({margin: '1ex 0', display: 'block'}), 'Attachments ', attachments=dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments() })),
+				dom.label(
+					style({margin: '1ex 0', display: 'block'}),
+					attr.title('How to use TLS for message delivery over SMTP:\n\nDefault: Delivery attempts follow the policies published by the recipient domain: Verification with MTA-STS and/or DANE, or optional opportunistic unverified STARTTLS if the domain does not specify a policy.\n\nWith RequireTLS: For sensitive messages, you may want to require verified TLS. The recipient destination domain SMTP server must support the REQUIRETLS SMTP extension for delivery to succeed. It is automatically chosen when the destination domain mail servers of all recipients are known to support it.\n\nFallback to insecure: If delivery fails due to MTA-STS and/or DANE policies specified by the recipient domain, and the content is not sensitive, you may choose to ignore the recipient domain TLS policies so delivery can succeed.'),
+					'TLS ',
+					requiretls=dom.select(
+						dom.option(attr.value(''), 'Default'),
+						dom.option(attr.value('yes'), 'With RequireTLS'),
+						dom.option(attr.value('no'), 'Fallback to insecure'),
+					),
+				),
+				dom.div(
+					style({margin: '3ex 0 1ex 0', display: 'block'}),
+					dom.submitbutton('Send'),
+				),
 			),
 			async function submit(e: SubmitEvent) {
 				e.preventDefault()
@@ -1465,11 +1614,13 @@ const compose = (opts: ComposeOptions) => {
 		),
 	)
 
-	;(opts.to && opts.to.length > 0 ? opts.to : ['']).forEach(s => newAddrView(s, toViews, toBtn, toCell, toRow))
-	;(opts.cc || []).forEach(s => newAddrView(s, ccViews, ccBtn, ccCell, ccRow))
-	;(opts.bcc || []).forEach(s => newAddrView(s, bccViews, bccBtn, bccCell, bccRow))
+	subjectAutosize.dataset.value = subject.value
+
+	;(opts.to && opts.to.length > 0 ? opts.to : ['']).forEach(s => newAddrView(s, true, toViews, toBtn, toCell, toRow))
+	;(opts.cc || []).forEach(s => newAddrView(s,true,  ccViews, ccBtn, ccCell, ccRow))
+	;(opts.bcc || []).forEach(s => newAddrView(s, true, bccViews, bccBtn, bccCell, bccRow))
 	if (opts.replyto) {
-		newAddrView(opts.replyto, replytoViews, replyToBtn, replyToCell, replyToRow, true)
+		newAddrView(opts.replyto, false, replytoViews, replyToBtn, replyToCell, replyToRow, true)
 	}
 	if (!opts.cc || !opts.cc.length) {
 		ccRow.style.display = 'none'
@@ -1596,7 +1747,7 @@ interface MsgitemView {
 	// Sub messages in thread. Can be further descendants, when an intermediate message
 	// is missing.
 	kids: MsgitemView[]
-	// Whether this thread root is collapsed. If so, the root is visible, all descedants
+	// Whether this thread root is collapsed. If so, the root is visible, all descendants
 	// are not. Value is only valid if this is a thread root.
 	collapsed: boolean
 
@@ -2037,8 +2188,10 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		const pm = await parsedMessagePromise
 		let body = ''
 		const sel = window.getSelection()
+		let haveSel = false
 		if (sel && sel.toString()) {
 			body = sel.toString()
+			haveSel = true
 		} else if (pm.Texts && pm.Texts.length > 0) {
 			body = pm.Texts[0]
 		}
@@ -2046,7 +2199,19 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		if (forward) {
 			body = '\n\n---- Forwarded Message ----\n\n'+body
 		} else {
-			body = body.split('\n').map(line => '> ' + line).join('\n') + '\n\n'
+			body = body.split('\n').map(line => '> ' + line).join('\n')
+			if (haveSel) {
+				body += '\n\n'
+			} else {
+				let onWroteLine = ''
+				if (mi.Envelope.Date && mi.Envelope.From && mi.Envelope.From.length === 1) {
+					const from = mi.Envelope.From[0]
+					const name = from.Name || formatEmailAddress(from)
+					const datetime = mi.Envelope.Date.toLocaleDateString(undefined, {weekday: "short", year: "numeric", month: "short", day: "numeric"}) + ' at ' + mi.Envelope.Date.toLocaleTimeString()
+					onWroteLine = 'On ' + datetime + ', ' + name + ' wrote:\n'
+				}
+				body = '\n\n' + onWroteLine + body
+			}
 		}
 		const subjectPrefix = forward ? 'Fwd:' : 'Re:'
 		let subject = mi.Envelope.Subject || ''
@@ -2061,6 +2226,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 			isForward: forward,
 			attachmentsMessageItem: forward ? mi : undefined,
 			responseMessageID: m.ID,
+			isList: m.IsMailingList,
 		}
 		if (all) {
 			opts.to = (to || []).concat((mi.Envelope.To || []).filter(a => !envelopeIdentity([a]))).map(a => formatAddress(a))
@@ -2202,15 +2368,18 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 	let msgheaderdetailsElem: HTMLElement | null = null // When full headers are visible, or some headers are requested through settings.
 
 	const msgmetaElem = dom.div(
-		style({backgroundColor: '#f8f8f8', borderBottom: '1px solid #ccc', maxHeight: '90%', overflowY: 'auto'}),
+		style({backgroundColor: '#f8f8f8', borderBottom: '5px solid white', maxHeight: '90%', overflowY: 'auto'}),
 		attr.role('region'), attr.arialabel('Buttons and headers for message'),
 		msgbuttonElem=dom.div(),
 		dom.div(
 			attr.arialive('assertive'),
-			msgheaderElem=dom.table(style({marginBottom: '1ex', width: '100%'})),
+			msgheaderElem=dom.table(dom._class('msgheaders'), style({marginBottom: '1ex', width: '100%'})),
 			msgattachmentElem=dom.div(),
 			msgmodeElem=dom.div(),
 		),
+		// Explicit gray line with white border below that separates headers from body, to
+		// prevent HTML messages from faking UI elements.
+		dom.div(style({height: '2px', backgroundColor: '#ccc'})),
 	)
 
 	const msgscrollElem = dom.div(dom._class('pad', 'yscrollauto'),
@@ -2301,7 +2470,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		'image/apng',
 		'image/svg+xml',
 	]
-	const isText = (a: api.Attachment) => a.Part.MediaType.toLowerCase() === 'text'
+	const isText = (a: api.Attachment) => ['text', 'message'].includes(a.Part.MediaType.toLowerCase())
 	const isImage = (a: api.Attachment) => imageTypes.includes((a.Part.MediaType + '/' + a.Part.MediaSubType).toLowerCase())
 	const isPDF = (a: api.Attachment) => (a.Part.MediaType+'/'+a.Part.MediaSubType).toLowerCase() === 'application/pdf'
 	const isViewable = (a: api.Attachment) => isText(a) || isImage(a) || isPDF(a)
@@ -2388,7 +2557,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 			),
 			isImage(a) ?
 				dom.div(
-					style({flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 5em'}),
+					style({flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', maxHeight: 'calc(100% - 50px)', margin: '0 5em'}),
 					dom.img(
 						attr.src('msg/'+m.ID+'/view/'+pathStr),
 						style({backgroundColor: 'white', maxWidth: '100%', maxHeight: '100%', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', margin: '0 30px'})

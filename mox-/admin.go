@@ -3,9 +3,11 @@ package mox
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -19,6 +21,8 @@ import (
 
 	"golang.org/x/exp/maps"
 
+	"github.com/mjl-/adns"
+
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dkim"
 	"github.com/mjl-/mox/dmarc"
@@ -31,9 +35,14 @@ import (
 )
 
 // TXTStrings returns a TXT record value as one or more quoted strings, taking the max
-// length of 255 characters for a string into account.
+// length of 255 characters for a string into account. In case of multiple
+// strings, a multi-line record is returned.
 func TXTStrings(s string) string {
-	r := ""
+	if len(s) <= 255 {
+		return `"` + s + `"`
+	}
+
+	r := "(\n"
 	for len(s) > 0 {
 		n := len(s)
 		if n > 255 {
@@ -42,9 +51,10 @@ func TXTStrings(s string) string {
 		if r != "" {
 			r += " "
 		}
-		r += `"` + s[:n] + `"`
+		r += "\t\t\"" + s[:n] + "\"\n"
 		s = s[n:]
 	}
+	r += "\t)"
 	return r
 }
 
@@ -105,7 +115,7 @@ func MakeDKIMRSAKey(selector, domain dns.Domain) ([]byte, error) {
 	block := &pem.Block{
 		Type: "PRIVATE KEY",
 		Headers: map[string]string{
-			"Note": dkimKeyNote("rsa", selector, domain),
+			"Note": dkimKeyNote("rsa-2048", selector, domain),
 		},
 		Bytes: pkcs8,
 	}
@@ -168,10 +178,10 @@ func MakeDomainConfig(ctx context.Context, domain, hostname dns.Domain, accountN
 		}
 		defer func() {
 			if f != nil {
-				err := os.Remove(path)
-				log.Check(err, "removing file after error")
-				err = f.Close()
+				err := f.Close()
 				log.Check(err, "closing file after error")
+				err = os.Remove(path)
+				log.Check(err, "removing file after error", mlog.Field("path", path))
 			}
 		}()
 		if _, err := f.Write(data); err != nil {
@@ -190,7 +200,7 @@ func MakeDomainConfig(ctx context.Context, domain, hostname dns.Domain, accountN
 
 	addSelector := func(kind, name string, privKey []byte) error {
 		record := fmt.Sprintf("%s._domainkey.%s", name, domain.ASCII)
-		keyPath := filepath.Join("dkim", fmt.Sprintf("%s.%s.%skey.pkcs8.pem", record, timestamp, kind))
+		keyPath := filepath.Join("dkim", fmt.Sprintf("%s.%s.%s.privatekey.pkcs8.pem", record, timestamp, kind))
 		p := configDirPath(ConfigDynamicPath, keyPath)
 		if err := writeFile(p, privKey); err != nil {
 			return err
@@ -219,7 +229,7 @@ func MakeDomainConfig(ctx context.Context, domain, hostname dns.Domain, accountN
 		if err != nil {
 			return fmt.Errorf("making dkim rsa private key: %s", err)
 		}
-		return addSelector("rsa", name, key)
+		return addSelector("rsa2048", name, key)
 	}
 
 	if err := addEd25519(year + "a"); err != nil {
@@ -446,7 +456,7 @@ func WebserverConfigSet(ctx context.Context, domainRedirects map[string]string, 
 
 // DomainRecords returns text lines describing DNS records required for configuring
 // a domain.
-func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
+func DomainRecords(domConf config.Domain, domain dns.Domain, hasDNSSEC bool) ([]string, error) {
 	d := domain.ASCII
 	h := Conf.Static.HostnameDomain.ASCII
 
@@ -457,10 +467,81 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		"",
 	}
 
+	if public, ok := Conf.Static.Listeners["public"]; ok && public.TLS != nil && (len(public.TLS.HostPrivateRSA2048Keys) > 0 || len(public.TLS.HostPrivateECDSAP256Keys) > 0) {
+		records = append(records,
+			"; DANE: These records indicate that a remote mail server trying to deliver email",
+			"; with SMTP (TCP port 25) must verify the TLS certificate with DANE-EE (3), based",
+			"; on the certificate public key (\"SPKI\", 1) that is SHA2-256-hashed (1) to the",
+			"; hexadecimal hash. DANE-EE verification means only the certificate or public",
+			"; key is verified, not whether the certificate is signed by a (centralized)",
+			"; certificate authority (CA), is expired, or matches the host name.",
+			";",
+			"; NOTE: Create the records below only once: They are for the machine, and apply",
+			"; to all hosted domains.",
+		)
+		if !hasDNSSEC {
+			records = append(records,
+				";",
+				"; WARNING: Domain does not appear to be DNSSEC-signed. To enable DANE, first",
+				"; enable DNSSEC on your domain, then add the TLSA records. Records below have been",
+				"; commented out.",
+			)
+		}
+		addTLSA := func(privKey crypto.Signer) error {
+			spkiBuf, err := x509.MarshalPKIXPublicKey(privKey.Public())
+			if err != nil {
+				return fmt.Errorf("marshal SubjectPublicKeyInfo for DANE record: %v", err)
+			}
+			sum := sha256.Sum256(spkiBuf)
+			tlsaRecord := adns.TLSA{
+				Usage:     adns.TLSAUsageDANEEE,
+				Selector:  adns.TLSASelectorSPKI,
+				MatchType: adns.TLSAMatchTypeSHA256,
+				CertAssoc: sum[:],
+			}
+			var s string
+			if hasDNSSEC {
+				s = fmt.Sprintf("_25._tcp.%-*s TLSA %s", 20+len(d)-len("_25._tcp."), h+".", tlsaRecord.Record())
+			} else {
+				s = fmt.Sprintf(";; _25._tcp.%-*s TLSA %s", 20+len(d)-len(";; _25._tcp."), h+".", tlsaRecord.Record())
+			}
+			records = append(records, s)
+			return nil
+		}
+		for _, privKey := range public.TLS.HostPrivateECDSAP256Keys {
+			if err := addTLSA(privKey); err != nil {
+				return nil, err
+			}
+		}
+		for _, privKey := range public.TLS.HostPrivateRSA2048Keys {
+			if err := addTLSA(privKey); err != nil {
+				return nil, err
+			}
+		}
+		records = append(records, "")
+	}
+
 	if d != h {
 		records = append(records,
-			"; For the machine, only needs to be created once, for the first domain added.",
-			fmt.Sprintf(`%-*s IN TXT "v=spf1 a -all"`, 20+len(d), h+"."), // ../rfc/7208:2263 ../rfc/7208:2287
+			"; For the machine, only needs to be created once, for the first domain added:",
+			"; ",
+			"; SPF-allow host for itself, resulting in relaxed DMARC pass for (postmaster)",
+			"; messages (DSNs) sent from host:",
+			fmt.Sprintf(`%-*s TXT "v=spf1 a -all"`, 20+len(d), h+"."), // ../rfc/7208:2263 ../rfc/7208:2287
+			"",
+		)
+	}
+	if d != h && Conf.Static.HostTLSRPT.ParsedLocalpart != "" {
+		uri := url.URL{
+			Scheme: "mailto",
+			Opaque: smtp.NewAddress(Conf.Static.HostTLSRPT.ParsedLocalpart, Conf.Static.HostnameDomain).Pack(false),
+		}
+		tlsrptr := tlsrpt.Record{Version: "TLSRPTv1", RUAs: [][]tlsrpt.RUA{{tlsrpt.RUA(uri.String())}}}
+		records = append(records,
+			"; For the machine, only needs to be created once, for the first domain added:",
+			"; ",
+			"; Request reporting about success/failures of TLS connections to (MX) host, for DANE.",
+			fmt.Sprintf(`_smtp._tls.%-*s         TXT "%s"`, 20+len(d)-len("_smtp._tls."), h+".", tlsrptr.String()),
 			"",
 		)
 	}
@@ -503,7 +584,7 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 				"; of multiple strings (max size of each is 255 bytes).",
 			)
 		}
-		s := fmt.Sprintf("%s._domainkey.%s.   IN TXT %s", name, d, TXTStrings(txt))
+		s := fmt.Sprintf("%s._domainkey.%s.   TXT %s", name, d, TXTStrings(txt))
 		records = append(records, s)
 
 	}
@@ -524,22 +605,24 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 		"; Specify the MX host is allowed to send for our domain and for itself (for DSNs).",
 		"; ~all means softfail for anything else, which is done instead of -all to prevent older",
 		"; mail servers from rejecting the message because they never get to looking for a dkim/dmarc pass.",
-		fmt.Sprintf(`%s.                    IN TXT "v=spf1 mx ~all"`, d),
+		fmt.Sprintf(`%s.                    TXT "v=spf1 mx ~all"`, d),
 		"",
 
 		"; Emails that fail the DMARC check (without aligned DKIM and without aligned SPF)",
 		"; should be rejected, and request reports. If you email through mailing lists that",
 		"; strip DKIM-Signature headers and don't rewrite the From header, you may want to",
 		"; set the policy to p=none.",
-		fmt.Sprintf(`_dmarc.%s.             IN TXT "%s"`, d, dmarcr.String()),
+		fmt.Sprintf(`_dmarc.%s.             TXT "%s"`, d, dmarcr.String()),
 		"",
 	)
 
 	if sts := domConf.MTASTS; sts != nil {
 		records = append(records,
-			"; TLS must be used when delivering to us.",
-			fmt.Sprintf(`mta-sts.%s.            IN CNAME %s.`, d, h),
-			fmt.Sprintf(`_mta-sts.%s.           IN TXT "v=STSv1; id=%s"`, d, sts.PolicyID),
+			"; Remote servers can use MTA-STS to verify our TLS certificate with the",
+			"; WebPKI pool of CA's (certificate authorities) when delivering over SMTP with",
+			"; STARTTLSTLS.",
+			fmt.Sprintf(`mta-sts.%s.            CNAME %s.`, d, h),
+			fmt.Sprintf(`_mta-sts.%s.           TXT "v=STSv1; id=%s"`, d, sts.PolicyID),
 			"",
 		)
 	} else {
@@ -555,39 +638,39 @@ func DomainRecords(domConf config.Domain, domain dns.Domain) ([]string, error) {
 			Scheme: "mailto",
 			Opaque: smtp.NewAddress(domConf.TLSRPT.ParsedLocalpart, domConf.TLSRPT.DNSDomain).Pack(false),
 		}
-		tlsrptr := tlsrpt.Record{Version: "TLSRPTv1", RUAs: [][]string{{uri.String()}}}
+		tlsrptr := tlsrpt.Record{Version: "TLSRPTv1", RUAs: [][]tlsrpt.RUA{{tlsrpt.RUA(uri.String())}}}
 		records = append(records,
 			"; Request reporting about TLS failures.",
-			fmt.Sprintf(`_smtp._tls.%s.         IN TXT "%s"`, d, tlsrptr.String()),
+			fmt.Sprintf(`_smtp._tls.%s.         TXT "%s"`, d, tlsrptr.String()),
 			"",
 		)
 	}
 
 	records = append(records,
 		"; Autoconfig is used by Thunderbird. Autodiscover is (in theory) used by Microsoft.",
-		fmt.Sprintf(`autoconfig.%s.         IN CNAME %s.`, d, h),
-		fmt.Sprintf(`_autodiscover._tcp.%s. IN SRV 0 1 443 autoconfig.%s.`, d, d),
+		fmt.Sprintf(`autoconfig.%s.         CNAME %s.`, d, h),
+		fmt.Sprintf(`_autodiscover._tcp.%s. SRV 0 1 443 %s.`, d, h),
 		"",
 
 		// ../rfc/6186:133 ../rfc/8314:692
 		"; For secure IMAP and submission autoconfig, point to mail host.",
-		fmt.Sprintf(`_imaps._tcp.%s.        IN SRV 0 1 993 %s.`, d, h),
-		fmt.Sprintf(`_submissions._tcp.%s.  IN SRV 0 1 465 %s.`, d, h),
+		fmt.Sprintf(`_imaps._tcp.%s.        SRV 0 1 993 %s.`, d, h),
+		fmt.Sprintf(`_submissions._tcp.%s.  SRV 0 1 465 %s.`, d, h),
 		"",
 		// ../rfc/6186:242
 		"; Next records specify POP3 and non-TLS ports are not to be used.",
 		"; These are optional and safe to leave out (e.g. if you have to click a lot in a",
 		"; DNS admin web interface).",
-		fmt.Sprintf(`_imap._tcp.%s.         IN SRV 0 1 143 .`, d),
-		fmt.Sprintf(`_submission._tcp.%s.   IN SRV 0 1 587 .`, d),
-		fmt.Sprintf(`_pop3._tcp.%s.         IN SRV 0 1 110 .`, d),
-		fmt.Sprintf(`_pop3s._tcp.%s.        IN SRV 0 1 995 .`, d),
+		fmt.Sprintf(`_imap._tcp.%s.         SRV 0 1 143 .`, d),
+		fmt.Sprintf(`_submission._tcp.%s.   SRV 0 1 587 .`, d),
+		fmt.Sprintf(`_pop3._tcp.%s.         SRV 0 1 110 .`, d),
+		fmt.Sprintf(`_pop3s._tcp.%s.        SRV 0 1 995 .`, d),
 		"",
 
 		"; Optional:",
 		"; You could mark Let's Encrypt as the only Certificate Authority allowed to",
 		"; sign TLS certificates for your domain.",
-		fmt.Sprintf("%s.                    IN CAA 0 issue \"letsencrypt.org\"", d),
+		fmt.Sprintf("%s.                    CAA 0 issue \"letsencrypt.org\"", d),
 	)
 	return records, nil
 }

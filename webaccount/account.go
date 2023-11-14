@@ -52,7 +52,7 @@ var accountSherpaHandler http.Handler
 func mustParseAPI(api string, buf []byte) (doc sherpadoc.Section) {
 	err := json.Unmarshal(buf, &doc)
 	if err != nil {
-		xlog.Fatalx("parsing api docs", err, mlog.Field("api", api))
+		xlog.Fatalx("parsing webaccount api docs", err, mlog.Field("api", api))
 	}
 	return doc
 }
@@ -299,15 +299,9 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() {
 			if tmpf != nil {
-				err := tmpf.Close()
-				log.Check(err, "closing uploaded file")
+				store.CloseRemoveTempFile(log, tmpf, "upload")
 			}
 		}()
-		if err := os.Remove(tmpf.Name()); err != nil {
-			log.Errorx("removing temporary file", err)
-			http.Error(w, "500 - internal server error - "+err.Error(), http.StatusInternalServerError)
-			return
-		}
 		if _, err := io.Copy(tmpf, f); err != nil {
 			log.Errorx("copying import to temporary file", err)
 			http.Error(w, "500 - internal server error - "+err.Error(), http.StatusInternalServerError)
@@ -319,7 +313,7 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "500 - internal server error - "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tmpf = nil // importStart is now responsible for closing.
+		tmpf = nil // importStart is now responsible for cleanup.
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"ImportToken": token})
@@ -399,7 +393,8 @@ func (Account) DestinationSave(ctx context.Context, destName string, oldDest, ne
 
 	// Keep fields we manage.
 	newDest.DMARCReports = curDest.DMARCReports
-	newDest.TLSReports = curDest.TLSReports
+	newDest.HostTLSReports = curDest.HostTLSReports
+	newDest.DomainTLSReports = curDest.DomainTLSReports
 
 	err := mox.DestinationSave(ctx, accountName, destName, newDest)
 	xcheckf(ctx, err, "saving destination")

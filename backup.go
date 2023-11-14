@@ -279,9 +279,11 @@ func backupctl(ctx context.Context, ctl *ctl) {
 	if err := os.WriteFile(filepath.Join(dstDataDir, "moxversion"), []byte(moxvar.Version), 0660); err != nil {
 		xerrx("writing moxversion", err)
 	}
-	backupDB(dmarcdb.DB, "dmarcrpt.db")
+	backupDB(dmarcdb.ReportsDB, "dmarcrpt.db")
+	backupDB(dmarcdb.EvalDB, "dmarceval.db")
 	backupDB(mtastsdb.DB, "mtasts.db")
-	backupDB(tlsrptdb.DB, "tlsrpt.db")
+	backupDB(tlsrptdb.ReportDB, "tlsrpt.db")
+	backupDB(tlsrptdb.ResultDB, "tlsrptresult.db")
 	backupFile("receivedid.key")
 
 	// Acme directory is optional.
@@ -372,7 +374,7 @@ func backupctl(ctx context.Context, ctl *ctl) {
 
 		xvlog("queue backed finished", mlog.Field("duration", time.Since(tmQueue)))
 	}
-	backupQueue("queue/index.db")
+	backupQueue(filepath.FromSlash("queue/index.db"))
 
 	backupAccount := func(acc *store.Account) {
 		defer acc.Close()
@@ -469,7 +471,7 @@ func backupctl(ctx context.Context, ctl *ctl) {
 				return nil
 			}
 			ap := filepath.Join("accounts", acc.Name, p)
-			if strings.HasPrefix(p, "msg/") {
+			if strings.HasPrefix(p, "msg"+string(filepath.Separator)) {
 				xwarnx("backing up unrecognized file in account message directory (should be moved away)", nil, mlog.Field("path", ap))
 			} else {
 				xwarnx("backing up unrecognized file in account directory", nil, mlog.Field("path", ap))
@@ -529,7 +531,7 @@ func backupctl(ctx context.Context, ctl *ctl) {
 		}
 
 		switch p {
-		case "dmarcrpt.db", "mtasts.db", "tlsrpt.db", "receivedid.key", "ctl":
+		case "dmarcrpt.db", "dmarceval.db", "mtasts.db", "tlsrpt.db", "tlsrptresult.db", "receivedid.key", "ctl":
 			// Already handled.
 			return nil
 		case "lastknownversion": // Optional file, not yet handled.

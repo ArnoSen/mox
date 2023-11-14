@@ -198,12 +198,11 @@ type importStep struct {
 }
 
 // importStart prepare the import and launches the goroutine to actually import.
-// importStart is responsible for closing f.
+// importStart is responsible for closing f and removing f.
 func importStart(log *mlog.Log, accName string, f *os.File, skipMailboxPrefix string) (string, error) {
 	defer func() {
 		if f != nil {
-			err := f.Close()
-			log.Check(err, "closing uploaded file")
+			store.CloseRemoveTempFile(log, f, "upload for import")
 		}
 	}()
 
@@ -270,7 +269,7 @@ func importStart(log *mlog.Log, accName string, f *os.File, skipMailboxPrefix st
 
 	log.Info("starting import")
 	go importMessages(ctx, log.WithCid(mox.Cid()), token, acc, tx, zr, tr, f, skipMailboxPrefix)
-	f = nil // importMessages is now responsible for closing.
+	f = nil // importMessages is now responsible for closing and removing.
 
 	return token, nil
 }
@@ -313,8 +312,7 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 	}
 
 	defer func() {
-		err := f.Close()
-		log.Check(err, "closing uploaded messages file")
+		store.CloseRemoveTempFile(log, f, "uploaded messages")
 
 		for _, id := range deliveredIDs {
 			p := acc.MessagePath(id)
@@ -482,12 +480,11 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 
 	xdeliver := func(mb store.Mailbox, m *store.Message, f *os.File, pos string) {
 		defer func() {
-			if f != nil {
-				err := os.Remove(f.Name())
-				log.Check(err, "removing temporary message file for delivery")
-				err = f.Close()
-				log.Check(err, "closing temporary message file for delivery")
-			}
+			name := f.Name()
+			err = f.Close()
+			log.Check(err, "closing temporary message file for delivery")
+			err := os.Remove(name)
+			log.Check(err, "removing temporary message file for delivery")
 		}()
 		m.MailboxID = mb.ID
 		m.MailboxOrigID = mb.ID
@@ -542,11 +539,10 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 			trainMessage(m, p, pos)
 		}
 
-		const consumeFile = true
 		const sync = false
 		const notrain = true
 		const nothreads = true
-		if err := acc.DeliverMessage(log, tx, m, f, consumeFile, sync, notrain, nothreads); err != nil {
+		if err := acc.DeliverMessage(log, tx, m, f, sync, notrain, nothreads); err != nil {
 			problemf("delivering message %s: %s (continuing)", pos, err)
 			return
 		}
@@ -557,7 +553,6 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 			prevMailbox = mb.Name
 			sendEvent("count", importCount{mb.Name, messages[mb.Name]})
 		}
-		f = nil
 	}
 
 	ximportMbox := func(mailbox, filename string, r io.Reader) {
@@ -591,10 +586,7 @@ func importMessages(ctx context.Context, log *mlog.Log, token string, acc *store
 		ximportcheckf(err, "creating temp message")
 		defer func() {
 			if f != nil {
-				err := os.Remove(f.Name())
-				log.Check(err, "removing temporary file for delivery")
-				err = f.Close()
-				log.Check(err, "closing temporary file for delivery")
+				store.CloseRemoveTempFile(log, f, "message to import")
 			}
 		}()
 

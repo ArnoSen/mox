@@ -18,8 +18,8 @@ func TestLookup(t *testing.T) {
 			"_smtp._tls.malformed.example.": {"v=TLSRPTv1; bad"},
 			"_smtp._tls.other.example.":     {"other"},
 		},
-		Fail: map[dns.Mockreq]struct{}{
-			{Type: "txt", Name: "_smtp._tls.temperror.example."}: {},
+		Fail: []string{
+			"txt _smtp._tls.temperror.example.",
 		},
 	}
 
@@ -36,8 +36,8 @@ func TestLookup(t *testing.T) {
 		}
 	}
 
-	test("basic.example", &Record{Version: "TLSRPTv1", RUAs: [][]string{{"mailto:tlsrpt@basic.example"}}}, nil)
-	test("one.example", &Record{Version: "TLSRPTv1", RUAs: [][]string{{"mailto:tlsrpt@basic.example"}}}, nil)
+	test("basic.example", &Record{Version: "TLSRPTv1", RUAs: [][]RUA{{"mailto:tlsrpt@basic.example"}}}, nil)
+	test("one.example", &Record{Version: "TLSRPTv1", RUAs: [][]RUA{{"mailto:tlsrpt@basic.example"}}}, nil)
 	test("multiple.example", nil, ErrMultipleRecords)
 	test("absent.example", nil, ErrNoRecord)
 	test("other.example", nil, ErrNoRecord)

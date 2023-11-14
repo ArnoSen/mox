@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/textproto"
 	"os"
 	"runtime/debug"
 	"sort"
@@ -36,6 +37,7 @@ import (
 	"github.com/mjl-/mox/dkim"
 	"github.com/mjl-/mox/dmarc"
 	"github.com/mjl-/mox/dmarcdb"
+	"github.com/mjl-/mox/dmarcrpt"
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/dsn"
 	"github.com/mjl-/mox/iprev"
@@ -61,7 +63,7 @@ var xlog = mlog.New("smtpserver")
 
 // We use panic and recover for error handling while executing commands.
 // These errors signal the connection must be closed.
-var errIO = errors.New("fatal io error")
+var errIO = errors.New("io error")
 
 // If set, regular delivery/submit is sidestepped, email is accepted and
 // delivered to the account named mox.
@@ -166,7 +168,7 @@ var (
 	)
 )
 
-var jitterRand = mox.NewRand()
+var jitterRand = mox.NewPseudoRand()
 
 func durationDefault(delay *time.Duration, def time.Duration) time.Duration {
 	if delay == nil {
@@ -201,7 +203,7 @@ func Listen() {
 			port := config.Port(listener.SMTP.Port, 25)
 			for _, ip := range listener.IPs {
 				firstTimeSenderDelay := durationDefault(listener.SMTP.FirstTimeSenderDelay, firstTimeSenderDelayDefault)
-				listen1("smtp", name, ip, port, hostname, tlsConfig, false, false, maxMsgSize, false, listener.SMTP.RequireSTARTTLS, listener.SMTP.DNSBLZones, firstTimeSenderDelay)
+				listen1("smtp", name, ip, port, hostname, tlsConfig, false, false, maxMsgSize, false, listener.SMTP.RequireSTARTTLS, !listener.SMTP.NoRequireTLS, listener.SMTP.DNSBLZones, firstTimeSenderDelay)
 			}
 		}
 		if listener.Submission.Enabled {
@@ -211,7 +213,7 @@ func Listen() {
 			}
 			port := config.Port(listener.Submission.Port, 587)
 			for _, ip := range listener.IPs {
-				listen1("submission", name, ip, port, hostname, tlsConfig, true, false, maxMsgSize, !listener.Submission.NoRequireSTARTTLS, !listener.Submission.NoRequireSTARTTLS, nil, 0)
+				listen1("submission", name, ip, port, hostname, tlsConfig, true, false, maxMsgSize, !listener.Submission.NoRequireSTARTTLS, !listener.Submission.NoRequireSTARTTLS, true, nil, 0)
 			}
 		}
 
@@ -222,7 +224,7 @@ func Listen() {
 			}
 			port := config.Port(listener.Submissions.Port, 465)
 			for _, ip := range listener.IPs {
-				listen1("submissions", name, ip, port, hostname, tlsConfig, true, true, maxMsgSize, true, true, nil, 0)
+				listen1("submissions", name, ip, port, hostname, tlsConfig, true, true, maxMsgSize, true, true, true, nil, 0)
 			}
 		}
 	}
@@ -230,7 +232,7 @@ func Listen() {
 
 var servers []func()
 
-func listen1(protocol, name, ip string, port int, hostname dns.Domain, tlsConfig *tls.Config, submission, xtls bool, maxMessageSize int64, requireTLSForAuth, requireTLSForDelivery bool, dnsBLs []dns.Domain, firstTimeSenderDelay time.Duration) {
+func listen1(protocol, name, ip string, port int, hostname dns.Domain, tlsConfig *tls.Config, submission, xtls bool, maxMessageSize int64, requireTLSForAuth, requireTLSForDelivery, requireTLS bool, dnsBLs []dns.Domain, firstTimeSenderDelay time.Duration) {
 	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 	if os.Getuid() == 0 {
 		xlog.Print("listening for smtp", mlog.Field("listener", name), mlog.Field("address", addr), mlog.Field("protocol", protocol))
@@ -252,7 +254,7 @@ func listen1(protocol, name, ip string, port int, hostname dns.Domain, tlsConfig
 				continue
 			}
 			resolver := dns.StrictResolver{} // By leaving Pkg empty, it'll be set by each package that uses the resolver, e.g. spf/dkim/dmarc.
-			go serve(name, mox.Cid(), hostname, tlsConfig, conn, resolver, submission, xtls, maxMessageSize, requireTLSForAuth, requireTLSForDelivery, dnsBLs, firstTimeSenderDelay)
+			go serve(name, mox.Cid(), hostname, tlsConfig, conn, resolver, submission, xtls, maxMessageSize, requireTLSForAuth, requireTLSForDelivery, requireTLS, dnsBLs, firstTimeSenderDelay)
 		}
 	}
 
@@ -277,6 +279,7 @@ type conn struct {
 	conn     net.Conn
 
 	tls                   bool
+	extRequireTLS         bool // Whether to announce and allow the REQUIRETLS extension.
 	resolver              dns.Resolver
 	r                     *bufio.Reader
 	w                     *bufio.Writer
@@ -292,7 +295,7 @@ type conn struct {
 	log                   *mlog.Log
 	maxMessageSize        int64
 	requireTLSForAuth     bool
-	requireTLSForDelivery bool
+	requireTLSForDelivery bool      // If set, delivery is only allowed with TLS (STARTTLS), except if delivery is to a TLS reporting address.
 	cmd                   string    // Current command.
 	cmdStart              time.Time // Start of current command.
 	ncmds                 int       // Number of commands processed. Used to abort connection when first incoming command is unknown/invalid.
@@ -316,8 +319,9 @@ type conn struct {
 
 	// Message transaction.
 	mailFrom    *smtp.Path
-	has8bitmime bool // If MAIL FROM parameter BODY=8BITMIME was sent. Required for SMTPUTF8.
-	smtputf8    bool // todo future: we should keep track of this per recipient. perhaps only a specific recipient requires smtputf8, e.g. due to a utf8 localpart. we should decide ourselves if the message needs smtputf8, e.g. due to utf8 header values.
+	requireTLS  *bool // MAIL FROM with REQUIRETLS set.
+	has8bitmime bool  // If MAIL FROM parameter BODY=8BITMIME was sent. Required for SMTPUTF8.
+	smtputf8    bool  // todo future: we should keep track of this per recipient. perhaps only a specific recipient requires smtputf8, e.g. due to a utf8 localpart. we should decide ourselves if the message needs smtputf8, e.g. due to utf8 header values.
 	recipients  []rcptAccount
 }
 
@@ -353,6 +357,7 @@ func (c *conn) reset() {
 // ../rfc/5321:2502
 func (c *conn) rset() {
 	c.mailFrom = nil
+	c.requireTLS = nil
 	c.has8bitmime = false
 	c.smtputf8 = false
 	c.recipients = nil
@@ -524,7 +529,7 @@ func (c *conn) writelinef(format string, args ...any) {
 
 var cleanClose struct{} // Sentinel value for panic/recover indicating clean close of connection.
 
-func serve(listenerName string, cid int64, hostname dns.Domain, tlsConfig *tls.Config, nc net.Conn, resolver dns.Resolver, submission, tls bool, maxMessageSize int64, requireTLSForAuth, requireTLSForDelivery bool, dnsBLs []dns.Domain, firstTimeSenderDelay time.Duration) {
+func serve(listenerName string, cid int64, hostname dns.Domain, tlsConfig *tls.Config, nc net.Conn, resolver dns.Resolver, submission, tls bool, maxMessageSize int64, requireTLSForAuth, requireTLSForDelivery, requireTLS bool, dnsBLs []dns.Domain, firstTimeSenderDelay time.Duration) {
 	var localIP, remoteIP net.IP
 	if a, ok := nc.LocalAddr().(*net.TCPAddr); ok {
 		localIP = a.IP
@@ -545,6 +550,7 @@ func serve(listenerName string, cid int64, hostname dns.Domain, tlsConfig *tls.C
 		conn:                  nc,
 		submission:            submission,
 		tls:                   tls,
+		extRequireTLS:         requireTLS,
 		resolver:              resolver,
 		lastlog:               time.Now(),
 		tlsConfig:             tlsConfig,
@@ -755,12 +761,20 @@ func (c *conn) xneedHello() {
 	}
 }
 
-// If smtp server is configured to require TLS for all mail delivery, abort command.
-func (c *conn) xneedTLSForDelivery() {
-	if c.requireTLSForDelivery && !c.tls {
+// If smtp server is configured to require TLS for all mail delivery (except to TLS
+// reporting address), abort command.
+func (c *conn) xneedTLSForDelivery(rcpt smtp.Path) {
+	// For TLS reports, we allow the message in even without TLS, because there may be
+	// TLS interopability problems. ../rfc/8460:316
+	if c.requireTLSForDelivery && !c.tls && !isTLSReportRecipient(rcpt) {
 		// ../rfc/3207:148
 		xsmtpUserErrorf(smtp.C530SecurityRequired, smtp.SePol7Other0, "STARTTLS required for mail delivery")
 	}
+}
+
+func isTLSReportRecipient(rcpt smtp.Path) bool {
+	_, _, dest, err := mox.FindAccount(rcpt.Localpart, rcpt.IPDomain.Domain, false)
+	return err == nil && (dest.HostTLSReports || dest.DomainTLSReports)
 }
 
 func (c *conn) cmdHelo(p *parser) {
@@ -789,7 +803,7 @@ func (c *conn) cmdHello(p *parser, ehlo bool) {
 			// Verify a remote domain name has an A or AAAA record, CNAME not allowed. ../rfc/5321:722
 			cidctx := context.WithValue(mox.Context, mlog.CidKey, c.cid)
 			ctx, cancel := context.WithTimeout(cidctx, time.Minute)
-			_, err := c.resolver.LookupIPAddr(ctx, remote.Domain.ASCII+".")
+			_, _, err := c.resolver.LookupIPAddr(ctx, remote.Domain.ASCII+".")
 			cancel()
 			if dns.IsNotFound(err) {
 				xsmtpUserErrorf(smtp.C550MailboxUnavail, smtp.SeProto5Other0, "your ehlo domain does not resolve to an IP address")
@@ -821,6 +835,10 @@ func (c *conn) cmdHello(p *parser, ehlo bool) {
 	if !c.tls && c.tlsConfig != nil {
 		// ../rfc/3207:90
 		c.bwritelinef("250-STARTTLS")
+	} else if c.extRequireTLS {
+		// ../rfc/8689:202
+		// ../rfc/8689:143
+		c.bwritelinef("250-REQUIRETLS")
 	}
 	if c.submission {
 		// ../rfc/4954:123
@@ -862,7 +880,8 @@ func (c *conn) cmdStarttls(p *parser) {
 		}
 	}
 
-	c.writecodeline(smtp.C220ServiceReady, smtp.SeOther00, "go!", nil)
+	// We add the cid to the output, to help debugging in case of a failing TLS connection.
+	c.writecodeline(smtp.C220ServiceReady, smtp.SeOther00, "go! ("+mox.ReceivedID(c.cid)+")", nil)
 	tlsConn := tls.Server(conn, c.tlsConfig)
 	cidctx := context.WithValue(mox.Context, mlog.CidKey, c.cid)
 	ctx, cancel := context.WithTimeout(cidctx, time.Minute)
@@ -949,6 +968,12 @@ func (c *conn) cmdAuth(p *parser) {
 			}
 		} else {
 			p.xspace()
+			if !moxvar.Pedantic {
+				// Windows Mail 16005.14326.21606.0 sends two spaces between "AUTH PLAIN" and the
+				// base64 data.
+				for p.space() {
+				}
+			}
 			auth = p.remainder()
 			if auth == "" {
 				// ../rfc/4954:235
@@ -1203,7 +1228,6 @@ func (c *conn) cmdMail(p *parser) {
 
 	c.xneedHello()
 	c.xcheckAuth()
-	c.xneedTLSForDelivery()
 	if c.mailFrom != nil {
 		// ../rfc/5321:2507, though ../rfc/5321:1029 contradicts, implying a MAIL would also reset, but ../rfc/5321:1160 decides.
 		xsmtpUserErrorf(smtp.C503BadCmdSeq, smtp.SeProto5BadCmdOrSeq1, "already have MAIL")
@@ -1279,6 +1303,15 @@ func (c *conn) cmdMail(p *parser) {
 		case "SMTPUTF8":
 			// ../rfc/6531:213
 			c.smtputf8 = true
+		case "REQUIRETLS":
+			// ../rfc/8689:155
+			if !c.tls {
+				xsmtpUserErrorf(smtp.C530SecurityRequired, smtp.SePol7EncNeeded10, "requiretls only allowed on tls-encrypted connections")
+			} else if !c.extRequireTLS {
+				xsmtpUserErrorf(smtp.C555UnrecognizedAddrParams, smtp.SeSys3NotSupported3, "REQUIRETLS not allowed for this connection")
+			}
+			v := true
+			c.requireTLS = &v
 		default:
 			// ../rfc/5321:2230
 			xsmtpUserErrorf(smtp.C555UnrecognizedAddrParams, smtp.SeSys3NotSupported3, "unrecognized parameter %q", key)
@@ -1343,7 +1376,6 @@ func (c *conn) cmdMail(p *parser) {
 func (c *conn) cmdRcpt(p *parser) {
 	c.xneedHello()
 	c.xcheckAuth()
-	c.xneedTLSForDelivery()
 	if c.mailFrom == nil {
 		// ../rfc/5321:1088
 		xsmtpUserErrorf(smtp.C503BadCmdSeq, smtp.SeProto5BadCmdOrSeq1, "missing MAIL FROM")
@@ -1372,6 +1404,12 @@ func (c *conn) cmdRcpt(p *parser) {
 		xsmtpUserErrorf(smtp.C555UnrecognizedAddrParams, smtp.SeSys3NotSupported3, "unrecognized parameter %q", key)
 	}
 	p.xend()
+
+	// Check if TLS is enabled if required. It's not great that sender/recipient
+	// addresses may have been exposed in plaintext before we can reject delivery. The
+	// recipient could be the tls reporting addresses, which must always be able to
+	// receive in plain text.
+	c.xneedTLSForDelivery(fpath)
 
 	// todo future: for submission, should we do explicit verification that domains are fully qualified? also for mail from. ../rfc/6409:420
 
@@ -1413,7 +1451,7 @@ func (c *conn) cmdRcpt(p *parser) {
 			cidctx := context.WithValue(mox.Context, mlog.CidKey, c.cid)
 			spfctx, spfcancel := context.WithTimeout(cidctx, time.Minute)
 			defer spfcancel()
-			receivedSPF, _, _, err := spf.Verify(spfctx, c.resolver, spfArgs)
+			receivedSPF, _, _, _, err := spf.Verify(spfctx, c.resolver, spfArgs)
 			spfcancel()
 			if err != nil {
 				c.log.Errorx("spf verify for multiple recipients", err)
@@ -1471,7 +1509,6 @@ func (c *conn) cmdRcpt(p *parser) {
 func (c *conn) cmdData(p *parser) {
 	c.xneedHello()
 	c.xcheckAuth()
-	c.xneedTLSForDelivery()
 	if c.mailFrom == nil {
 		// ../rfc/5321:1130
 		xsmtpUserErrorf(smtp.C503BadCmdSeq, smtp.SeProto5BadCmdOrSeq1, "missing MAIL FROM")
@@ -1507,14 +1544,7 @@ func (c *conn) cmdData(p *parser) {
 	if err != nil {
 		xsmtpServerErrorf(errCodes(smtp.C451LocalErr, smtp.SeSys3Other0, err), "creating temporary file for message: %s", err)
 	}
-	defer func() {
-		if dataFile != nil {
-			err := os.Remove(dataFile.Name())
-			c.log.Check(err, "removing temporary message file", mlog.Field("path", dataFile.Name()))
-			err = dataFile.Close()
-			c.log.Check(err, "removing temporary message file")
-		}
-	}()
+	defer store.CloseRemoveTempFile(c.log, dataFile, "smtpserver delivered message")
 	msgWriter := message.NewWriter(dataFile)
 	dr := smtp.NewDataReader(c.r)
 	n, err := io.Copy(&limitWriter{maxSize: c.maxMessageSize, w: msgWriter}, dr)
@@ -1556,7 +1586,7 @@ func (c *conn) cmdData(p *parser) {
 		}
 	}
 
-	if Localserve {
+	if Localserve && moxvar.Pedantic {
 		// Require that message can be parsed fully.
 		p, err := message.Parse(c.log, false, dataFile)
 		if err == nil {
@@ -1573,6 +1603,7 @@ func (c *conn) cmdData(p *parser) {
 	// ../rfc/5321:3311 ../rfc/6531:578
 	var recvFrom string
 	var iprevStatus iprev.Status // Only for delivery, not submission.
+	var iprevAuthentic bool
 	if c.submission {
 		// Hide internal hosts.
 		// todo future: make this a config option, where admins specify ip ranges that they don't want exposed. also see ../rfc/5321:4321
@@ -1588,7 +1619,7 @@ func (c *conn) cmdData(p *parser) {
 		iprevctx, iprevcancel := context.WithTimeout(cmdctx, time.Minute)
 		var revName string
 		var revNames []string
-		iprevStatus, revName, revNames, err = iprev.Lookup(iprevctx, c.resolver, c.remoteIP)
+		iprevStatus, revName, revNames, iprevAuthentic, err = iprev.Lookup(iprevctx, c.resolver, c.remoteIP)
 		iprevcancel()
 		if err != nil {
 			c.log.Infox("reverse-forward lookup", err, mlog.Field("remoteip", c.remoteIP))
@@ -1639,7 +1670,12 @@ func (c *conn) cmdData(p *parser) {
 		recvHdr := &message.HeaderWriter{}
 		// For additional Received-header clauses, see:
 		// https://www.iana.org/assignments/mail-parameters/mail-parameters.xhtml#table-mail-parameters-8
-		recvHdr.Add(" ", "Received:", "from", recvFrom, "by", recvBy, "via", "tcp", "with", with, "id", mox.ReceivedID(c.cid)) // ../rfc/5321:3158
+		withComment := ""
+		if c.requireTLS != nil && *c.requireTLS {
+			// Comment is actually part of ID ABNF rule. ../rfc/5321:3336
+			withComment = " (requiretls)"
+		}
+		recvHdr.Add(" ", "Received:", "from", recvFrom, "by", recvBy, "via", "tcp", "with", with+withComment, "id", mox.ReceivedID(c.cid)) // ../rfc/5321:3158
 		if c.tls {
 			tlsConn := c.conn.(*tls.Conn)
 			tlsComment := message.TLSReceivedComment(c.log, tlsConn.ConnectionState())
@@ -1653,17 +1689,32 @@ func (c *conn) cmdData(p *parser) {
 	// handle it first, and leave the rest of the function for handling wild west
 	// internet traffic.
 	if c.submission {
-		c.submit(cmdctx, recvHdrFor, msgWriter, &dataFile)
+		c.submit(cmdctx, recvHdrFor, msgWriter, dataFile)
 	} else {
-		c.deliver(cmdctx, recvHdrFor, msgWriter, iprevStatus, &dataFile)
+		c.deliver(cmdctx, recvHdrFor, msgWriter, iprevStatus, iprevAuthentic, dataFile)
 	}
 }
 
-// submit is used for mail from authenticated users that we will try to deliver.
-func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWriter *message.Writer, pdataFile **os.File) {
-	// Similar between ../smtpserver/server.go:/submit\( and ../webmail/webmail.go:/MessageSubmit\(
+// Check if a message has unambiguous "TLS-Required: No" header. Messages must not
+// contain multiple TLS-Required headers. The only valid value is "no". But we'll
+// accept multiple headers as long as all they are all "no".
+// ../rfc/8689:223
+func hasTLSRequiredNo(h textproto.MIMEHeader) bool {
+	l := h.Values("Tls-Required")
+	if len(l) == 0 {
+		return false
+	}
+	for _, v := range l {
+		if !strings.EqualFold(v, "no") {
+			return false
+		}
+	}
+	return true
+}
 
-	dataFile := *pdataFile
+// submit is used for mail from authenticated users that we will try to deliver.
+func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWriter *message.Writer, dataFile *os.File) {
+	// Similar between ../smtpserver/server.go:/submit\( and ../webmail/webmail.go:/MessageSubmit\(
 
 	var msgPrefix []byte
 
@@ -1686,6 +1737,14 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 		metricSubmission.WithLabelValues("badfrom").Inc()
 		c.log.Infox("verifying message From address", err, mlog.Field("user", c.username), mlog.Field("msgfrom", msgFrom))
 		xsmtpUserErrorf(smtp.C550MailboxUnavail, smtp.SePol7DeliveryUnauth1, "must match authenticated user")
+	}
+
+	// TLS-Required: No header makes us not enforce recipient domain's TLS policy.
+	// ../rfc/8689:206
+	// Only when requiretls smtp extension wasn't used. ../rfc/8689:246
+	if c.requireTLS == nil && hasTLSRequiredNo(header) {
+		v := false
+		c.requireTLS = &v
 	}
 
 	// Outgoing messages should not have a Return-Path header. The final receiving mail
@@ -1767,7 +1826,7 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 	// We always deliver through the queue. It would be more efficient to deliver
 	// directly, but we don't want to circumvent all the anti-spam measures. Accounts
 	// on a single mox instance should be allowed to block each other.
-	for i, rcptAcc := range c.recipients {
+	for _, rcptAcc := range c.recipients {
 		if Localserve {
 			code, timeout := localserveNeedsError(rcptAcc.rcptTo.Localpart)
 			if timeout {
@@ -1783,7 +1842,8 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 		xmsgPrefix := append([]byte(recvHdrFor(rcptAcc.rcptTo.String())), msgPrefix...)
 
 		msgSize := int64(len(xmsgPrefix)) + msgWriter.Size
-		if _, err := queue.Add(ctx, c.log, c.account.Name, *c.mailFrom, rcptAcc.rcptTo, msgWriter.Has8bit, c.smtputf8, msgSize, messageID, xmsgPrefix, dataFile, nil, i == len(c.recipients)-1); err != nil {
+		qm := queue.MakeMsg(c.account.Name, *c.mailFrom, rcptAcc.rcptTo, msgWriter.Has8bit, c.smtputf8, msgSize, messageID, xmsgPrefix, c.requireTLS)
+		if err := queue.Add(ctx, c.log, &qm, dataFile); err != nil {
 			// Aborting the transaction is not great. But continuing and generating DSNs will
 			// probably result in errors as well...
 			metricSubmission.WithLabelValues("queueerror").Inc()
@@ -1796,10 +1856,6 @@ func (c *conn) submit(ctx context.Context, recvHdrFor func(string) string, msgWr
 		err := c.account.DB.Insert(ctx, &store.Outgoing{Recipient: rcptAcc.rcptTo.XString(true)})
 		xcheckf(err, "adding outgoing message")
 	}
-
-	err = dataFile.Close()
-	c.log.Check(err, "closing file after submission")
-	*pdataFile = nil
 
 	c.transactionGood++
 	c.transactionBad-- // Compensate for early earlier pessimistic increase.
@@ -1859,9 +1915,7 @@ func (c *conn) xlocalserveError(lp smtp.Localpart) {
 
 // deliver is called for incoming messages from external, typically untrusted
 // sources. i.e. not submitted by authenticated users.
-func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgWriter *message.Writer, iprevStatus iprev.Status, pdataFile **os.File) {
-	dataFile := *pdataFile
-
+func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgWriter *message.Writer, iprevStatus iprev.Status, iprevAuthentic bool, dataFile *os.File) {
 	// todo: in decision making process, if we run into (some) temporary errors, attempt to continue. if we decide to accept, all good. if we decide to reject, we'll make it a temporary reject.
 
 	msgFrom, headers, err := message.From(c.log, false, dataFile)
@@ -1874,17 +1928,35 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		xsmtpUserErrorf(smtp.C550MailboxUnavail, smtp.SeNet4Loop6, "loop detected, more than 100 Received headers")
 	}
 
+	// TLS-Required: No header makes us not enforce recipient domain's TLS policy.
+	// Since we only deliver locally at the moment, this won't influence our behaviour.
+	// Once we forward, it would our delivery attempts.
+	// ../rfc/8689:206
+	// Only when requiretls smtp extension wasn't used. ../rfc/8689:246
+	if c.requireTLS == nil && hasTLSRequiredNo(headers) {
+		v := false
+		c.requireTLS = &v
+	}
+
 	// We'll be building up an Authentication-Results header.
 	authResults := message.AuthResults{
 		Hostname: mox.Conf.Static.HostnameDomain.XName(c.smtputf8),
+	}
+
+	commentAuthentic := func(v bool) string {
+		if v {
+			return "with dnssec"
+		}
+		return "without dnssec"
 	}
 
 	// Reverse IP lookup results.
 	// todo future: how useful is this?
 	// ../rfc/5321:2481
 	authResults.Methods = append(authResults.Methods, message.AuthMethod{
-		Method: "iprev",
-		Result: string(iprevStatus),
+		Method:  "iprev",
+		Result:  string(iprevStatus),
+		Comment: commentAuthentic(iprevAuthentic),
 		Props: []message.AuthProp{
 			message.MakeAuthProp("policy", "iprev", c.remoteIP.String(), false, ""),
 		},
@@ -1923,6 +1995,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 	var receivedSPF spf.Received
 	var spfDomain dns.Domain
 	var spfExpl string
+	var spfAuthentic bool
 	var spfErr error
 	spfArgs := spf.Args{
 		RemoteIP:          c.remoteIP,
@@ -1945,7 +2018,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		defer wg.Done()
 		spfctx, spfcancel := context.WithTimeout(ctx, time.Minute)
 		defer spfcancel()
-		receivedSPF, spfDomain, spfExpl, spfErr = spf.Verify(spfctx, c.resolver, spfArgs)
+		receivedSPF, spfDomain, spfExpl, spfAuthentic, spfErr = spf.Verify(spfctx, c.resolver, spfArgs)
 		spfcancel()
 		if spfErr != nil {
 			c.log.Infox("spf verify", spfErr)
@@ -2000,10 +2073,9 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		var comment string
 		var props []message.AuthProp
 		if r.Sig != nil {
-			// todo future: also specify whether dns record was dnssec-signed.
 			if r.Record != nil && r.Record.PublicKey != nil {
 				if pubkey, ok := r.Record.PublicKey.(*rsa.PublicKey); ok {
-					comment = fmt.Sprintf("%d bit rsa", pubkey.N.BitLen())
+					comment = fmt.Sprintf("%d bit rsa, ", pubkey.N.BitLen())
 				}
 			}
 
@@ -2020,6 +2092,11 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			if r.Sig.Identity != nil {
 				props = append(props, message.MakeAuthProp("header", "i", r.Sig.Identity.String(), true, ""))
 				identity = r.Sig.Identity
+			}
+			if r.RecordAuthentic {
+				comment += "with dnssec"
+			} else {
+				comment += "without dnssec"
 			}
 		}
 		var errmsg string
@@ -2048,10 +2125,17 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 	if spfIdentity != nil {
 		props = []message.AuthProp{message.MakeAuthProp("smtp", string(receivedSPF.Identity), spfIdentity.XName(c.smtputf8), true, spfIdentity.ASCIIExtra(c.smtputf8))}
 	}
+	var spfComment string
+	if spfAuthentic {
+		spfComment = "with dnssec"
+	} else {
+		spfComment = "without dnssec"
+	}
 	authResults.Methods = append(authResults.Methods, message.AuthMethod{
-		Method: "spf",
-		Result: string(receivedSPF.Result),
-		Props:  props,
+		Method:  "spf",
+		Result:  string(receivedSPF.Result),
+		Comment: spfComment,
+		Props:   props,
 	})
 	switch receivedSPF.Result {
 	case spf.StatusPass:
@@ -2090,6 +2174,8 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 	var dmarcUse bool
 	var dmarcResult dmarc.Result
 	const applyRandomPercentage = true
+	// dmarcMethod is added to authResults when delivering to recipients: accounts can
+	// have different policy override rules.
 	var dmarcMethod message.AuthMethod
 	var msgFromValidation = store.ValidationNone
 	if msgFrom.IsZero() {
@@ -2101,13 +2187,29 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 	} else {
 		msgFromValidation = alignment(ctx, msgFrom.Domain, dkimResults, receivedSPF.Result, spfIdentity)
 
+		// We are doing the DMARC evaluation now. But we only store it for inclusion in an
+		// aggregate report when we actually use it. We use an evaluation for each
+		// recipient, with each a potentially different result due to mailing
+		// list/forwarding configuration. If we reject a message due to being spam, we
+		// don't want to spend any resources for the sender domain, and we don't want to
+		// give the sender any more information about us, so we won't record the
+		// evaluation.
+		// todo future: also not send for first-time senders? they could be spammers getting through our filter, don't want to give them insights either. though we currently would have no reasonable way to decide if they are still reputationless at the time we are composing/sending aggregate reports.
+
 		dmarcctx, dmarccancel := context.WithTimeout(ctx, time.Minute)
 		defer dmarccancel()
 		dmarcUse, dmarcResult = dmarc.Verify(dmarcctx, c.resolver, msgFrom.Domain, dkimResults, receivedSPF.Result, spfIdentity, applyRandomPercentage)
 		dmarccancel()
+		var comment string
+		if dmarcResult.RecordAuthentic {
+			comment = "with dnssec"
+		} else {
+			comment = "without dnssec"
+		}
 		dmarcMethod = message.AuthMethod{
-			Method: "dmarc",
-			Result: string(dmarcResult.Status),
+			Method:  "dmarc",
+			Result:  string(dmarcResult.Status),
+			Comment: comment,
 			Props: []message.AuthProp{
 				// ../rfc/7489:1489
 				message.MakeAuthProp("header", "from", msgFrom.Domain.ASCII, true, msgFrom.Domain.ASCIIExtra(c.smtputf8)),
@@ -2118,9 +2220,8 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			msgFromValidation = store.ValidationDMARC
 		}
 
-		// todo future: consider enforcing an spf fail if there is no dmarc policy or the dmarc policy is none. ../rfc/7489:1507
+		// todo future: consider enforcing an spf (soft)fail if there is no dmarc policy or the dmarc policy is none. ../rfc/7489:1507
 	}
-	authResults.Methods = append(authResults.Methods, dmarcMethod)
 	c.log.Debug("dmarc verification", mlog.Field("result", dmarcResult.Status), mlog.Field("domain", msgFrom.Domain))
 
 	// Prepare for analyzing content, calculating reputation.
@@ -2282,17 +2383,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			continue
 		}
 
-		// ../rfc/5321:3204
-		// Received-SPF header goes before Received. ../rfc/7208:2038
-		msgPrefix := []byte(
-			"Delivered-To: " + rcptAcc.rcptTo.XString(c.smtputf8) + "\r\n" + // ../rfc/9228:274
-				"Return-Path: <" + c.mailFrom.String() + ">\r\n" + // ../rfc/5321:3300
-				authResults.Header() +
-				receivedSPF.Header() +
-				recvHdrFor(rcptAcc.rcptTo.String()),
-		)
-
-		m := &store.Message{
+		m := store.Message{
 			Received:           time.Now(),
 			RemoteIP:           c.remoteIP.String(),
 			RemoteIPMasked1:    ipmasked1,
@@ -2314,20 +2405,205 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			MailFromValidation: mailFromValidation,
 			MsgFromValidation:  msgFromValidation,
 			DKIMDomains:        verifiedDKIMDomains,
-			Size:               int64(len(msgPrefix)) + msgWriter.Size,
-			MsgPrefix:          msgPrefix,
+			Size:               msgWriter.Size,
 		}
-		d := delivery{m, dataFile, rcptAcc, acc, msgFrom, c.dnsBLs, dmarcUse, dmarcResult, dkimResults, iprevStatus}
+		if c.tls {
+			tlsState := c.conn.(*tls.Conn).ConnectionState()
+			m.ReceivedTLSVersion = tlsState.Version
+			m.ReceivedTLSCipherSuite = tlsState.CipherSuite
+			if c.requireTLS != nil {
+				m.ReceivedRequireTLS = *c.requireTLS
+			}
+		} else {
+			m.ReceivedTLSVersion = 1 // Signals plain text delivery.
+		}
+
+		d := delivery{&m, dataFile, rcptAcc, acc, msgFrom, c.dnsBLs, dmarcUse, dmarcResult, dkimResults, iprevStatus}
 		a := analyze(ctx, log, c.resolver, d)
-		if a.reason != "" {
-			xmoxreason := "X-Mox-Reason: " + a.reason + "\r\n"
-			m.MsgPrefix = append([]byte(xmoxreason), m.MsgPrefix...)
-			m.Size += int64(len(xmoxreason))
+
+		// Any DMARC result override is stored in the evaluation for outgoing DMARC
+		// aggregate reports, and added to the Authentication-Results message header.
+		// We want to tell the sender that we have an override, e.g. for mailing lists, so
+		// they don't overestimate the potential damage of switching from p=none to
+		// p=reject.
+		var dmarcOverrides []string
+		if a.dmarcOverrideReason != "" {
+			dmarcOverrides = []string{a.dmarcOverrideReason}
 		}
+		if dmarcResult.Record != nil && !dmarcUse {
+			dmarcOverrides = append(dmarcOverrides, string(dmarcrpt.PolicyOverrideSampledOut))
+		}
+
+		// Add per-recipient DMARC method to Authentication-Results. Each account can have
+		// their own override rules, e.g. based on configured mailing lists/forwards.
+		// ../rfc/7489:1486
+		rcptDMARCMethod := dmarcMethod
+		if len(dmarcOverrides) > 0 {
+			if rcptDMARCMethod.Comment != "" {
+				rcptDMARCMethod.Comment += ", "
+			}
+			rcptDMARCMethod.Comment += "override " + strings.Join(dmarcOverrides, ",")
+		}
+		rcptAuthResults := authResults
+		rcptAuthResults.Methods = append([]message.AuthMethod{}, authResults.Methods...)
+		rcptAuthResults.Methods = append(rcptAuthResults.Methods, rcptDMARCMethod)
+
+		// Prepend reason as message header, for easy display in mail clients.
+		var xmox string
+		if a.reason != "" {
+			xmox = "X-Mox-Reason: " + a.reason + "\r\n"
+		}
+		xmox += a.headers
+
+		// ../rfc/5321:3204
+		// Received-SPF header goes before Received. ../rfc/7208:2038
+		m.MsgPrefix = []byte(
+			xmox +
+				"Delivered-To: " + rcptAcc.rcptTo.XString(c.smtputf8) + "\r\n" + // ../rfc/9228:274
+				"Return-Path: <" + c.mailFrom.String() + ">\r\n" + // ../rfc/5321:3300
+				rcptAuthResults.Header() +
+				receivedSPF.Header() +
+				recvHdrFor(rcptAcc.rcptTo.String()),
+		)
+		m.Size += int64(len(m.MsgPrefix))
+
+		// Store DMARC evaluation for inclusion in an aggregate report. Only if there is at
+		// least one reporting address: We don't want to needlessly store a row in a
+		// database for each delivery attempt. If we reject a message for being junk, we
+		// are also not going to send it a DMARC report. The DMARC check is done early in
+		// the analysis, we will report on rejects because of DMARC, because it could be
+		// valuable feedback about forwarded or mailing list messages.
+		// ../rfc/7489:1492
+		if !mox.Conf.Static.NoOutgoingDMARCReports && dmarcResult.Record != nil && len(dmarcResult.Record.AggregateReportAddresses) > 0 && (a.accept && !m.IsReject || a.reason == reasonDMARCPolicy) {
+			// Disposition holds our decision on whether to accept the message. Not what the
+			// DMARC evaluation resulted in. We can override, e.g. because of mailing lists,
+			// forwarding, or local policy.
+			// We treat quarantine as reject, so never claim to quarantine.
+			// ../rfc/7489:1691
+			disposition := dmarcrpt.DispositionNone
+			if !a.accept {
+				disposition = dmarcrpt.DispositionReject
+			}
+
+			// unknownDomain returns whether the sender is domain with which this account has
+			// not had positive interaction.
+			unknownDomain := func() (unknown bool) {
+				err := acc.DB.Read(ctx, func(tx *bstore.Tx) (err error) {
+					// See if we received a non-junk message from this organizational domain.
+					q := bstore.QueryTx[store.Message](tx)
+					q.FilterNonzero(store.Message{MsgFromOrgDomain: m.MsgFromOrgDomain})
+					q.FilterEqual("Notjunk", true)
+					q.FilterEqual("IsReject", false)
+					exists, err := q.Exists()
+					if err != nil {
+						return fmt.Errorf("querying for non-junk message from organizational domain: %v", err)
+					}
+					if exists {
+						return nil
+					}
+
+					// See if we sent a message to this organizational domain.
+					qr := bstore.QueryTx[store.Recipient](tx)
+					qr.FilterNonzero(store.Recipient{OrgDomain: m.MsgFromOrgDomain})
+					exists, err = qr.Exists()
+					if err != nil {
+						return fmt.Errorf("querying for message sent to organizational domain: %v", err)
+					}
+					if !exists {
+						unknown = true
+					}
+					return nil
+				})
+				if err != nil {
+					log.Errorx("checking if sender is unknown domain, for dmarc aggregate report evaluation", err)
+				}
+				return
+			}
+
+			r := dmarcResult.Record
+			addresses := make([]string, len(r.AggregateReportAddresses))
+			for i, a := range r.AggregateReportAddresses {
+				addresses[i] = a.String()
+			}
+			sp := dmarcrpt.Disposition(r.SubdomainPolicy)
+			if r.SubdomainPolicy == dmarc.PolicyEmpty {
+				sp = dmarcrpt.Disposition(r.Policy)
+			}
+			eval := dmarcdb.Evaluation{
+				// Evaluated and IntervalHours set by AddEvaluation.
+				PolicyDomain: dmarcResult.Domain.Name(),
+
+				// Optional evaluations don't cause a report to be sent, but will be included.
+				// Useful for automated inter-mailer messages, we don't want to get in a reporting
+				// loop. We also don't want to be used for sending reports to unsuspecting domains
+				// we have no relation with.
+				// todo: would it make sense to also mark some percentage of mailing-list-policy-overrides optional? to lower the load on mail servers of folks sending to large mailing lists.
+				Optional: rcptAcc.destination.DMARCReports || rcptAcc.destination.HostTLSReports || rcptAcc.destination.DomainTLSReports || a.reason == reasonDMARCPolicy && unknownDomain(),
+
+				Addresses: addresses,
+
+				PolicyPublished: dmarcrpt.PolicyPublished{
+					Domain:          dmarcResult.Domain.Name(),
+					ADKIM:           dmarcrpt.Alignment(r.ADKIM),
+					ASPF:            dmarcrpt.Alignment(r.ASPF),
+					Policy:          dmarcrpt.Disposition(r.Policy),
+					SubdomainPolicy: sp,
+					Percentage:      r.Percentage,
+					// We don't save ReportingOptions, we don't do per-message failure reporting.
+				},
+				SourceIP:        c.remoteIP.String(),
+				Disposition:     disposition,
+				AlignedDKIMPass: dmarcResult.AlignedDKIMPass,
+				AlignedSPFPass:  dmarcResult.AlignedSPFPass,
+				EnvelopeTo:      rcptAcc.rcptTo.IPDomain.String(),
+				EnvelopeFrom:    c.mailFrom.IPDomain.String(),
+				HeaderFrom:      msgFrom.Domain.Name(),
+			}
+
+			for _, s := range dmarcOverrides {
+				reason := dmarcrpt.PolicyOverrideReason{Type: dmarcrpt.PolicyOverride(s)}
+				eval.OverrideReasons = append(eval.OverrideReasons, reason)
+			}
+
+			// We'll include all signatures for the organizational domain, even if they weren't
+			// relevant due to strict alignment requirement.
+			for _, dkimResult := range dkimResults {
+				if dkimResult.Sig == nil || publicsuffix.Lookup(ctx, msgFrom.Domain) != publicsuffix.Lookup(ctx, dkimResult.Sig.Domain) {
+					continue
+				}
+				r := dmarcrpt.DKIMAuthResult{
+					Domain:   dkimResult.Sig.Domain.Name(),
+					Selector: dkimResult.Sig.Selector.ASCII,
+					Result:   dmarcrpt.DKIMResult(dkimResult.Status),
+				}
+				eval.DKIMResults = append(eval.DKIMResults, r)
+			}
+
+			switch receivedSPF.Identity {
+			case spf.ReceivedHELO:
+				spfAuthResult := dmarcrpt.SPFAuthResult{
+					Domain: spfArgs.HelloDomain.String(), // Can be unicode and also IP.
+					Scope:  dmarcrpt.SPFDomainScopeHelo,
+					Result: dmarcrpt.SPFResult(receivedSPF.Result),
+				}
+				eval.SPFResults = []dmarcrpt.SPFAuthResult{spfAuthResult}
+			case spf.ReceivedMailFrom:
+				spfAuthResult := dmarcrpt.SPFAuthResult{
+					Domain: spfArgs.MailFromDomain.Name(), // Can be unicode.
+					Scope:  dmarcrpt.SPFDomainScopeMailFrom,
+					Result: dmarcrpt.SPFResult(receivedSPF.Result),
+				}
+				eval.SPFResults = []dmarcrpt.SPFAuthResult{spfAuthResult}
+			}
+
+			err := dmarcdb.AddEvaluation(ctx, dmarcResult.Record.AggregateReportingInterval, &eval)
+			log.Check(err, "adding dmarc evaluation to database for aggregate report")
+		}
+
 		if !a.accept {
 			conf, _ := acc.Conf()
 			if conf.RejectsMailbox != "" {
-				present, _, messagehash, err := rejectPresent(log, acc, conf.RejectsMailbox, m, dataFile)
+				present, _, messagehash, err := rejectPresent(log, acc, conf.RejectsMailbox, &m, dataFile)
 				if err != nil {
 					log.Errorx("checking whether reject is already present", err)
 				} else if !present {
@@ -2346,7 +2622,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 						if err != nil {
 							log.Errorx("tidying rejects mailbox", err)
 						} else if hasSpace {
-							if err := acc.DeliverMailbox(log, conf.RejectsMailbox, m, dataFile, false); err != nil {
+							if err := acc.DeliverMailbox(log, conf.RejectsMailbox, &m, dataFile); err != nil {
 								log.Errorx("delivering spammy mail to rejects mailbox", err)
 							} else {
 								log.Info("delivered spammy mail to rejects mailbox")
@@ -2371,16 +2647,16 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 		if a.dmarcReport != nil {
 			// todo future: add rate limiting to prevent DoS attacks. ../rfc/7489:2570
 			if err := dmarcdb.AddReport(ctx, a.dmarcReport, msgFrom.Domain); err != nil {
-				log.Errorx("saving dmarc report in database", err)
+				log.Errorx("saving dmarc aggregate report in database", err)
 			} else {
-				log.Info("dmarc report processed")
+				log.Info("dmarc aggregate report processed")
 				m.Flags.Seen = true
 				delayFirstTime = false
 			}
 		}
 		if a.tlsReport != nil {
 			// todo future: add rate limiting to prevent DoS attacks.
-			if err := tlsrptdb.AddReport(ctx, msgFrom.Domain, c.mailFrom.String(), a.tlsReport); err != nil {
+			if err := tlsrptdb.AddReport(ctx, msgFrom.Domain, c.mailFrom.String(), rcptAcc.destination.HostTLSReports, a.tlsReport); err != nil {
 				log.Errorx("saving TLSRPT report in database", err)
 			} else {
 				log.Info("tlsrpt report processed")
@@ -2421,7 +2697,7 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 			}
 		}
 		acc.WithWLock(func() {
-			if err := acc.DeliverMailbox(log, a.mailbox, m, dataFile, false); err != nil {
+			if err := acc.DeliverMailbox(log, a.mailbox, &m, dataFile); err != nil {
 				log.Errorx("delivering", err)
 				metricDelivery.WithLabelValues("delivererror", a.reason).Inc()
 				addError(rcptAcc, smtp.C451LocalErr, smtp.SeSys3Other0, false, "error processing")
@@ -2521,17 +2797,11 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 
 		if Localserve {
 			c.log.Error("not queueing dsn for incoming delivery due to localserve")
-		} else if err := queueDSN(context.TODO(), c, *c.mailFrom, dsnMsg); err != nil {
+		} else if err := queueDSN(context.TODO(), c, *c.mailFrom, dsnMsg, c.requireTLS != nil && *c.requireTLS); err != nil {
 			metricServerErrors.WithLabelValues("queuedsn").Inc()
 			c.log.Errorx("queuing DSN for incoming delivery, no DSN sent", err)
 		}
 	}
-
-	err = os.Remove(dataFile.Name())
-	c.log.Check(err, "removing file after delivery")
-	err = dataFile.Close()
-	c.log.Check(err, "closing data file after delivery")
-	*pdataFile = nil
 
 	c.transactionGood++
 	c.transactionBad-- // Compensate for early earlier pessimistic increase.

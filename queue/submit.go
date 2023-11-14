@@ -16,6 +16,7 @@ import (
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/sasl"
+	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/smtpclient"
 	"github.com/mjl-/mox/store"
 )
@@ -24,7 +25,7 @@ import (
 
 // deliver via another SMTP server, e.g. relaying to a smart host, possibly
 // with authentication (submission).
-func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer contextDialer, m Msg, backoff time.Duration, transportName string, transport *config.TransportSMTP, dialTLS bool, defaultPort int) {
+func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer smtpclient.Dialer, m Msg, backoff time.Duration, transportName string, transport *config.TransportSMTP, dialTLS bool, defaultPort int) {
 	// todo: configurable timeouts
 
 	port := transport.Port
@@ -32,13 +33,16 @@ func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer cont
 		port = defaultPort
 	}
 
-	tlsMode := smtpclient.TLSStrictStartTLS
+	tlsMode := smtpclient.TLSRequiredStartTLS
+	tlsPKIX := true
 	if dialTLS {
-		tlsMode = smtpclient.TLSStrictImmediate
+		tlsMode = smtpclient.TLSImmediate
 	} else if transport.STARTTLSInsecureSkipVerify {
 		tlsMode = smtpclient.TLSOpportunistic
+		tlsPKIX = false
 	} else if transport.NoSTARTTLS {
 		tlsMode = smtpclient.TLSSkip
+		tlsPKIX = false
 	}
 	start := time.Now()
 	var deliveryResult string
@@ -51,10 +55,34 @@ func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer cont
 		qlog.Debug("queue deliversubmit result", mlog.Field("host", transport.DNSHost), mlog.Field("port", port), mlog.Field("attempt", m.Attempts), mlog.Field("permanent", permanent), mlog.Field("secodeopt", secodeOpt), mlog.Field("errmsg", errmsg), mlog.Field("ok", success), mlog.Field("duration", time.Since(start)))
 	}()
 
+	// todo: SMTP-DANE should be used when relaying on port 25.
+	// ../rfc/7672:1261
+
+	// todo: for submission, understand SRV records, and even DANE.
+
+	// If submit was done with REQUIRETLS extension for SMTP, we must verify TLS
+	// certificates. If our submission connection is not configured that way, abort.
+	requireTLS := m.RequireTLS != nil && *m.RequireTLS
+	if requireTLS && (tlsMode != smtpclient.TLSRequiredStartTLS && tlsMode != smtpclient.TLSImmediate || !tlsPKIX) {
+		errmsg = fmt.Sprintf("transport %s: message requires verified tls but transport does not verify tls", transportName)
+		fail(qlog, m, backoff, true, dsn.NameIP{}, smtp.SePol7MissingReqTLS, errmsg)
+		return
+	}
+
 	dialctx, dialcancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialcancel()
+	if m.DialedIPs == nil {
+		m.DialedIPs = map[string][]net.IP{}
+	}
+	_, _, _, ips, _, err := smtpclient.GatherIPs(dialctx, qlog, resolver, dns.IPDomain{Domain: transport.DNSHost}, m.DialedIPs)
+	var conn net.Conn
+	if err == nil {
+		if m.DialedIPs == nil {
+			m.DialedIPs = map[string][]net.IP{}
+		}
+		conn, _, err = smtpclient.Dial(dialctx, qlog, dialer, dns.IPDomain{Domain: transport.DNSHost}, ips, port, m.DialedIPs)
+	}
 	addr := net.JoinHostPort(transport.Host, fmt.Sprintf("%d", port))
-	conn, _, _, err := dialHost(dialctx, qlog, resolver, dialer, dns.IPDomain{Domain: transport.DNSHost}, port, &m)
 	var result string
 	switch {
 	case err == nil:
@@ -103,7 +131,11 @@ func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer cont
 	}
 	clientctx, clientcancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer clientcancel()
-	client, err := smtpclient.New(clientctx, qlog, conn, tlsMode, mox.Conf.Static.HostnameDomain, transport.DNSHost, auth)
+	opts := smtpclient.Opts{
+		Auth:    auth,
+		RootCAs: mox.Conf.Static.TLS.CertPool,
+	}
+	client, err := smtpclient.New(clientctx, qlog, conn, tlsMode, tlsPKIX, mox.Conf.Static.HostnameDomain, transport.DNSHost, opts)
 	if err != nil {
 		smtperr, ok := err.(smtpclient.Error)
 		var remoteMTA dsn.NameIP
@@ -150,7 +182,7 @@ func deliverSubmit(cid int64, qlog *mlog.Log, resolver dns.Resolver, dialer cont
 
 	deliverctx, delivercancel := context.WithTimeout(context.Background(), time.Duration(60+size/(1024*1024))*time.Second)
 	defer delivercancel()
-	err = client.Deliver(deliverctx, m.Sender().String(), m.Recipient().String(), size, msgr, req8bit, reqsmtputf8)
+	err = client.Deliver(deliverctx, m.Sender().String(), m.Recipient().String(), size, msgr, req8bit, reqsmtputf8, requireTLS)
 	if err != nil {
 		qlog.Infox("delivery failed", err)
 	}

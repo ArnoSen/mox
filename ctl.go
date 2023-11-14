@@ -319,14 +319,7 @@ func servectlcmd(ctx context.Context, ctl *ctl, shutdown func()) {
 
 		msgFile, err := store.CreateMessageTemp("ctl-deliver")
 		ctl.xcheck(err, "creating temporary message file")
-		defer func() {
-			if msgFile != nil {
-				err := os.Remove(msgFile.Name())
-				log.Check(err, "removing temporary message file", mlog.Field("path", msgFile.Name()))
-				err = msgFile.Close()
-				log.Check(err, "closing temporary message file")
-			}
-		}()
+		defer store.CloseRemoveTempFile(log, msgFile, "deliver message")
 		mw := message.NewWriter(msgFile)
 		ctl.xwriteok()
 
@@ -340,14 +333,11 @@ func servectlcmd(ctx context.Context, ctl *ctl, shutdown func()) {
 		}
 
 		a.WithWLock(func() {
-			err := a.DeliverDestination(log, addr, m, msgFile, true)
+			err := a.DeliverDestination(log, addr, m, msgFile)
 			ctl.xcheck(err, "delivering message")
 			log.Info("message delivered through ctl", mlog.Field("to", to))
 		})
 
-		err = msgFile.Close()
-		log.Check(err, "closing delivered message file")
-		msgFile = nil
 		err = a.Close()
 		ctl.xcheck(err, "closing account")
 		ctl.xwriteok()
@@ -758,6 +748,7 @@ func servectlcmd(ctx context.Context, ctl *ctl, shutdown func()) {
 						q.SortAsc("ID")
 						return q.ForEach(func(m store.Message) error {
 							lastID = m.ID
+							n++
 
 							p := acc.MessagePath(m.ID)
 							st, err := os.Stat(p)
@@ -810,7 +801,6 @@ func servectlcmd(ctx context.Context, ctl *ctl, shutdown func()) {
 								return fmt.Errorf("marshal parsed message: %v", err)
 							}
 							total++
-							n++
 							if err := tx.Update(&m); err != nil {
 								return fmt.Errorf("update message: %v", err)
 							}

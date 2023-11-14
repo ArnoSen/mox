@@ -3,7 +3,6 @@ package smtpserver
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/mjl-/mox/dsn"
 	"github.com/mjl-/mox/queue"
@@ -12,7 +11,7 @@ import (
 )
 
 // compose dsn message and add it to the queue for delivery to rcptTo.
-func queueDSN(ctx context.Context, c *conn, rcptTo smtp.Path, m dsn.Message) error {
+func queueDSN(ctx context.Context, c *conn, rcptTo smtp.Path, m dsn.Message, requireTLS bool) error {
 	buf, err := m.Compose(c.log, false)
 	if err != nil {
 		return err
@@ -29,14 +28,8 @@ func queueDSN(ctx context.Context, c *conn, rcptTo smtp.Path, m dsn.Message) err
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
-	defer func() {
-		if f != nil {
-			err := os.Remove(f.Name())
-			c.log.Check(err, "removing temporary dsn message file")
-			err = f.Close()
-			c.log.Check(err, "closing temporary dsn message file")
-		}
-	}()
+	defer store.CloseRemoveTempFile(c.log, f, "smtpserver dsn message")
+
 	if _, err := f.Write([]byte(buf)); err != nil {
 		return fmt.Errorf("writing dsn file: %w", err)
 	}
@@ -46,11 +39,14 @@ func queueDSN(ctx context.Context, c *conn, rcptTo smtp.Path, m dsn.Message) err
 	// ../rfc/3464:433
 	const has8bit = false
 	const smtputf8 = false
-	if _, err := queue.Add(ctx, c.log, "", smtp.Path{}, rcptTo, has8bit, smtputf8, int64(len(buf)), m.MessageID, nil, f, bufUTF8, true); err != nil {
+	var reqTLS *bool
+	if requireTLS {
+		reqTLS = &requireTLS
+	}
+	qm := queue.MakeMsg("", smtp.Path{}, rcptTo, has8bit, smtputf8, int64(len(buf)), m.MessageID, nil, reqTLS)
+	qm.DSNUTF8 = bufUTF8
+	if err := queue.Add(ctx, c.log, &qm, f); err != nil {
 		return err
 	}
-	err = f.Close()
-	c.log.Check(err, "closing dsn file")
-	f = nil
 	return nil
 }

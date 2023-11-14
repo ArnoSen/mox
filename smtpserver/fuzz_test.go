@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func FuzzServer(f *testing.F) {
 	f.Add("QUIT")
 
 	mox.Context = ctxbg
-	mox.ConfigStaticPath = "../testdata/smtpserverfuzz/mox.conf"
+	mox.ConfigStaticPath = filepath.FromSlash("../testdata/smtpserverfuzz/mox.conf")
 	mox.MustLoadConfig(true, false)
 	dataDir := mox.ConfigDirPath(mox.Conf.Static.DataDir)
 	os.RemoveAll(dataDir)
@@ -99,7 +100,7 @@ func FuzzServer(f *testing.F) {
 			const submission = false
 			err := serverConn.SetDeadline(time.Now().Add(time.Second))
 			flog(err, "set server deadline")
-			serve("test", cid, dns.Domain{ASCII: "mox.example"}, nil, serverConn, resolver, submission, false, 100<<10, false, false, nil, 0)
+			serve("test", cid, dns.Domain{ASCII: "mox.example"}, nil, serverConn, resolver, submission, false, 100<<10, false, false, false, nil, 0)
 			cid++
 		}
 

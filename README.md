@@ -8,7 +8,8 @@ See Quickstart below to get started.
 - SMTP (with extensions) for receiving, submitting and delivering email.
 - IMAP4 (with extensions) for giving email clients access to email.
 - Webmail for reading/sending email from the browser.
-- SPF/DKIM/DMARC for authenticating messages/delivery, also DMARC reports.
+- SPF/DKIM/DMARC for authenticating messages/delivery, also DMARC aggregate
+  reports.
 - Reputation tracking, learning (per user) host-, domain- and
   sender address-based reputation from (Non-)Junk email classification.
 - Bayesian spam filtering that learns (per user) from (Non-)Junk email.
@@ -19,16 +20,15 @@ See Quickstart below to get started.
 - Internationalized email, with unicode in email address usernames
   ("localparts"), and in domain names (IDNA).
 - Automatic TLS with ACME, for use with Let's Encrypt and other CA's.
-- TLSRPT, parsing reports about TLS usage and issues.
-- MTA-STS, for ensuring TLS is used whenever it is required. Both serving of
-  policies, and tracking and applying policies of remote servers.
+- DANE and MTA-STS for inbound and outbound delivery over SMTP with STARTTLS,
+  including REQUIRETLS and with incoming/outgoing TLSRPT reporting.
 - Web admin interface that helps you set up your domains and accounts
   (instructions to create DNS records, configure
   SPF/DKIM/DMARC/TLSRPT/MTA-STS), for status information, managing
   accounts/domains, and modifying the configuration file.
-- Autodiscovery (with SRV records, Microsoft-style, Thunderbird-style, and Apple
-  device management profiles) for easy account setup (though client support is
-  limited).
+- Account autodiscovery (with SRV records, Microsoft-style, Thunderbird-style,
+  and Apple device management profiles) for easy account setup (though client
+  support is limited).
 - Webserver with serving static files and forwarding requests (reverse
   proxy), so port 443 can also be used to serve websites.
 - Prometheus metrics and structured logging for operational insight.
@@ -92,7 +92,10 @@ Verify you have a working mox binary:
 
 	./mox version
 
-Mox only compiles for/works on unix systems, not on Plan 9 or Windows.
+Mox only compiles for and fully works on unix systems. Mox also compiles for
+Windows, but "mox serve" does not yet work, though "mox localserve" (for a
+local test instance) and most other subcommands do. Mox does not compile for
+Plan 9.
 
 You can also run mox with docker image `r.xmox.nl/mox`, with tags like `v0.0.1`
 and `v0.0.1-go1.20.1-alpine3.17.2`, see https://r.xmox.nl/r/mox/. Though new
@@ -111,11 +114,8 @@ https://nlnet.nl/project/Mox/.
 
 ## Roadmap
 
-- DANE and DNSSEC
 - Authentication other than HTTP-basic for webmail/webadmin/webaccount
 - Per-domain webmail and IMAP/SMTP host name (and TLS cert) and client settings
-- Require TLS SMTP extension (RFC 8689)
-- Sending DMARC and TLS reports (currently only receiving)
 - Make mox Go packages more easily reusable, each pulling in fewer (internal)
   dependencies
 - HTTP-based API for sending messages and receiving delivery feedback
@@ -277,7 +277,7 @@ You can also monitor newly added releases on this repository with the github
 (https://github.com/mjl-/mox/tags.atom) or releases
 (https://github.com/mjl-/mox/releases.atom), or monitor the docker images.
 
-Keep in mind you have a responsibility to keep the internect-connected software
+Keep in mind you have a responsibility to keep the internet-connected software
 you run up to date and secure.
 
 ## How do I upgrade my mox installation?

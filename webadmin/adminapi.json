@@ -57,6 +57,26 @@
 			]
 		},
 		{
+			"Name": "ParseDomain",
+			"Docs": "ParseDomain parses a domain, possibly an IDNA domain.",
+			"Params": [
+				{
+					"Name": "domain",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"Domain"
+					]
+				}
+			]
+		},
+		{
 			"Name": "DomainLocalparts",
 			"Docs": "DomainLocalparts returns the encoded localparts and accounts configured in domain.",
 			"Params": [
@@ -159,7 +179,7 @@
 		},
 		{
 			"Name": "TLSReports",
-			"Docs": "TLSReports returns TLS reports overlapping with period start/end, for the given\ndomain (or all domains if empty). The reports are sorted first by period end\n(most recent first), then by domain.",
+			"Docs": "TLSReports returns TLS reports overlapping with period start/end, for the given\npolicy domain (or all domains if empty). The reports are sorted first by period\nend (most recent first), then by policy domain.",
 			"Params": [
 				{
 					"Name": "start",
@@ -174,7 +194,7 @@
 					]
 				},
 				{
-					"Name": "domain",
+					"Name": "policyDomain",
 					"Typewords": [
 						"string"
 					]
@@ -233,7 +253,7 @@
 					]
 				},
 				{
-					"Name": "domain",
+					"Name": "policyDomain",
 					"Typewords": [
 						"string"
 					]
@@ -623,6 +643,26 @@
 			"Returns": []
 		},
 		{
+			"Name": "QueueSaveRequireTLS",
+			"Docs": "QueueSaveRequireTLS updates the requiretls field for a message in the queue,\nto be used for the next delivery.",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "requireTLS",
+					"Typewords": [
+						"nullable",
+						"bool"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
 			"Name": "LogLevels",
 			"Docs": "LogLevels returns the current log levels.",
 			"Params": [],
@@ -733,6 +773,295 @@
 					]
 				}
 			]
+		},
+		{
+			"Name": "DMARCEvaluationStats",
+			"Docs": "DMARCEvaluationStats returns a map of all domains with evaluations to a count of\nthe evaluations and whether those evaluations will cause a report to be sent.",
+			"Params": [],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"{}",
+						"EvaluationStat"
+					]
+				}
+			]
+		},
+		{
+			"Name": "DMARCEvaluationsDomain",
+			"Docs": "DMARCEvaluationsDomain returns all evaluations for aggregate reports for the\ndomain, sorted from oldest to most recent.",
+			"Params": [
+				{
+					"Name": "domain",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"Domain"
+					]
+				},
+				{
+					"Name": "r1",
+					"Typewords": [
+						"[]",
+						"Evaluation"
+					]
+				}
+			]
+		},
+		{
+			"Name": "DMARCRemoveEvaluations",
+			"Docs": "DMARCRemoveEvaluations removes evaluations for a domain.",
+			"Params": [
+				{
+					"Name": "domain",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "DMARCSuppressAdd",
+			"Docs": "DMARCSuppressAdd adds a reporting address to the suppress list. Outgoing\nreports will be suppressed for a period.",
+			"Params": [
+				{
+					"Name": "reportingAddress",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "until",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "comment",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "DMARCSuppressList",
+			"Docs": "DMARCSuppressList returns all reporting addresses on the suppress list.",
+			"Params": [],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"[]",
+						"SuppressAddress"
+					]
+				}
+			]
+		},
+		{
+			"Name": "DMARCSuppressRemove",
+			"Docs": "DMARCSuppressRemove removes a reporting address record from the suppress list.",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "DMARCSuppressExtend",
+			"Docs": "DMARCSuppressExtend updates the until field of a suppressed reporting address record.",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "until",
+					"Typewords": [
+						"timestamp"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "TLSRPTResults",
+			"Docs": "TLSRPTResults returns all TLSRPT results in the database.",
+			"Params": [],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"[]",
+						"TLSResult"
+					]
+				}
+			]
+		},
+		{
+			"Name": "TLSRPTResultsPolicyDomain",
+			"Docs": "TLSRPTResultsPolicyDomain returns the TLS results for a domain.",
+			"Params": [
+				{
+					"Name": "policyDomain",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"Domain"
+					]
+				},
+				{
+					"Name": "r1",
+					"Typewords": [
+						"[]",
+						"TLSResult"
+					]
+				}
+			]
+		},
+		{
+			"Name": "LookupTLSRPTRecord",
+			"Docs": "LookupTLSRPTRecord looks up a TLSRPT record and returns the parsed form, original txt\nform from DNS, and error with the TLSRPT record as a string.",
+			"Params": [
+				{
+					"Name": "domain",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "record",
+					"Typewords": [
+						"nullable",
+						"TLSRPTRecord"
+					]
+				},
+				{
+					"Name": "txt",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "errstr",
+					"Typewords": [
+						"string"
+					]
+				}
+			]
+		},
+		{
+			"Name": "TLSRPTRemoveResults",
+			"Docs": "TLSRPTRemoveResults removes the TLS results for a domain for the given day. If\nday is empty, all results are removed.",
+			"Params": [
+				{
+					"Name": "domain",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "day",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "TLSRPTSuppressAdd",
+			"Docs": "TLSRPTSuppressAdd adds a reporting address to the suppress list. Outgoing\nreports will be suppressed for a period.",
+			"Params": [
+				{
+					"Name": "reportingAddress",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "until",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "comment",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "TLSRPTSuppressList",
+			"Docs": "TLSRPTSuppressList returns all reporting addresses on the suppress list.",
+			"Params": [],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"[]",
+						"TLSRPTSuppressAddress"
+					]
+				}
+			]
+		},
+		{
+			"Name": "TLSRPTSuppressRemove",
+			"Docs": "TLSRPTSuppressRemove removes a reporting address record from the suppress list.",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "TLSRPTSuppressExtend",
+			"Docs": "TLSRPTSuppressExtend updates the until field of a suppressed reporting address record.",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "until",
+					"Typewords": [
+						"timestamp"
+					]
+				}
+			],
+			"Returns": []
 		}
 	],
 	"Sections": [],
@@ -746,6 +1075,13 @@
 					"Docs": "",
 					"Typewords": [
 						"string"
+					]
+				},
+				{
+					"Name": "DNSSEC",
+					"Docs": "",
+					"Typewords": [
+						"DNSSECResult"
 					]
 				},
 				{
@@ -770,6 +1106,13 @@
 					]
 				},
 				{
+					"Name": "DANE",
+					"Docs": "",
+					"Typewords": [
+						"DANECheckResult"
+					]
+				},
+				{
 					"Name": "SPF",
 					"Docs": "",
 					"Typewords": [
@@ -791,7 +1134,14 @@
 					]
 				},
 				{
-					"Name": "TLSRPT",
+					"Name": "HostTLSRPT",
+					"Docs": "",
+					"Typewords": [
+						"TLSRPTCheckResult"
+					]
+				},
+				{
+					"Name": "DomainTLSRPT",
 					"Docs": "",
 					"Typewords": [
 						"TLSRPTCheckResult"
@@ -823,6 +1173,36 @@
 					"Docs": "",
 					"Typewords": [
 						"AutodiscoverCheckResult"
+					]
+				}
+			]
+		},
+		{
+			"Name": "DNSSECResult",
+			"Docs": "",
+			"Fields": [
+				{
+					"Name": "Errors",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Warnings",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Instructions",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
 					]
 				}
 			]
@@ -961,6 +1341,36 @@
 		},
 		{
 			"Name": "TLSCheckResult",
+			"Docs": "",
+			"Fields": [
+				{
+					"Name": "Errors",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Warnings",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Instructions",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				}
+			]
+		},
+		{
+			"Name": "DANECheckResult",
 			"Docs": "",
 			"Fields": [
 				{
@@ -1511,11 +1921,11 @@
 				},
 				{
 					"Name": "RUAs",
-					"Docs": "Aggregate reporting URI, for \"rua=\". \"rua=\" can occur multiple times, each can be a list. Must be URL-encoded strings, with \",\", \"!\" and \";\" encoded.",
+					"Docs": "Aggregate reporting URI, for \"rua=\". \"rua=\" can occur multiple times, each can be a list.",
 					"Typewords": [
 						"[]",
 						"[]",
-						"string"
+						"RUA"
 					]
 				},
 				{
@@ -1552,14 +1962,6 @@
 			"Name": "MTASTSCheckResult",
 			"Docs": "",
 			"Fields": [
-				{
-					"Name": "CNAMEs",
-					"Docs": "",
-					"Typewords": [
-						"[]",
-						"string"
-					]
-				},
 				{
 					"Name": "TXT",
 					"Docs": "",
@@ -2008,6 +2410,13 @@
 						"[]",
 						"Pair"
 					]
+				},
+				{
+					"Name": "PolicyText",
+					"Docs": "Text that make up the policy, as retrieved. We didn't store this in the past. If empty, policy can be reconstructed from Policy field. Needed by TLSRPT.",
+					"Typewords": [
+						"string"
+					]
 				}
 			]
 		},
@@ -2024,7 +2433,7 @@
 				},
 				{
 					"Name": "Domain",
-					"Docs": "Domain to which the TLS report applies.",
+					"Docs": "Policy domain to which the TLS report applies. Unicode.",
 					"Typewords": [
 						"string"
 					]
@@ -2041,6 +2450,13 @@
 					"Docs": "",
 					"Typewords": [
 						"string"
+					]
+				},
+				{
+					"Name": "HostReport",
+					"Docs": "Report for host TLSRPT record, as opposed to domain TLSRPT record.",
+					"Typewords": [
+						"bool"
 					]
 				},
 				{
@@ -2150,7 +2566,7 @@
 					"Name": "policy-type",
 					"Docs": "",
 					"Typewords": [
-						"string"
+						"PolicyType"
 					]
 				},
 				{
@@ -2227,6 +2643,7 @@
 					"Name": "receiving-mx-helo",
 					"Docs": "",
 					"Typewords": [
+						"nullable",
 						"string"
 					]
 				},
@@ -2265,10 +2682,10 @@
 			"Docs": "TLSRPTSummary presents TLS reporting statistics for a single domain\nover a period.",
 			"Fields": [
 				{
-					"Name": "Domain",
+					"Name": "PolicyDomain",
 					"Docs": "",
 					"Typewords": [
-						"string"
+						"Domain"
 					]
 				},
 				{
@@ -2290,7 +2707,7 @@
 					"Docs": "",
 					"Typewords": [
 						"{}",
-						"int32"
+						"int64"
 					]
 				}
 			]
@@ -2426,7 +2843,7 @@
 			"Fields": [
 				{
 					"Name": "Domain",
-					"Docs": "",
+					"Docs": "Domain is where DMARC record was found, not necessarily message From. Reports we generate use unicode names, incoming reports may have either ASCII-only or Unicode domains.",
 					"Typewords": [
 						"string"
 					]
@@ -2828,7 +3245,7 @@
 		},
 		{
 			"Name": "Msg",
-			"Docs": "Msg is a message in the queue.",
+			"Docs": "Msg is a message in the queue.\n\nUse MakeMsg to make a message with fields that Add needs. Add will further set\nqueueing related fields.",
 			"Fields": [
 				{
 					"Name": "ID",
@@ -2894,6 +3311,13 @@
 					]
 				},
 				{
+					"Name": "MaxAttempts",
+					"Docs": "Max number of attempts before giving up. If 0, then the default of 8 attempts is used instead.",
+					"Typewords": [
+						"int32"
+					]
+				},
+				{
 					"Name": "DialedIPs",
 					"Docs": "For each host, the IPs that were dialed. Used for IP selection for later attempts.",
 					"Typewords": [
@@ -2939,6 +3363,20 @@
 					]
 				},
 				{
+					"Name": "IsDMARCReport",
+					"Docs": "Delivery failures for DMARC reports are handled differently.",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "IsTLSReport",
+					"Docs": "Delivery failures for TLS reports are handled differently.",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
 					"Name": "Size",
 					"Docs": "Full size of message, combined MsgPrefix with contents of message file.",
 					"Typewords": [
@@ -2973,6 +3411,14 @@
 					"Docs": "If non-empty, the transport to use for this message. Can be set through cli or admin interface. If empty (the default for a submitted message), regular routing rules apply.",
 					"Typewords": [
 						"string"
+					]
+				},
+				{
+					"Name": "RequireTLS",
+					"Docs": "RequireTLS influences TLS verification during delivery.  If nil, the recipient domain policy is followed (MTA-STS and/or DANE), falling back to optional opportunistic non-verified STARTTLS.  If RequireTLS is true (through SMTP REQUIRETLS extension or webmail submit), MTA-STS or DANE is required, as well as REQUIRETLS support by the next hop server.  If RequireTLS is false (through messag header \"TLS-Required: No\"), the recipient domain's policy is ignored if it does not lead to a successful TLS connection, i.e. falling back to SMTP delivery with unverified STARTTLS or plain text.",
+					"Typewords": [
+						"nullable",
+						"bool"
 					]
 				}
 			]
@@ -3347,6 +3793,322 @@
 					]
 				}
 			]
+		},
+		{
+			"Name": "EvaluationStat",
+			"Docs": "EvaluationStat summarizes stored evaluations, for inclusion in an upcoming\naggregate report, for a domain.",
+			"Fields": [
+				{
+					"Name": "Domain",
+					"Docs": "",
+					"Typewords": [
+						"Domain"
+					]
+				},
+				{
+					"Name": "Dispositions",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Count",
+					"Docs": "",
+					"Typewords": [
+						"int32"
+					]
+				},
+				{
+					"Name": "SendReport",
+					"Docs": "",
+					"Typewords": [
+						"bool"
+					]
+				}
+			]
+		},
+		{
+			"Name": "Evaluation",
+			"Docs": "Evaluation is the result of an evaluation of a DMARC policy, to be included\nin a DMARC report.",
+			"Fields": [
+				{
+					"Name": "ID",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "PolicyDomain",
+					"Docs": "Domain where DMARC policy was found, could be the organizational domain while evaluation was for a subdomain. Unicode. Same as domain found in PolicyPublished. A separate field for its index.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Evaluated",
+					"Docs": "Time of evaluation, determines which report (covering whole hours) this evaluation will be included in.",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "Optional",
+					"Docs": "If optional, this evaluation is not a reason to send a DMARC report, but it will be included when a report is sent due to other non-optional evaluations. Set for evaluations of incoming DMARC reports. We don't want such deliveries causing us to send a report, or we would keep exchanging reporting messages forever. Also set for when evaluation is a DMARC reject for domains we haven't positively interacted with, to prevent being used to flood an unsuspecting domain with reports.",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "IntervalHours",
+					"Docs": "Effective aggregate reporting interval in hours. Between 1 and 24, rounded up from seconds from policy to first number that can divide 24.",
+					"Typewords": [
+						"int32"
+					]
+				},
+				{
+					"Name": "Addresses",
+					"Docs": "\"rua\" in DMARC record, we only store evaluations for records with aggregate reporting addresses, so always non-empty.",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "PolicyPublished",
+					"Docs": "Policy used for evaluation. We don't store the \"fo\" field for failure reporting options, since we don't send failure reports for individual messages.",
+					"Typewords": [
+						"PolicyPublished"
+					]
+				},
+				{
+					"Name": "SourceIP",
+					"Docs": "For \"row\" in a report record.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Disposition",
+					"Docs": "",
+					"Typewords": [
+						"Disposition"
+					]
+				},
+				{
+					"Name": "AlignedDKIMPass",
+					"Docs": "",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "AlignedSPFPass",
+					"Docs": "",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "OverrideReasons",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"PolicyOverrideReason"
+					]
+				},
+				{
+					"Name": "EnvelopeTo",
+					"Docs": "For \"identifiers\" in a report record.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "EnvelopeFrom",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "HeaderFrom",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "DKIMResults",
+					"Docs": "For \"auth_results\" in a report record.",
+					"Typewords": [
+						"[]",
+						"DKIMAuthResult"
+					]
+				},
+				{
+					"Name": "SPFResults",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"SPFAuthResult"
+					]
+				}
+			]
+		},
+		{
+			"Name": "SuppressAddress",
+			"Docs": "SuppressAddress is a reporting address for which outgoing DMARC reports\nwill be suppressed for a period.",
+			"Fields": [
+				{
+					"Name": "ID",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "Inserted",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "ReportingAddress",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Until",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "Comment",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				}
+			]
+		},
+		{
+			"Name": "TLSResult",
+			"Docs": "TLSResult is stored in the database to track TLS results per policy domain, day\nand recipient domain. These records will be included in TLS reports.",
+			"Fields": [
+				{
+					"Name": "ID",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "PolicyDomain",
+					"Docs": "Domain with TLSRPT DNS record, with addresses that will receive reports. Either a recipient domain (for MTA-STS policies) or an (MX) host (for DANE policies). Unicode.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "DayUTC",
+					"Docs": "DayUTC is of the form yyyymmdd.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "RecipientDomain",
+					"Docs": "Reports are sent per policy domain. When delivering a message to a recipient domain, we can get multiple TLSResults, typically one for MTA-STS, and one or more for DANE (one for each MX target, or actually TLSA base domain). We track recipient domain so we can display successes/failures for delivery of messages to a recipient domain in the admin pages. Unicode.",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Created",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "Updated",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "IsHost",
+					"Docs": "Result is for host (e.g. DANE), not recipient domain (e.g. MTA-STS).",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "SendReport",
+					"Docs": "Whether to send a report. TLS results for delivering messages with TLS reports will be recorded, but will not cause a report to be sent.",
+					"Typewords": [
+						"bool"
+					]
+				},
+				{
+					"Name": "Results",
+					"Docs": "Results is updated for each TLS attempt.",
+					"Typewords": [
+						"[]",
+						"Result"
+					]
+				}
+			]
+		},
+		{
+			"Name": "TLSRPTSuppressAddress",
+			"Docs": "TLSRPTSuppressAddress is a reporting address for which outgoing TLS reports\nwill be suppressed for a period.",
+			"Fields": [
+				{
+					"Name": "ID",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "Inserted",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "ReportingAddress",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Until",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "Comment",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				}
+			]
 		}
 	],
 	"Ints": [],
@@ -3394,6 +4156,11 @@
 			]
 		},
 		{
+			"Name": "RUA",
+			"Docs": "RUA is a reporting address with scheme and special characters \",\", \"!\" and\n\";\" not encoded.",
+			"Values": null
+		},
+		{
 			"Name": "Mode",
 			"Docs": "Mode indicates how the policy should be interpreted.",
 			"Values": [
@@ -3411,6 +4178,27 @@
 					"Name": "ModeNone",
 					"Value": "none",
 					"Docs": "In case MTA-STS is not or no longer implemented."
+				}
+			]
+		},
+		{
+			"Name": "PolicyType",
+			"Docs": "PolicyType indicates the policy success/failure results are for.",
+			"Values": [
+				{
+					"Name": "TLSA",
+					"Value": "tlsa",
+					"Docs": "For DANE, against a mail host (not recipient domain)."
+				},
+				{
+					"Name": "STS",
+					"Value": "sts",
+					"Docs": "For MTA-STS, against a recipient domain (not a mail host)."
+				},
+				{
+					"Name": "NoPolicyFound",
+					"Value": "no-policy-found",
+					"Docs": "Recipient domain did not have MTA-STS policy, or mail host (TSLA base domain)\ndid not have DANE TLSA records."
 				}
 			]
 		},

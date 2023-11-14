@@ -30,7 +30,10 @@ import (
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/moxio"
 	"github.com/mjl-/mox/smtp"
+	"github.com/mjl-/mox/smtpclient"
 	"github.com/mjl-/mox/store"
+	"github.com/mjl-/mox/tlsrpt"
+	"github.com/mjl-/mox/tlsrptdb"
 )
 
 var xlog = mlog.New("queue")
@@ -54,31 +57,13 @@ var (
 		[]string{
 			"attempt",   // Number of attempts.
 			"transport", // empty for default direct delivery.
-			"tlsmode",   // strict, opportunistic, skip
+			"tlsmode",   // immediate, requiredstarttls, opportunistic, skip (from smtpclient.TLSMode), with optional +mtasts and/or +dane.
 			"result",    // ok, timeout, canceled, temperror, permerror, error
 		},
 	)
 )
 
-type contextDialer interface {
-	DialContext(ctx context.Context, network, addr string) (c net.Conn, err error)
-}
-
-// Used to dial remote SMTP servers.
-// Overridden for tests.
-var dial = func(ctx context.Context, dialer contextDialer, timeout time.Duration, addr string, laddr net.Addr) (net.Conn, error) {
-	// If this is a net.Dialer, use its settings and add the timeout and localaddr.
-	// This is the typical case, but SOCKS5 support can use a different dialer.
-	if d, ok := dialer.(*net.Dialer); ok {
-		nd := *d
-		nd.Timeout = timeout
-		nd.LocalAddr = laddr
-		return nd.DialContext(ctx, "tcp", addr)
-	}
-	return dialer.DialContext(ctx, "tcp", addr)
-}
-
-var jitter = mox.NewRand()
+var jitter = mox.NewPseudoRand()
 
 var DBTypes = []any{Msg{}} // Types stored in DB.
 var DB *bstore.DB          // Exported for making backups.
@@ -87,6 +72,9 @@ var DB *bstore.DB          // Exported for making backups.
 var Localserve bool
 
 // Msg is a message in the queue.
+//
+// Use MakeMsg to make a message with fields that Add needs. Add will further set
+// queueing related fields.
 type Msg struct {
 	ID                 int64
 	Queued             time.Time      `bstore:"default now"`
@@ -97,15 +85,19 @@ type Msg struct {
 	RecipientDomain    dns.IPDomain
 	RecipientDomainStr string              // For filtering.
 	Attempts           int                 // Next attempt is based on last attempt and exponential back off based on attempts.
+	MaxAttempts        int                 // Max number of attempts before giving up. If 0, then the default of 8 attempts is used instead.
 	DialedIPs          map[string][]net.IP // For each host, the IPs that were dialed. Used for IP selection for later attempts.
 	NextAttempt        time.Time           // For scheduling.
 	LastAttempt        *time.Time
 	LastError          string
-	Has8bit            bool   // Whether message contains bytes with high bit set, determines whether 8BITMIME SMTP extension is needed.
-	SMTPUTF8           bool   // Whether message requires use of SMTPUTF8.
-	Size               int64  // Full size of message, combined MsgPrefix with contents of message file.
-	MessageID          string // Used when composing a DSN, in its References header.
-	MsgPrefix          []byte
+
+	Has8bit       bool   // Whether message contains bytes with high bit set, determines whether 8BITMIME SMTP extension is needed.
+	SMTPUTF8      bool   // Whether message requires use of SMTPUTF8.
+	IsDMARCReport bool   // Delivery failures for DMARC reports are handled differently.
+	IsTLSReport   bool   // Delivery failures for TLS reports are handled differently.
+	Size          int64  // Full size of message, combined MsgPrefix with contents of message file.
+	MessageID     string // Used when composing a DSN, in its References header.
+	MsgPrefix     []byte
 
 	// If set, this message is a DSN and this is a version using utf-8, for the case
 	// the remote MTA supports smtputf8. In this case, Size and MsgPrefix are not
@@ -116,6 +108,21 @@ type Msg struct {
 	// admin interface. If empty (the default for a submitted message), regular routing
 	// rules apply.
 	Transport string
+
+	// RequireTLS influences TLS verification during delivery.
+	//
+	// If nil, the recipient domain policy is followed (MTA-STS and/or DANE), falling
+	// back to optional opportunistic non-verified STARTTLS.
+	//
+	// If RequireTLS is true (through SMTP REQUIRETLS extension or webmail submit),
+	// MTA-STS or DANE is required, as well as REQUIRETLS support by the next hop
+	// server.
+	//
+	// If RequireTLS is false (through messag header "TLS-Required: No"), the recipient
+	// domain's policy is ignored if it does not lead to a successful TLS connection,
+	// i.e. falling back to SMTP delivery with unverified STARTTLS or plain text.
+	RequireTLS *bool
+	// ../rfc/8689:250
 }
 
 // Sender of message as used in MAIL FROM.
@@ -135,7 +142,7 @@ func (m Msg) MessagePath() string {
 
 // Init opens the queue database without starting delivery.
 func Init() error {
-	qpath := mox.DataDirPath("queue/index.db")
+	qpath := mox.DataDirPath(filepath.FromSlash("queue/index.db"))
 	os.MkdirAll(filepath.Dir(qpath), 0770)
 	isNew := false
 	if _, err := os.Stat(qpath); err != nil && os.IsNotExist(err) {
@@ -190,47 +197,71 @@ func Count(ctx context.Context) (int, error) {
 	return bstore.QueryDB[Msg](ctx, DB).Count()
 }
 
+// MakeMsg is a convenience function that sets the commonly used fields for a Msg.
+func MakeMsg(senderAccount string, sender, recipient smtp.Path, has8bit, smtputf8 bool, size int64, messageID string, prefix []byte, requireTLS *bool) Msg {
+	return Msg{
+		SenderAccount:      mox.Conf.Static.Postmaster.Account,
+		SenderLocalpart:    sender.Localpart,
+		SenderDomain:       sender.IPDomain,
+		RecipientLocalpart: recipient.Localpart,
+		RecipientDomain:    recipient.IPDomain,
+		Has8bit:            has8bit,
+		SMTPUTF8:           smtputf8,
+		Size:               size,
+		MessageID:          messageID,
+		MsgPrefix:          prefix,
+		RequireTLS:         requireTLS,
+	}
+}
+
 // Add a new message to the queue. The queue is kicked immediately to start a
 // first delivery attempt.
 //
-// If consumeFile is true, it is removed as part of delivery (by rename or copy
-// and remove). msgFile is never closed by Add.
+// ID must be 0 and will be set after inserting in the queue.
 //
-// dnsutf8Opt is a utf8-version of the message, to be used only for DNSs. If set,
-// this data is used as the message when delivering the DSN and the remote SMTP
-// server supports SMTPUTF8. If the remote SMTP server does not support SMTPUTF8,
-// the regular non-utf8 message is delivered.
-func Add(ctx context.Context, log *mlog.Log, senderAccount string, mailFrom, rcptTo smtp.Path, has8bit, smtputf8 bool, size int64, messageID string, msgPrefix []byte, msgFile *os.File, dsnutf8Opt []byte, consumeFile bool) (int64, error) {
+// Add sets derived fields like RecipientDomainStr, and fields related to queueing,
+// such as Queued, NextAttempt, LastAttempt, LastError.
+func Add(ctx context.Context, log *mlog.Log, qm *Msg, msgFile *os.File) error {
 	// todo: Add should accept multiple rcptTo if they are for the same domain. so we can queue them for delivery in one (or just a few) session(s), transferring the data only once. ../rfc/5321:3759
 
+	if qm.ID != 0 {
+		return fmt.Errorf("id of queued message must be 0")
+	}
+	qm.Queued = time.Now()
+	qm.DialedIPs = nil
+	qm.NextAttempt = qm.Queued
+	qm.LastAttempt = nil
+	qm.LastError = ""
+	qm.RecipientDomainStr = formatIPDomain(qm.RecipientDomain)
+
 	if Localserve {
-		if senderAccount == "" {
-			return 0, fmt.Errorf("cannot queue with localserve without local account")
+		if qm.SenderAccount == "" {
+			return fmt.Errorf("cannot queue with localserve without local account")
 		}
-		acc, err := store.OpenAccount(senderAccount)
+		acc, err := store.OpenAccount(qm.SenderAccount)
 		if err != nil {
-			return 0, fmt.Errorf("opening sender account for immediate delivery with localserve: %v", err)
+			return fmt.Errorf("opening sender account for immediate delivery with localserve: %v", err)
 		}
 		defer func() {
 			err := acc.Close()
 			log.Check(err, "closing account")
 		}()
-		m := store.Message{Size: size, MsgPrefix: msgPrefix}
+		m := store.Message{Size: qm.Size, MsgPrefix: qm.MsgPrefix}
 		conf, _ := acc.Conf()
-		dest := conf.Destinations[mailFrom.String()]
+		dest := conf.Destinations[qm.Sender().String()]
 		acc.WithWLock(func() {
-			err = acc.DeliverDestination(log, dest, &m, msgFile, consumeFile)
+			err = acc.DeliverDestination(log, dest, &m, msgFile)
 		})
 		if err != nil {
-			return 0, fmt.Errorf("delivering message: %v", err)
+			return fmt.Errorf("delivering message: %v", err)
 		}
 		log.Debug("immediately delivered from queue to sender")
-		return 0, nil
+		return nil
 	}
 
 	tx, err := DB.Begin(ctx, true)
 	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() {
 		if tx != nil {
@@ -240,11 +271,8 @@ func Add(ctx context.Context, log *mlog.Log, senderAccount string, mailFrom, rcp
 		}
 	}()
 
-	now := time.Now()
-	qm := Msg{0, now, senderAccount, mailFrom.Localpart, mailFrom.IPDomain, rcptTo.Localpart, rcptTo.IPDomain, formatIPDomain(rcptTo.IPDomain), 0, nil, now, nil, "", has8bit, smtputf8, size, messageID, msgPrefix, dsnutf8Opt, ""}
-
-	if err := tx.Insert(&qm); err != nil {
-		return 0, err
+	if err := tx.Insert(qm); err != nil {
+		return err
 	}
 
 	dst := qm.MessagePath()
@@ -256,25 +284,20 @@ func Add(ctx context.Context, log *mlog.Log, senderAccount string, mailFrom, rcp
 	}()
 	dstDir := filepath.Dir(dst)
 	os.MkdirAll(dstDir, 0770)
-	if consumeFile {
-		if err := os.Rename(msgFile.Name(), dst); err != nil {
-			// Could be due to cross-filesystem rename. Users shouldn't configure their systems that way.
-			return 0, fmt.Errorf("move message into queue dir: %w", err)
-		}
-	} else if err := moxio.LinkOrCopy(log, dst, msgFile.Name(), nil, true); err != nil {
-		return 0, fmt.Errorf("linking/copying message to new file: %s", err)
+	if err := moxio.LinkOrCopy(log, dst, msgFile.Name(), nil, true); err != nil {
+		return fmt.Errorf("linking/copying message to new file: %s", err)
 	} else if err := moxio.SyncDir(dstDir); err != nil {
-		return 0, fmt.Errorf("sync directory: %v", err)
+		return fmt.Errorf("sync directory: %v", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %s", err)
+		return fmt.Errorf("commit transaction: %s", err)
 	}
 	tx = nil
 	dst = ""
 
 	queuekick()
-	return qm.ID, nil
+	return nil
 }
 
 func formatIPDomain(d dns.IPDomain) string {
@@ -362,6 +385,18 @@ func Drop(ctx context.Context, ID int64, toDomain string, recipient string) (int
 		}
 	}
 	return n, nil
+}
+
+// SaveRequireTLS updates the RequireTLS field of the message with id.
+func SaveRequireTLS(ctx context.Context, id int64, requireTLS *bool) error {
+	return DB.Write(ctx, func(tx *bstore.Tx) error {
+		m := Msg{ID: id}
+		if err := tx.Get(&m); err != nil {
+			return fmt.Errorf("get message: %w", err)
+		}
+		m.RequireTLS = requireTLS
+		return tx.Update(&m)
+	})
 }
 
 type ReadReaderAtCloser interface {
@@ -547,12 +582,96 @@ func deliver(resolver dns.Resolver, m Msg) {
 		qlog.Debug("delivering with transport", mlog.Field("transport", transportName))
 	}
 
-	var dialer contextDialer = &net.Dialer{}
+	// We gather TLS connection successes and failures during delivery, and we store
+	// them in tlsrptb. Every 24 hours we send an email with a report to the recipient
+	// domains that opt in via a TLSRPT DNS record.  For us, the tricky part is
+	// collecting all reporting information. We've got several TLS modes
+	// (opportunistic, DANE and/or MTA-STS (PKIX), overrides due to Require TLS).
+	// Failures can happen at various levels: MTA-STS policies (apply to whole delivery
+	// attempt/domain), MX targets (possibly multiple per delivery attempt, both for
+	// MTA-STS and DANE).
+	//
+	// Once the SMTP client has tried a TLS handshake, we register success/failure,
+	// regardless of what happens next on the connection. We also register failures
+	// when they happen before we get to the SMTP client, but only if they are related
+	// to TLS (and some DNSSEC).
+	var recipientDomainResult tlsrpt.Result
+	var hostResults []tlsrpt.Result
+	defer func() {
+		if mox.Conf.Static.NoOutgoingTLSReports || m.RecipientDomain.IsIP() {
+			return
+		}
+
+		now := time.Now()
+		dayUTC := now.UTC().Format("20060102")
+
+		// See if this contains a failure. If not, we'll mark TLS results for delivering
+		// DMARC reports SendReport false, so we won't as easily get into a report sending
+		// loop.
+		var failure bool
+		for _, result := range hostResults {
+			if result.Summary.TotalFailureSessionCount > 0 {
+				failure = true
+				break
+			}
+		}
+		if recipientDomainResult.Summary.TotalFailureSessionCount > 0 {
+			failure = true
+		}
+
+		results := make([]tlsrptdb.TLSResult, 0, 1+len(hostResults))
+		tlsaPolicyDomains := map[string]bool{}
+		addResult := func(r tlsrpt.Result, isHost bool) {
+			var zerotype tlsrpt.PolicyType
+			if r.Policy.Type == zerotype {
+				return
+			}
+
+			// Ensure we store policy domain in unicode in database.
+			policyDomain, err := dns.ParseDomain(r.Policy.Domain)
+			if err != nil {
+				qlog.Errorx("parsing policy domain for tls result", err, mlog.Field("policydomain", r.Policy.Domain))
+				return
+			}
+
+			if r.Policy.Type == tlsrpt.TLSA {
+				tlsaPolicyDomains[policyDomain.ASCII] = true
+			}
+
+			tlsResult := tlsrptdb.TLSResult{
+				PolicyDomain:    policyDomain.Name(),
+				DayUTC:          dayUTC,
+				RecipientDomain: m.RecipientDomain.Domain.Name(),
+				IsHost:          isHost,
+				SendReport:      !m.IsTLSReport && (!m.IsDMARCReport || failure),
+				Results:         []tlsrpt.Result{r},
+			}
+			results = append(results, tlsResult)
+		}
+		for _, result := range hostResults {
+			addResult(result, true)
+		}
+		// If we were delivering to a mail host directly (not a domain with MX records), we
+		// are more likely to get a TLSA policy than an STS policy. Don't potentially
+		// confuse operators with both a tlsa and no-policy-found result.
+		// todo spec: ../rfc/8460:440 an explicit no-sts-policy result would be useful.
+		if recipientDomainResult.Policy.Type != tlsrpt.NoPolicyFound || !tlsaPolicyDomains[recipientDomainResult.Policy.Domain] {
+			addResult(recipientDomainResult, false)
+		}
+
+		if len(results) > 0 {
+			err := tlsrptdb.AddTLSResults(context.Background(), results)
+			qlog.Check(err, "adding tls results to database for upcoming tlsrpt report")
+		}
+	}()
+
+	var dialer smtpclient.Dialer = &net.Dialer{}
 	if transport.Submissions != nil {
 		deliverSubmit(cid, qlog, resolver, dialer, m, backoff, transportName, transport.Submissions, true, 465)
 	} else if transport.Submission != nil {
 		deliverSubmit(cid, qlog, resolver, dialer, m, backoff, transportName, transport.Submission, false, 587)
 	} else if transport.SMTP != nil {
+		// todo future: perhaps also gather tlsrpt results for submissions.
 		deliverSubmit(cid, qlog, resolver, dialer, m, backoff, transportName, transport.SMTP, false, 25)
 	} else {
 		ourHostname := mox.Conf.Static.HostnameDomain
@@ -561,7 +680,7 @@ func deliver(resolver dns.Resolver, m Msg) {
 			if err != nil {
 				fail(qlog, m, backoff, false, dsn.NameIP{}, "", fmt.Sprintf("socks dialer: %v", err))
 				return
-			} else if d, ok := socksdialer.(contextDialer); !ok {
+			} else if d, ok := socksdialer.(smtpclient.Dialer); !ok {
 				fail(qlog, m, backoff, false, dsn.NameIP{}, "", "socks dialer is not a contextdialer")
 				return
 			} else {
@@ -569,7 +688,7 @@ func deliver(resolver dns.Resolver, m Msg) {
 			}
 			ourHostname = transport.Socks.Hostname
 		}
-		deliverDirect(cid, qlog, resolver, dialer, ourHostname, transportName, m, backoff)
+		recipientDomainResult, hostResults = deliverDirect(cid, qlog, resolver, dialer, ourHostname, transportName, m, backoff)
 	}
 }
 
@@ -610,99 +729,4 @@ func routeMatchDomain(l []string, d dns.Domain) bool {
 		}
 	}
 	return false
-}
-
-// dialHost dials host for delivering Msg, taking previous attempts into accounts.
-// If the previous attempt used IPv4, this attempt will use IPv6 (in case one of the IPs is in a DNSBL).
-// The second attempt for an address family we prefer the same IP as earlier, to increase our chances if remote is doing greylisting.
-// dialHost updates m with the dialed IP and m should be saved in case of failure.
-// If we have fully specified local smtp listen IPs, we set those for the outgoing
-// connection. The admin probably configured these same IPs in SPF, but others
-// possibly not.
-func dialHost(ctx context.Context, log *mlog.Log, resolver dns.Resolver, dialer contextDialer, host dns.IPDomain, port int, m *Msg) (conn net.Conn, ip net.IP, dualstack bool, rerr error) {
-	var ips []net.IP
-	if len(host.IP) > 0 {
-		ips = []net.IP{host.IP}
-	} else {
-		// todo: The Go resolver automatically follows CNAMEs, which is not allowed for
-		// host names in MX records. ../rfc/5321:3861 ../rfc/2181:661
-		name := host.Domain.ASCII + "."
-		ipaddrs, err := resolver.LookupIPAddr(ctx, name)
-		if err != nil || len(ipaddrs) == 0 {
-			return nil, nil, false, fmt.Errorf("looking up %q: %v", name, err)
-		}
-		var have4, have6 bool
-		for _, ipaddr := range ipaddrs {
-			ips = append(ips, ipaddr.IP)
-			if ipaddr.IP.To4() == nil {
-				have6 = true
-			} else {
-				have4 = true
-			}
-		}
-		dualstack = have4 && have6
-		prevIPs := m.DialedIPs[host.String()]
-		if len(prevIPs) > 0 {
-			prevIP := prevIPs[len(prevIPs)-1]
-			prevIs4 := prevIP.To4() != nil
-			sameFamily := 0
-			for _, ip := range prevIPs {
-				is4 := ip.To4() != nil
-				if prevIs4 == is4 {
-					sameFamily++
-				}
-			}
-			preferPrev := sameFamily == 1
-			// We use stable sort so any preferred/randomized listing from DNS is kept intact.
-			sort.SliceStable(ips, func(i, j int) bool {
-				aIs4 := ips[i].To4() != nil
-				bIs4 := ips[j].To4() != nil
-				if aIs4 != bIs4 {
-					// Prefer "i" if it is not same address family.
-					return aIs4 != prevIs4
-				}
-				// Prefer "i" if it is the same as last and we should be preferring it.
-				return preferPrev && ips[i].Equal(prevIP)
-			})
-			log.Debug("ordered ips for dialing", mlog.Field("ips", ips))
-		}
-	}
-
-	var timeout time.Duration
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		timeout = 30 * time.Second
-	} else {
-		timeout = time.Until(deadline) / time.Duration(len(ips))
-	}
-
-	var lastErr error
-	var lastIP net.IP
-	for _, ip := range ips {
-		addr := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
-		log.Debug("dialing remote host for delivery", mlog.Field("addr", addr))
-		var laddr net.Addr
-		for _, lip := range mox.Conf.Static.SpecifiedSMTPListenIPs {
-			ipIs4 := ip.To4() != nil
-			lipIs4 := lip.To4() != nil
-			if ipIs4 == lipIs4 {
-				laddr = &net.TCPAddr{IP: lip}
-				break
-			}
-		}
-		conn, err := dial(ctx, dialer, timeout, addr, laddr)
-		if err == nil {
-			log.Debug("connected for smtp delivery", mlog.Field("host", host), mlog.Field("addr", addr), mlog.Field("laddr", laddr))
-			if m.DialedIPs == nil {
-				m.DialedIPs = map[string][]net.IP{}
-			}
-			name := host.String()
-			m.DialedIPs[name] = append(m.DialedIPs[name], ip)
-			return conn, ip, dualstack, nil
-		}
-		log.Debugx("connection attempt for smtp delivery", err, mlog.Field("host", host), mlog.Field("addr", addr), mlog.Field("laddr", laddr))
-		lastErr = err
-		lastIP = ip
-	}
-	return nil, lastIP, dualstack, lastErr
 }

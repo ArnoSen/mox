@@ -30,7 +30,7 @@ var ctxbg = context.Background()
 
 func TestRefresh(t *testing.T) {
 	mox.Shutdown = ctxbg
-	mox.ConfigStaticPath = "../testdata/mtasts/fake.conf"
+	mox.ConfigStaticPath = filepath.FromSlash("../testdata/mtasts/fake.conf")
 	mox.Conf.Static.DataDir = "."
 
 	dbpath := mox.DataDirPath("mtasts.db")
@@ -68,7 +68,7 @@ func TestRefresh(t *testing.T) {
 			Extensions:    nil,
 		}
 
-		pr := PolicyRecord{domain, time.Time{}, validEnd, lastUpdate, lastUse, backoff, recordID, policy}
+		pr := PolicyRecord{domain, time.Time{}, validEnd, lastUpdate, lastUse, backoff, recordID, policy, policy.String()}
 		if err := db.Insert(ctxbg, &pr); err != nil {
 			t.Fatalf("insert policy: %s", err)
 		}

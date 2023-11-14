@@ -615,7 +615,7 @@ func Listen() {
 					return
 				}
 				w.Header().Set("Content-Type", "text/html")
-				fmt.Fprint(w, `<html><body>see <a href="/metrics">/metrics</a></body></html>`)
+				fmt.Fprint(w, `<html><body>see <a href="metrics">metrics</a></body></html>`)
 			})))
 		}
 		if l.AutoconfigHTTPS.Enabled {
@@ -627,6 +627,11 @@ func Listen() {
 				if strings.HasPrefix(dom.ASCII, "autoconfig.") {
 					dom.ASCII = strings.TrimPrefix(dom.ASCII, "autoconfig.")
 					dom.Unicode = strings.TrimPrefix(dom.Unicode, "autoconfig.")
+				}
+				// Autodiscovery uses a SRV record. It shouldn't point to a CNAME. So we directly
+				// use the mail server's host name.
+				if dom == mox.Conf.Static.HostnameDomain || dom == mox.Conf.Static.Listeners["public"].HostnameDomain {
+					return true
 				}
 				_, ok := mox.Conf.Domain(dom)
 				return ok
@@ -704,13 +709,22 @@ func Listen() {
 			if l.HostnameDomain.ASCII != "" {
 				hosts[l.HostnameDomain] = struct{}{}
 			}
-			// All domains are served on all listeners.
+			// All domains are served on all listeners. Gather autoconfig hostnames to ensure
+			// presence of TLS certificates for.
 			for _, name := range mox.Conf.Domains() {
-				dom, err := dns.ParseDomain("autoconfig." + name)
+				if dom, err := dns.ParseDomain(name); err != nil {
+					xlog.Errorx("parsing domain from config", err)
+				} else if d, _ := mox.Conf.Domain(dom); d.DMARC != nil && d.DMARC.Domain != "" && d.DMARC.DNSDomain != dom {
+					// Do not gather autoconfig name if this domain is configured to process reports
+					// for domains hosted elsewhere.
+					continue
+				}
+
+				autoconfdom, err := dns.ParseDomain("autoconfig." + name)
 				if err != nil {
 					xlog.Errorx("parsing domain from config for autoconfig", err)
 				} else {
-					hosts[dom] = struct{}{}
+					hosts[autoconfdom] = struct{}{}
 				}
 			}
 

@@ -142,6 +142,7 @@ export interface SubmitMessage {
 	ResponseMessageID: number  // If set, this was a reply or forward, based on IsForward.
 	ReplyTo: string  // If non-empty, Reply-To header to add to message.
 	UserAgent: string  // User-Agent header added if not empty.
+	RequireTLS?: boolean | null  // For "Require TLS" extension during delivery.
 }
 
 // File is a new attachment (not from an existing message that is being
@@ -175,6 +176,16 @@ export interface Mailbox {
 	Unread: number  // Messages without \Seen, excluding those with \Deleted, for JMAP.
 	Unseen: number  // Messages without \Seen, including those with \Deleted, for IMAP.
 	Size: number  // Number of bytes for all messages.
+}
+
+// RecipientSecurity is a quick analysis of the security properties of delivery to
+// the recipient (domain).
+export interface RecipientSecurity {
+	STARTTLS: SecurityResult  // Whether recipient domain supports (opportunistic) STARTTLS, as seen during most recent delivery attempt. Will be "unknown" if no delivery to the domain has been attempted yet.
+	MTASTS: SecurityResult  // Whether we have a stored enforced MTA-STS policy, or domain has MTA-STS DNS record.
+	DNSSEC: SecurityResult  // Whether MX lookup response was DNSSEC-signed.
+	DANE: SecurityResult  // Whether first delivery destination has DANE records.
+	RequireTLS: SecurityResult  // Whether recipient domain is known to implement the REQUIRETLS SMTP extension. Will be "unknown" if no delivery to the domain has been attempted yet.
 }
 
 // EventStart is the first message sent on an SSE connection, giving the client
@@ -286,6 +297,10 @@ export interface Message {
 	ThreadMissingLink: boolean  // ThreadMissingLink is true if there is no match with a direct parent. E.g. first ID in ThreadParentIDs is not the direct ancestor (an intermediate message may have been deleted), or subject-based matching was done.
 	ThreadMuted: boolean  // If set, newly delivered child messages are automatically marked as read. This field is copied to new child messages. Changes are propagated to the webmail client.
 	ThreadCollapsed: boolean  // If set, this (sub)thread is collapsed in the webmail client, for threading mode "on" (mode "unread" ignores it). This field is copied to new child message. Changes are propagated to the webmail client.
+	IsMailingList: boolean  // If received message was known to match a mailing list rule (with modified junk filtering).
+	ReceivedTLSVersion: number  // 0 if unknown, 1 if plaintext/no TLS, otherwise TLS cipher suite.
+	ReceivedTLSCipherSuite: number
+	ReceivedRequireTLS: boolean  // Whether RequireTLS was known to be used for incoming delivery.
 	Seen: boolean
 	Answered: boolean
 	Flagged: boolean
@@ -322,7 +337,7 @@ export interface MessageEnvelope {
 // viewable text or HTML part.
 export interface Attachment {
 	Path?: number[] | null  // Indices into top-level message.Part.Parts.
-	Filename: string  // File name based on "name" attribute of "Content-Type", or the "filename" attribute of "Content-Disposition". todo: decode non-ascii character sets
+	Filename: string  // File name based on "name" attribute of "Content-Type", or the "filename" attribute of "Content-Disposition".
 	Part: Part
 }
 
@@ -480,13 +495,24 @@ export enum AttachmentType {
 	AttachmentPresentation = "presentation",  // odp, pptx, ...
 }
 
+// SecurityResult indicates whether a security feature is supported.
+export enum SecurityResult {
+	SecurityResultError = "error",
+	SecurityResultNo = "no",
+	SecurityResultYes = "yes",
+	// Unknown whether supported. Finding out may only be (reasonably) possible when
+	// trying (e.g. SMTP STARTTLS). Once tried, the result may be cached for future
+	// lookups.
+	SecurityResultUnknown = "unknown",
+}
+
 // Localpart is a decoded local part of an email address, before the "@".
 // For quoted strings, values do not hold the double quote or escaping backslashes.
 // An empty string can be a valid localpart.
 export type Localpart = string
 
-export const structTypes: {[typename: string]: boolean} = {"Address":true,"Attachment":true,"ChangeMailboxAdd":true,"ChangeMailboxCounts":true,"ChangeMailboxKeywords":true,"ChangeMailboxRemove":true,"ChangeMailboxRename":true,"ChangeMailboxSpecialUse":true,"ChangeMsgAdd":true,"ChangeMsgFlags":true,"ChangeMsgRemove":true,"ChangeMsgThread":true,"Domain":true,"DomainAddressConfig":true,"Envelope":true,"EventStart":true,"EventViewChanges":true,"EventViewErr":true,"EventViewMsgs":true,"EventViewReset":true,"File":true,"Filter":true,"Flags":true,"ForwardAttachments":true,"Mailbox":true,"Message":true,"MessageAddress":true,"MessageEnvelope":true,"MessageItem":true,"NotFilter":true,"Page":true,"ParsedMessage":true,"Part":true,"Query":true,"Request":true,"SpecialUse":true,"SubmitMessage":true}
-export const stringsTypes: {[typename: string]: boolean} = {"AttachmentType":true,"Localpart":true,"ThreadMode":true}
+export const structTypes: {[typename: string]: boolean} = {"Address":true,"Attachment":true,"ChangeMailboxAdd":true,"ChangeMailboxCounts":true,"ChangeMailboxKeywords":true,"ChangeMailboxRemove":true,"ChangeMailboxRename":true,"ChangeMailboxSpecialUse":true,"ChangeMsgAdd":true,"ChangeMsgFlags":true,"ChangeMsgRemove":true,"ChangeMsgThread":true,"Domain":true,"DomainAddressConfig":true,"Envelope":true,"EventStart":true,"EventViewChanges":true,"EventViewErr":true,"EventViewMsgs":true,"EventViewReset":true,"File":true,"Filter":true,"Flags":true,"ForwardAttachments":true,"Mailbox":true,"Message":true,"MessageAddress":true,"MessageEnvelope":true,"MessageItem":true,"NotFilter":true,"Page":true,"ParsedMessage":true,"Part":true,"Query":true,"RecipientSecurity":true,"Request":true,"SpecialUse":true,"SubmitMessage":true}
+export const stringsTypes: {[typename: string]: boolean} = {"AttachmentType":true,"Localpart":true,"SecurityResult":true,"ThreadMode":true}
 export const intsTypes: {[typename: string]: boolean} = {"ModSeq":true,"UID":true,"Validation":true}
 export const types: TypenameMap = {
 	"Request": {"Name":"Request","Docs":"","Fields":[{"Name":"ID","Docs":"","Typewords":["int64"]},{"Name":"SSEID","Docs":"","Typewords":["int64"]},{"Name":"ViewID","Docs":"","Typewords":["int64"]},{"Name":"Cancel","Docs":"","Typewords":["bool"]},{"Name":"Query","Docs":"","Typewords":["Query"]},{"Name":"Page","Docs":"","Typewords":["Page"]}]},
@@ -500,17 +526,18 @@ export const types: TypenameMap = {
 	"Address": {"Name":"Address","Docs":"","Fields":[{"Name":"Name","Docs":"","Typewords":["string"]},{"Name":"User","Docs":"","Typewords":["string"]},{"Name":"Host","Docs":"","Typewords":["string"]}]},
 	"MessageAddress": {"Name":"MessageAddress","Docs":"","Fields":[{"Name":"Name","Docs":"","Typewords":["string"]},{"Name":"User","Docs":"","Typewords":["string"]},{"Name":"Domain","Docs":"","Typewords":["Domain"]}]},
 	"Domain": {"Name":"Domain","Docs":"","Fields":[{"Name":"ASCII","Docs":"","Typewords":["string"]},{"Name":"Unicode","Docs":"","Typewords":["string"]}]},
-	"SubmitMessage": {"Name":"SubmitMessage","Docs":"","Fields":[{"Name":"From","Docs":"","Typewords":["string"]},{"Name":"To","Docs":"","Typewords":["[]","string"]},{"Name":"Cc","Docs":"","Typewords":["[]","string"]},{"Name":"Bcc","Docs":"","Typewords":["[]","string"]},{"Name":"Subject","Docs":"","Typewords":["string"]},{"Name":"TextBody","Docs":"","Typewords":["string"]},{"Name":"Attachments","Docs":"","Typewords":["[]","File"]},{"Name":"ForwardAttachments","Docs":"","Typewords":["ForwardAttachments"]},{"Name":"IsForward","Docs":"","Typewords":["bool"]},{"Name":"ResponseMessageID","Docs":"","Typewords":["int64"]},{"Name":"ReplyTo","Docs":"","Typewords":["string"]},{"Name":"UserAgent","Docs":"","Typewords":["string"]}]},
+	"SubmitMessage": {"Name":"SubmitMessage","Docs":"","Fields":[{"Name":"From","Docs":"","Typewords":["string"]},{"Name":"To","Docs":"","Typewords":["[]","string"]},{"Name":"Cc","Docs":"","Typewords":["[]","string"]},{"Name":"Bcc","Docs":"","Typewords":["[]","string"]},{"Name":"Subject","Docs":"","Typewords":["string"]},{"Name":"TextBody","Docs":"","Typewords":["string"]},{"Name":"Attachments","Docs":"","Typewords":["[]","File"]},{"Name":"ForwardAttachments","Docs":"","Typewords":["ForwardAttachments"]},{"Name":"IsForward","Docs":"","Typewords":["bool"]},{"Name":"ResponseMessageID","Docs":"","Typewords":["int64"]},{"Name":"ReplyTo","Docs":"","Typewords":["string"]},{"Name":"UserAgent","Docs":"","Typewords":["string"]},{"Name":"RequireTLS","Docs":"","Typewords":["nullable","bool"]}]},
 	"File": {"Name":"File","Docs":"","Fields":[{"Name":"Filename","Docs":"","Typewords":["string"]},{"Name":"DataURI","Docs":"","Typewords":["string"]}]},
 	"ForwardAttachments": {"Name":"ForwardAttachments","Docs":"","Fields":[{"Name":"MessageID","Docs":"","Typewords":["int64"]},{"Name":"Paths","Docs":"","Typewords":["[]","[]","int32"]}]},
 	"Mailbox": {"Name":"Mailbox","Docs":"","Fields":[{"Name":"ID","Docs":"","Typewords":["int64"]},{"Name":"Name","Docs":"","Typewords":["string"]},{"Name":"UIDValidity","Docs":"","Typewords":["uint32"]},{"Name":"UIDNext","Docs":"","Typewords":["UID"]},{"Name":"Archive","Docs":"","Typewords":["bool"]},{"Name":"Draft","Docs":"","Typewords":["bool"]},{"Name":"Junk","Docs":"","Typewords":["bool"]},{"Name":"Sent","Docs":"","Typewords":["bool"]},{"Name":"Trash","Docs":"","Typewords":["bool"]},{"Name":"Keywords","Docs":"","Typewords":["[]","string"]},{"Name":"HaveCounts","Docs":"","Typewords":["bool"]},{"Name":"Total","Docs":"","Typewords":["int64"]},{"Name":"Deleted","Docs":"","Typewords":["int64"]},{"Name":"Unread","Docs":"","Typewords":["int64"]},{"Name":"Unseen","Docs":"","Typewords":["int64"]},{"Name":"Size","Docs":"","Typewords":["int64"]}]},
+	"RecipientSecurity": {"Name":"RecipientSecurity","Docs":"","Fields":[{"Name":"STARTTLS","Docs":"","Typewords":["SecurityResult"]},{"Name":"MTASTS","Docs":"","Typewords":["SecurityResult"]},{"Name":"DNSSEC","Docs":"","Typewords":["SecurityResult"]},{"Name":"DANE","Docs":"","Typewords":["SecurityResult"]},{"Name":"RequireTLS","Docs":"","Typewords":["SecurityResult"]}]},
 	"EventStart": {"Name":"EventStart","Docs":"","Fields":[{"Name":"SSEID","Docs":"","Typewords":["int64"]},{"Name":"LoginAddress","Docs":"","Typewords":["MessageAddress"]},{"Name":"Addresses","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"DomainAddressConfigs","Docs":"","Typewords":["{}","DomainAddressConfig"]},{"Name":"MailboxName","Docs":"","Typewords":["string"]},{"Name":"Mailboxes","Docs":"","Typewords":["[]","Mailbox"]}]},
 	"DomainAddressConfig": {"Name":"DomainAddressConfig","Docs":"","Fields":[{"Name":"LocalpartCatchallSeparator","Docs":"","Typewords":["string"]},{"Name":"LocalpartCaseSensitive","Docs":"","Typewords":["bool"]}]},
 	"EventViewErr": {"Name":"EventViewErr","Docs":"","Fields":[{"Name":"ViewID","Docs":"","Typewords":["int64"]},{"Name":"RequestID","Docs":"","Typewords":["int64"]},{"Name":"Err","Docs":"","Typewords":["string"]}]},
 	"EventViewReset": {"Name":"EventViewReset","Docs":"","Fields":[{"Name":"ViewID","Docs":"","Typewords":["int64"]},{"Name":"RequestID","Docs":"","Typewords":["int64"]}]},
 	"EventViewMsgs": {"Name":"EventViewMsgs","Docs":"","Fields":[{"Name":"ViewID","Docs":"","Typewords":["int64"]},{"Name":"RequestID","Docs":"","Typewords":["int64"]},{"Name":"MessageItems","Docs":"","Typewords":["[]","[]","MessageItem"]},{"Name":"ParsedMessage","Docs":"","Typewords":["nullable","ParsedMessage"]},{"Name":"ViewEnd","Docs":"","Typewords":["bool"]}]},
 	"MessageItem": {"Name":"MessageItem","Docs":"","Fields":[{"Name":"Message","Docs":"","Typewords":["Message"]},{"Name":"Envelope","Docs":"","Typewords":["MessageEnvelope"]},{"Name":"Attachments","Docs":"","Typewords":["[]","Attachment"]},{"Name":"IsSigned","Docs":"","Typewords":["bool"]},{"Name":"IsEncrypted","Docs":"","Typewords":["bool"]},{"Name":"FirstLine","Docs":"","Typewords":["string"]},{"Name":"MatchQuery","Docs":"","Typewords":["bool"]}]},
-	"Message": {"Name":"Message","Docs":"","Fields":[{"Name":"ID","Docs":"","Typewords":["int64"]},{"Name":"UID","Docs":"","Typewords":["UID"]},{"Name":"MailboxID","Docs":"","Typewords":["int64"]},{"Name":"ModSeq","Docs":"","Typewords":["ModSeq"]},{"Name":"CreateSeq","Docs":"","Typewords":["ModSeq"]},{"Name":"Expunged","Docs":"","Typewords":["bool"]},{"Name":"IsReject","Docs":"","Typewords":["bool"]},{"Name":"IsForward","Docs":"","Typewords":["bool"]},{"Name":"MailboxOrigID","Docs":"","Typewords":["int64"]},{"Name":"MailboxDestinedID","Docs":"","Typewords":["int64"]},{"Name":"Received","Docs":"","Typewords":["timestamp"]},{"Name":"RemoteIP","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked1","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked2","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked3","Docs":"","Typewords":["string"]},{"Name":"EHLODomain","Docs":"","Typewords":["string"]},{"Name":"MailFrom","Docs":"","Typewords":["string"]},{"Name":"MailFromLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"MailFromDomain","Docs":"","Typewords":["string"]},{"Name":"RcptToLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"RcptToDomain","Docs":"","Typewords":["string"]},{"Name":"MsgFromLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"MsgFromDomain","Docs":"","Typewords":["string"]},{"Name":"MsgFromOrgDomain","Docs":"","Typewords":["string"]},{"Name":"EHLOValidated","Docs":"","Typewords":["bool"]},{"Name":"MailFromValidated","Docs":"","Typewords":["bool"]},{"Name":"MsgFromValidated","Docs":"","Typewords":["bool"]},{"Name":"EHLOValidation","Docs":"","Typewords":["Validation"]},{"Name":"MailFromValidation","Docs":"","Typewords":["Validation"]},{"Name":"MsgFromValidation","Docs":"","Typewords":["Validation"]},{"Name":"DKIMDomains","Docs":"","Typewords":["[]","string"]},{"Name":"OrigEHLODomain","Docs":"","Typewords":["string"]},{"Name":"OrigDKIMDomains","Docs":"","Typewords":["[]","string"]},{"Name":"MessageID","Docs":"","Typewords":["string"]},{"Name":"SubjectBase","Docs":"","Typewords":["string"]},{"Name":"MessageHash","Docs":"","Typewords":["nullable","string"]},{"Name":"ThreadID","Docs":"","Typewords":["int64"]},{"Name":"ThreadParentIDs","Docs":"","Typewords":["[]","int64"]},{"Name":"ThreadMissingLink","Docs":"","Typewords":["bool"]},{"Name":"ThreadMuted","Docs":"","Typewords":["bool"]},{"Name":"ThreadCollapsed","Docs":"","Typewords":["bool"]},{"Name":"Seen","Docs":"","Typewords":["bool"]},{"Name":"Answered","Docs":"","Typewords":["bool"]},{"Name":"Flagged","Docs":"","Typewords":["bool"]},{"Name":"Forwarded","Docs":"","Typewords":["bool"]},{"Name":"Junk","Docs":"","Typewords":["bool"]},{"Name":"Notjunk","Docs":"","Typewords":["bool"]},{"Name":"Deleted","Docs":"","Typewords":["bool"]},{"Name":"Draft","Docs":"","Typewords":["bool"]},{"Name":"Phishing","Docs":"","Typewords":["bool"]},{"Name":"MDNSent","Docs":"","Typewords":["bool"]},{"Name":"Keywords","Docs":"","Typewords":["[]","string"]},{"Name":"Size","Docs":"","Typewords":["int64"]},{"Name":"TrainedJunk","Docs":"","Typewords":["nullable","bool"]},{"Name":"MsgPrefix","Docs":"","Typewords":["nullable","string"]},{"Name":"ParsedBuf","Docs":"","Typewords":["nullable","string"]}]},
+	"Message": {"Name":"Message","Docs":"","Fields":[{"Name":"ID","Docs":"","Typewords":["int64"]},{"Name":"UID","Docs":"","Typewords":["UID"]},{"Name":"MailboxID","Docs":"","Typewords":["int64"]},{"Name":"ModSeq","Docs":"","Typewords":["ModSeq"]},{"Name":"CreateSeq","Docs":"","Typewords":["ModSeq"]},{"Name":"Expunged","Docs":"","Typewords":["bool"]},{"Name":"IsReject","Docs":"","Typewords":["bool"]},{"Name":"IsForward","Docs":"","Typewords":["bool"]},{"Name":"MailboxOrigID","Docs":"","Typewords":["int64"]},{"Name":"MailboxDestinedID","Docs":"","Typewords":["int64"]},{"Name":"Received","Docs":"","Typewords":["timestamp"]},{"Name":"RemoteIP","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked1","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked2","Docs":"","Typewords":["string"]},{"Name":"RemoteIPMasked3","Docs":"","Typewords":["string"]},{"Name":"EHLODomain","Docs":"","Typewords":["string"]},{"Name":"MailFrom","Docs":"","Typewords":["string"]},{"Name":"MailFromLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"MailFromDomain","Docs":"","Typewords":["string"]},{"Name":"RcptToLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"RcptToDomain","Docs":"","Typewords":["string"]},{"Name":"MsgFromLocalpart","Docs":"","Typewords":["Localpart"]},{"Name":"MsgFromDomain","Docs":"","Typewords":["string"]},{"Name":"MsgFromOrgDomain","Docs":"","Typewords":["string"]},{"Name":"EHLOValidated","Docs":"","Typewords":["bool"]},{"Name":"MailFromValidated","Docs":"","Typewords":["bool"]},{"Name":"MsgFromValidated","Docs":"","Typewords":["bool"]},{"Name":"EHLOValidation","Docs":"","Typewords":["Validation"]},{"Name":"MailFromValidation","Docs":"","Typewords":["Validation"]},{"Name":"MsgFromValidation","Docs":"","Typewords":["Validation"]},{"Name":"DKIMDomains","Docs":"","Typewords":["[]","string"]},{"Name":"OrigEHLODomain","Docs":"","Typewords":["string"]},{"Name":"OrigDKIMDomains","Docs":"","Typewords":["[]","string"]},{"Name":"MessageID","Docs":"","Typewords":["string"]},{"Name":"SubjectBase","Docs":"","Typewords":["string"]},{"Name":"MessageHash","Docs":"","Typewords":["nullable","string"]},{"Name":"ThreadID","Docs":"","Typewords":["int64"]},{"Name":"ThreadParentIDs","Docs":"","Typewords":["[]","int64"]},{"Name":"ThreadMissingLink","Docs":"","Typewords":["bool"]},{"Name":"ThreadMuted","Docs":"","Typewords":["bool"]},{"Name":"ThreadCollapsed","Docs":"","Typewords":["bool"]},{"Name":"IsMailingList","Docs":"","Typewords":["bool"]},{"Name":"ReceivedTLSVersion","Docs":"","Typewords":["uint16"]},{"Name":"ReceivedTLSCipherSuite","Docs":"","Typewords":["uint16"]},{"Name":"ReceivedRequireTLS","Docs":"","Typewords":["bool"]},{"Name":"Seen","Docs":"","Typewords":["bool"]},{"Name":"Answered","Docs":"","Typewords":["bool"]},{"Name":"Flagged","Docs":"","Typewords":["bool"]},{"Name":"Forwarded","Docs":"","Typewords":["bool"]},{"Name":"Junk","Docs":"","Typewords":["bool"]},{"Name":"Notjunk","Docs":"","Typewords":["bool"]},{"Name":"Deleted","Docs":"","Typewords":["bool"]},{"Name":"Draft","Docs":"","Typewords":["bool"]},{"Name":"Phishing","Docs":"","Typewords":["bool"]},{"Name":"MDNSent","Docs":"","Typewords":["bool"]},{"Name":"Keywords","Docs":"","Typewords":["[]","string"]},{"Name":"Size","Docs":"","Typewords":["int64"]},{"Name":"TrainedJunk","Docs":"","Typewords":["nullable","bool"]},{"Name":"MsgPrefix","Docs":"","Typewords":["nullable","string"]},{"Name":"ParsedBuf","Docs":"","Typewords":["nullable","string"]}]},
 	"MessageEnvelope": {"Name":"MessageEnvelope","Docs":"","Fields":[{"Name":"Date","Docs":"","Typewords":["timestamp"]},{"Name":"Subject","Docs":"","Typewords":["string"]},{"Name":"From","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"Sender","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"ReplyTo","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"To","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"CC","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"BCC","Docs":"","Typewords":["[]","MessageAddress"]},{"Name":"InReplyTo","Docs":"","Typewords":["string"]},{"Name":"MessageID","Docs":"","Typewords":["string"]}]},
 	"Attachment": {"Name":"Attachment","Docs":"","Fields":[{"Name":"Path","Docs":"","Typewords":["[]","int32"]},{"Name":"Filename","Docs":"","Typewords":["string"]},{"Name":"Part","Docs":"","Typewords":["Part"]}]},
 	"EventViewChanges": {"Name":"EventViewChanges","Docs":"","Fields":[{"Name":"ViewID","Docs":"","Typewords":["int64"]},{"Name":"Changes","Docs":"","Typewords":["[]","[]","any"]}]},
@@ -531,6 +558,7 @@ export const types: TypenameMap = {
 	"Validation": {"Name":"Validation","Docs":"","Values":[{"Name":"ValidationUnknown","Value":0,"Docs":""},{"Name":"ValidationStrict","Value":1,"Docs":""},{"Name":"ValidationDMARC","Value":2,"Docs":""},{"Name":"ValidationRelaxed","Value":3,"Docs":""},{"Name":"ValidationPass","Value":4,"Docs":""},{"Name":"ValidationNeutral","Value":5,"Docs":""},{"Name":"ValidationTemperror","Value":6,"Docs":""},{"Name":"ValidationPermerror","Value":7,"Docs":""},{"Name":"ValidationFail","Value":8,"Docs":""},{"Name":"ValidationSoftfail","Value":9,"Docs":""},{"Name":"ValidationNone","Value":10,"Docs":""}]},
 	"ThreadMode": {"Name":"ThreadMode","Docs":"","Values":[{"Name":"ThreadOff","Value":"off","Docs":""},{"Name":"ThreadOn","Value":"on","Docs":""},{"Name":"ThreadUnread","Value":"unread","Docs":""}]},
 	"AttachmentType": {"Name":"AttachmentType","Docs":"","Values":[{"Name":"AttachmentIndifferent","Value":"","Docs":""},{"Name":"AttachmentNone","Value":"none","Docs":""},{"Name":"AttachmentAny","Value":"any","Docs":""},{"Name":"AttachmentImage","Value":"image","Docs":""},{"Name":"AttachmentPDF","Value":"pdf","Docs":""},{"Name":"AttachmentArchive","Value":"archive","Docs":""},{"Name":"AttachmentSpreadsheet","Value":"spreadsheet","Docs":""},{"Name":"AttachmentDocument","Value":"document","Docs":""},{"Name":"AttachmentPresentation","Value":"presentation","Docs":""}]},
+	"SecurityResult": {"Name":"SecurityResult","Docs":"","Values":[{"Name":"SecurityResultError","Value":"error","Docs":""},{"Name":"SecurityResultNo","Value":"no","Docs":""},{"Name":"SecurityResultYes","Value":"yes","Docs":""},{"Name":"SecurityResultUnknown","Value":"unknown","Docs":""}]},
 	"Localpart": {"Name":"Localpart","Docs":"","Values":null},
 }
 
@@ -550,6 +578,7 @@ export const parser = {
 	File: (v: any) => parse("File", v) as File,
 	ForwardAttachments: (v: any) => parse("ForwardAttachments", v) as ForwardAttachments,
 	Mailbox: (v: any) => parse("Mailbox", v) as Mailbox,
+	RecipientSecurity: (v: any) => parse("RecipientSecurity", v) as RecipientSecurity,
 	EventStart: (v: any) => parse("EventStart", v) as EventStart,
 	DomainAddressConfig: (v: any) => parse("DomainAddressConfig", v) as DomainAddressConfig,
 	EventViewErr: (v: any) => parse("EventViewErr", v) as EventViewErr,
@@ -577,6 +606,7 @@ export const parser = {
 	Validation: (v: any) => parse("Validation", v) as Validation,
 	ThreadMode: (v: any) => parse("ThreadMode", v) as ThreadMode,
 	AttachmentType: (v: any) => parse("AttachmentType", v) as AttachmentType,
+	SecurityResult: (v: any) => parse("SecurityResult", v) as SecurityResult,
 	Localpart: (v: any) => parse("Localpart", v) as Localpart,
 }
 
@@ -756,6 +786,16 @@ export class Client {
 		const returnTypes: string[][] = []
 		const params: any[] = [messageIDs, mute]
 		return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params) as void
+	}
+
+	// RecipientSecurity looks up security properties of the address in the
+	// single-address message addressee (as it appears in a To/Cc/Bcc/etc header).
+	async RecipientSecurity(messageAddressee: string): Promise<RecipientSecurity> {
+		const fn: string = "RecipientSecurity"
+		const paramTypes: string[][] = [["string"]]
+		const returnTypes: string[][] = [["RecipientSecurity"]]
+		const params: any[] = [messageAddressee]
+		return await _sherpaCall(this.baseURL, { ...this.options }, paramTypes, returnTypes, fn, params) as RecipientSecurity
 	}
 
 	// SSETypes exists to ensure the generated API contains the types, for use in SSE events.

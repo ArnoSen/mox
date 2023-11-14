@@ -57,9 +57,18 @@ type Static struct {
 		Account string
 		Mailbox string `sconf-doc:"E.g. Postmaster or Inbox."`
 	} `sconf-doc:"Destination for emails delivered to postmaster addresses: a plain 'postmaster' without domain, 'postmaster@<hostname>' (also for each listener with SMTP enabled), and as fallback for each domain without explicitly configured postmaster destination."`
-	InitialMailboxes InitialMailboxes     `sconf:"optional" sconf-doc:"Mailboxes to create for new accounts. Inbox is always created. Mailboxes can be given a 'special-use' role, which are understood by most mail clients. If absent/empty, the following mailboxes are created: Sent, Archive, Trash, Drafts and Junk."`
-	DefaultMailboxes []string             `sconf:"optional" sconf-doc:"Deprecated in favor of InitialMailboxes. Mailboxes to create when adding an account. Inbox is always created. If no mailboxes are specified, the following are automatically created: Sent, Archive, Trash, Drafts and Junk."`
-	Transports       map[string]Transport `sconf:"optional" sconf-doc:"Transport are mechanisms for delivering messages. Transports can be referenced from Routes in accounts, domains and the global configuration. There is always an implicit/fallback delivery transport doing direct delivery with SMTP from the outgoing message queue. Transports are typically only configured when using smarthosts, i.e. when delivering through another SMTP server. Zero or one transport methods must be set in a transport, never multiple. When using an external party to send email for a domain, keep in mind you may have to add their IP address to your domain's SPF record, and possibly additional DKIM records."`
+	HostTLSRPT struct {
+		Account   string `sconf-doc:"Account to deliver TLS reports to. Typically same account as for postmaster."`
+		Mailbox   string `sconf-doc:"Mailbox to deliver TLS reports to. Recommended value: TLSRPT."`
+		Localpart string `sconf-doc:"Localpart at hostname to accept TLS reports at. Recommended value: tls-reports."`
+
+		ParsedLocalpart smtp.Localpart `sconf:"-"`
+	} `sconf:"optional" sconf-doc:"Destination for per-host TLS reports (TLSRPT). TLS reports can be per recipient domain (for MTA-STS), or per MX host (for DANE). The per-domain TLS reporting configuration is in domains.conf. This is the TLS reporting configuration for this host. If absent, no host-based TLSRPT address is configured, and no host TLSRPT DNS record is suggested."`
+	InitialMailboxes       InitialMailboxes     `sconf:"optional" sconf-doc:"Mailboxes to create for new accounts. Inbox is always created. Mailboxes can be given a 'special-use' role, which are understood by most mail clients. If absent/empty, the following mailboxes are created: Sent, Archive, Trash, Drafts and Junk."`
+	DefaultMailboxes       []string             `sconf:"optional" sconf-doc:"Deprecated in favor of InitialMailboxes. Mailboxes to create when adding an account. Inbox is always created. If no mailboxes are specified, the following are automatically created: Sent, Archive, Trash, Drafts and Junk."`
+	Transports             map[string]Transport `sconf:"optional" sconf-doc:"Transport are mechanisms for delivering messages. Transports can be referenced from Routes in accounts, domains and the global configuration. There is always an implicit/fallback delivery transport doing direct delivery with SMTP from the outgoing message queue. Transports are typically only configured when using smarthosts, i.e. when delivering through another SMTP server. Zero or one transport methods must be set in a transport, never multiple. When using an external party to send email for a domain, keep in mind you may have to add their IP address to your domain's SPF record, and possibly additional DKIM records."`
+	NoOutgoingDMARCReports bool                 `sconf:"optional" sconf-doc:"Do not send DMARC reports (aggregate only). By default, aggregate reports on DMARC evaluations are sent to domains if their DMARC policy requests them. Reports are sent at whole hours, with a minimum of 1 hour and maximum of 24 hours, rounded up so a whole number of intervals cover 24 hours, aligned at whole days in UTC."`
+	NoOutgoingTLSReports   bool                 `sconf:"optional" sconf-doc:"Do not send TLS reports. By default, reports about successful and failed SMTP STARTTLS connections are sent to domains if their TLSRPT DNS record requests them. Reports covering a 24 hour UTC interval are sent daily."`
 
 	// All IPs that were explicitly listen on for external SMTP. Only set when there
 	// are no unspecified external SMTP listeners and there is at most one for IPv4 and
@@ -123,10 +132,14 @@ type Listener struct {
 	SMTPMaxMessageSize int64 `sconf:"optional" sconf-doc:"Maximum size in bytes for incoming and outgoing messages. Default is 100MB."`
 	SMTP               struct {
 		Enabled         bool
-		Port            int      `sconf:"optional" sconf-doc:"Default 25."`
-		NoSTARTTLS      bool     `sconf:"optional" sconf-doc:"Do not offer STARTTLS to secure the connection. Not recommended."`
-		RequireSTARTTLS bool     `sconf:"optional" sconf-doc:"Do not accept incoming messages if STARTTLS is not active. Can be used in combination with a strict MTA-STS policy. A remote SMTP server may not support TLS and may not be able to deliver messages."`
-		DNSBLs          []string `sconf:"optional" sconf-doc:"Addresses of DNS block lists for incoming messages. Block lists are only consulted for connections/messages without enough reputation to make an accept/reject decision. This prevents sending IPs of all communications to the block list provider. If any of the listed DNSBLs contains a requested IP address, the message is rejected as spam. The DNSBLs are checked for healthiness before use, at most once per 4 hours. Example DNSBLs: sbl.spamhaus.org, bl.spamcop.net. See https://www.spamhaus.org/sbl/ and https://www.spamcop.net/ for more information and terms of use."`
+		Port            int  `sconf:"optional" sconf-doc:"Default 25."`
+		NoSTARTTLS      bool `sconf:"optional" sconf-doc:"Do not offer STARTTLS to secure the connection. Not recommended."`
+		RequireSTARTTLS bool `sconf:"optional" sconf-doc:"Do not accept incoming messages if STARTTLS is not active. Consider using in combination with an MTA-STS policy and/or DANE. A remote SMTP server may not support TLS and may not be able to deliver messages. Incoming messages for TLS reporting addresses ignore this setting and do not require TLS."`
+		NoRequireTLS    bool `sconf:"optional" sconf-doc:"Do not announce the REQUIRETLS SMTP extension. Messages delivered using the REQUIRETLS extension should only be distributed onwards to servers also implementing the REQUIRETLS extension. In some situations, such as hosting mailing lists, this may not be feasible due to lack of support for the extension by mailing list subscribers."`
+		// Reoriginated messages (such as messages sent to mailing list subscribers) should
+		// keep REQUIRETLS. ../rfc/8689:412
+
+		DNSBLs []string `sconf:"optional" sconf-doc:"Addresses of DNS block lists for incoming messages. Block lists are only consulted for connections/messages without enough reputation to make an accept/reject decision. This prevents sending IPs of all communications to the block list provider. If any of the listed DNSBLs contains a requested IP address, the message is rejected as spam. The DNSBLs are checked for healthiness before use, at most once per 4 hours. Example DNSBLs: sbl.spamhaus.org, bl.spamcop.net. See https://www.spamhaus.org/sbl/ and https://www.spamcop.net/ for more information and terms of use."`
 
 		FirstTimeSenderDelay *time.Duration `sconf:"optional" sconf-doc:"Delay before accepting a message from a first-time sender for the destination account. Default: 15s."`
 
@@ -306,7 +319,7 @@ type Selector struct {
 		BodyRelaxed   bool `sconf-doc:"If set, some whitespace modifications to the message body are allowed."`
 	} `sconf:"optional"`
 	Headers          []string `sconf:"optional" sconf-doc:"Headers to sign with DKIM. If empty, a reasonable default set of headers is selected."`
-	HeadersEffective []string `sconf:"-"`
+	HeadersEffective []string `sconf:"-"` // Used when signing. Based on Headers from config, or the reasonable default.
 	DontSealHeaders  bool     `sconf:"optional" sconf-doc:"If set, don't prevent duplicate headers from being added. Not recommended."`
 	Expiration       string   `sconf:"optional" sconf-doc:"Period a signature is valid after signing, as duration, e.g. 72h. The period should be enough for delivery at the final destination, potentially with several hops/relays. In the order of days at least."`
 	PrivateKeyFile   string   `sconf-doc:"Either an RSA or ed25519 private key file in PKCS8 PEM form."`
@@ -371,8 +384,9 @@ type Destination struct {
 	Rulesets []Ruleset `sconf:"optional" sconf-doc:"Delivery rules based on message and SMTP transaction. You may want to match each mailing list by SMTP MailFrom address, VerifiedDomain and/or List-ID header (typically <listname.example.org> if the list address is listname@example.org), delivering them to their own mailbox."`
 	FullName string    `sconf:"optional" sconf-doc:"Full name to use in message From header when composing messages coming from this address with webmail."`
 
-	DMARCReports bool `sconf:"-" json:"-"`
-	TLSReports   bool `sconf:"-" json:"-"`
+	DMARCReports     bool `sconf:"-" json:"-"`
+	HostTLSReports   bool `sconf:"-" json:"-"`
+	DomainTLSReports bool `sconf:"-" json:"-"`
 }
 
 // Equal returns whether d and o are equal, only looking at their user-changeable fields.
@@ -424,12 +438,15 @@ type KeyCert struct {
 }
 
 type TLS struct {
-	ACME       string    `sconf:"optional" sconf-doc:"Name of provider from top-level configuration to use for ACME, e.g. letsencrypt."`
-	KeyCerts   []KeyCert `sconf:"optional" sconf-doc:"Key and certificate files are opened by the privileged root process and passed to the unprivileged mox process, so no special permissions are required."`
-	MinVersion string    `sconf:"optional" sconf-doc:"Minimum TLS version. Default: TLSv1.2."`
+	ACME                string    `sconf:"optional" sconf-doc:"Name of provider from top-level configuration to use for ACME, e.g. letsencrypt."`
+	KeyCerts            []KeyCert `sconf:"optional" sconf-doc:"Keys and certificates to use for this listener. The files are opened by the privileged root process and passed to the unprivileged mox process, so no special permissions are required on the files. If the private key will not be replaced when refreshing certificates, also consider adding the private key to HostPrivateKeyFiles and configuring DANE TLSA DNS records."`
+	MinVersion          string    `sconf:"optional" sconf-doc:"Minimum TLS version. Default: TLSv1.2."`
+	HostPrivateKeyFiles []string  `sconf:"optional" sconf-doc:"Private keys used for ACME certificates. Specified explicitly so DANE TLSA DNS records can be generated, even before the certificates are requested. DANE is a mechanism to authenticate remote TLS certificates based on a public key or certificate specified in DNS, protected with DNSSEC. DANE is opportunistic and attempted when delivering SMTP with STARTTLS. The private key files must be in PEM format. PKCS8 is recommended, but PKCS1 and EC private keys are recognized as well. Only RSA 2048 bit and ECDSA P-256 keys are currently used. The first of each is used when requesting new certificates through ACME."`
 
-	Config     *tls.Config `sconf:"-" json:"-"` // TLS config for non-ACME-verification connections, i.e. SMTP and IMAP, and not port 443.
-	ACMEConfig *tls.Config `sconf:"-" json:"-"` // TLS config that handles ACME verification, for serving on port 443.
+	Config                   *tls.Config     `sconf:"-" json:"-"` // TLS config for non-ACME-verification connections, i.e. SMTP and IMAP, and not port 443.
+	ACMEConfig               *tls.Config     `sconf:"-" json:"-"` // TLS config that handles ACME verification, for serving on port 443.
+	HostPrivateRSA2048Keys   []crypto.Signer `sconf:"-" json:"-"` // Private keys for new TLS certificates for listener host name, for new certificates with ACME, and for DANE records.
+	HostPrivateECDSAP256Keys []crypto.Signer `sconf:"-" json:"-"`
 }
 
 type WebHandler struct {
