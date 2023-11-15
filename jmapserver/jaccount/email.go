@@ -1014,43 +1014,38 @@ func recursePartToEmailBodyPart(subparts []message.Part, idInt64 int64, bodyProp
 	}
 }
 
-func (jem JEmail) GetPartBody(partID string) (string, *mlevelerrors.MethodLevelError) {
+func (jem JEmail) GetPartBody(partIDToLookFor string) (string, *mlevelerrors.MethodLevelError) {
 	//this can later be reused to get a particular BlobId
 	//since BlobIds have a Global Scope, we need to add a prefix
 
 	//FIXME I would need the structure so I can parse at least the content type
 
-	if jem.part.MediaType != "MULTIPART" {
-		if partID == "0" {
-			//FIXME this does not work for a multipart body
-			fullBody, err := io.ReadAll(jem.part.Reader())
+	nextNum := 0
+	return searchPartRecursive(partIDToLookFor, jem.part, &nextNum)
+
+}
+
+func searchPartRecursive(partID string, part message.Part, nextNum *int) (string, *mlevelerrors.MethodLevelError) {
+	//FIXME need an error to indicate the part was not found
+	fmt.Printf("looking for part %s\n", partID)
+	fmt.Printf("mediatype is %s-%s\n", part.MediaType, part.MediaSubType)
+	fmt.Printf("nextnum is %d\n", *nextNum)
+	if part.MediaType != "MULTIPART" {
+		fmt.Printf("partID %s =? %d\n", partID, *nextNum)
+		if partID == fmt.Sprintf("%d", *nextNum) {
+			fullBody, err := io.ReadAll(part.Reader())
 			if err != nil {
 				return "", mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			return string(fullBody), nil
 		}
-		return searchPartRecursive(partID, jem.part.Parts, 1)
+		*nextNum++
+		fmt.Printf("new next num is %d\n", *nextNum)
 	}
-	return searchPartRecursive(partID, jem.part.Parts, 0)
-
-}
-
-func searchPartRecursive(partID string, parts []message.Part, nextNum int) (string, *mlevelerrors.MethodLevelError) {
-	//FIXME need an error to indicate the part was not found
-	for _, p := range parts {
-		if p.MediaType != "MULTIPART" {
-			if partID == fmt.Sprintf("%d", nextNum) {
-				fullBody, err := io.ReadAll(p.Reader())
-				if err != nil {
-					return "", mlevelerrors.NewMethodLevelErrorServerFail()
-				}
-				return string(fullBody), nil
-			}
-			nextNum++
-
-			if len(p.Parts) > 0 {
-				searchPartRecursive(partID, p.Parts, nextNum)
-			}
+	for _, subPart := range part.Parts {
+		body, err := searchPartRecursive(partID, subPart, nextNum)
+		if err == nil && body != "" {
+			return body, err
 		}
 	}
 	return "", nil
@@ -1063,10 +1058,6 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 
 	uniquePartsToGet := make(map[string]any, 0)
 
-	toIncludeFunc := func(contentType *string, partId *string) bool {
-		return contentType != nil && strings.HasPrefix(*contentType, "text/") && partId != nil
-	}
-
 	//fetchAllBodyValues is a combination of fetchTextBodyValues and fetchHTMLBodyValues
 
 	if fetchTextBodyValues || fetchAllBodyValues {
@@ -1076,10 +1067,8 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 			return nil, mErr
 		}
 
-		fmt.Printf("got %d texbody parts\n", len(textBodyParts))
-
 		for _, bp := range textBodyParts {
-			if toIncludeFunc(bp.Type, bp.PartId) {
+			if bp.Type != nil && strings.HasPrefix(*bp.Type, "text/") {
 				uniquePartsToGet[*bp.PartId] = nil
 			}
 		}
@@ -1092,7 +1081,7 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 
 		for _, bp := range htmlBodyParts {
-			if toIncludeFunc(bp.Type, bp.PartId) {
+			if bp.Type != nil && strings.HasPrefix(*bp.Type, "text/") {
 				uniquePartsToGet[*bp.PartId] = nil
 			}
 		}
@@ -1100,21 +1089,22 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 
 	for partId := range uniquePartsToGet {
 		bodyVal, mErr := jem.GetPartBody(partId)
-		if mErr == nil {
-			//FIXME make sure not to cut in a HREF link
+		if mErr != nil {
+			return nil, mErr
+		}
 
-			var truncated bool
-			if maxBodyValueBytes != nil {
-				if len(bodyVal) > int(*maxBodyValueBytes) {
-					bodyVal = string(bodyVal[:*maxBodyValueBytes])
-					truncated = true
-				}
+		//FIXME make sure not to cut in a HREF link
+		var truncated bool
+		if maxBodyValueBytes != nil {
+			if len(bodyVal) > int(*maxBodyValueBytes) {
+				bodyVal = string(bodyVal[:*maxBodyValueBytes])
+				truncated = true
 			}
+		}
 
-			result[partId] = EmailBodyValue{
-				Value:       bodyVal,
-				IsTruncated: truncated,
-			}
+		result[partId] = EmailBodyValue{
+			Value:       bodyVal,
+			IsTruncated: truncated,
 		}
 	}
 	return result, nil
@@ -1123,13 +1113,16 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 // TextBody returns a list of EmailBodyParts of type text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
 func (jem JEmail) TextBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	// A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeText), nil
+
+	nextPartID := 0
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeText), nil
 }
 
 // TextBody returns a list of EmailBodyParts of type text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
 func (jem JEmail) HTMLBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	//A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeHTML), nil
+	nextPartID := 0
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeHTML), nil
 }
 
 func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
@@ -1138,7 +1131,8 @@ func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevel
 		- not of type multipart/* and not included in textBody or htmlBody
 		- of type image/*, audio/*, or video/* and not in both textBody and htmlBody
 	*/
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, bodyProperties, flattenTypeAttachments), nil
+	nextPartID := 0
+	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeAttachments), nil
 }
 
 // includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
@@ -1150,58 +1144,57 @@ const (
 	flattenTypeAttachments
 )
 
-func flattenPartToEmailBodyPart(part message.Part, idInt64 int64, bodyProperties []string, flattenType flattenType) []EmailBodyPart {
+func flattenPartToEmailBodyPart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string, flattenType flattenType) []EmailBodyPart {
 	//FIXME need to recurse and support flattenTypeAttachments
 
 	var result []EmailBodyPart
 
-	partID := 0
-	topLevelPart := partToEmailBodyPart(part, &partID, idInt64, bodyProperties)
+	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
 
 	//FIXME this is far from complete but we need something as a start
 
-	fmt.Println("check for multipart alternative")
-	fmt.Printf("content type is %q\n", *topLevelPart.Type)
-	fmt.Printf("is multipart/alternative: %v\n", strings.HasPrefix(*topLevelPart.Type, "multipart/alternative"))
-	if topLevelPart.Type != nil && strings.HasPrefix(*topLevelPart.Type, "multipart/alternative") {
-		//we have something to chose from
-		fmt.Println("here")
+	if topLevelPart.Type != nil {
 
-		for _, p := range part.Parts {
-			partBodyPart := partToEmailBodyPart(p, &partID, idInt64, bodyProperties)
+		if flattenType == flattenTypeText || flattenType == flattenTypeHTML {
+			switch {
+			case strings.HasPrefix(*topLevelPart.Type, "multipart/alternative"):
+				for _, p := range part.Parts {
+					partBodyPart := partToEmailBodyPart(p, nextPartID, messageIDInt64, bodyProperties)
 
-			switch flattenType {
-			case flattenTypeHTML:
-				if partBodyPart.Type != nil && *partBodyPart.Type == "text/html" {
-					result = append(result, partBodyPart)
+					switch flattenType {
+					case flattenTypeHTML:
+						if partBodyPart.Type != nil && *partBodyPart.Type == "text/html" {
+							result = append(result, partBodyPart)
+						}
+					case flattenTypeText:
+						if partBodyPart.Type != nil && *partBodyPart.Type == "text/plain" {
+							result = append(result, partBodyPart)
+						}
+					}
+					for _, pParts := range p.Parts {
+						result = append(result, flattenPartToEmailBodyPart(pParts, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
+					}
 				}
-			case flattenTypeText:
-				if partBodyPart.Type != nil && *partBodyPart.Type == "text/plain" {
-					result = append(result, partBodyPart)
-				}
-			}
-		}
-	} else {
-		ct := topLevelPart.Type
-
-		var include bool
-
-		if ct != nil {
-			switch flattenType {
-			case flattenTypeText, flattenTypeHTML:
+			default:
+				var include bool
 				switch {
-				case HasAny([]string{"text/plain", "text/html"}, *ct):
+				case HasAny([]string{"text/plain", "text/html"}, *topLevelPart.Type):
 					include = true
-				case strings.HasPrefix(*ct, "image/"), strings.HasPrefix(*ct, "audio/"), strings.HasPrefix(*ct, "video/"):
+				case strings.HasPrefix(*topLevelPart.Type, "image/"), strings.HasPrefix(*topLevelPart.Type, "audio/"), strings.HasPrefix(*topLevelPart.Type, "video/"):
 					include = true
+				}
+
+				if include {
+					result = append(result, topLevelPart)
+				}
+
+				for _, p := range part.Parts {
+					result = append(result, flattenPartToEmailBodyPart(p, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
 				}
 
 			}
 		}
 
-		if include {
-			result = append(result, topLevelPart)
-		}
 	}
 
 	return result
@@ -1235,7 +1228,10 @@ func (jp JPart) Cid() *string {
 	if jp.p.ContentID == "" {
 		return nil
 	}
-	return &jp.p.ContentID
+	//brackets need to go
+	result := strings.TrimPrefix(jp.p.ContentID, "<")
+	result = strings.TrimSuffix(result, ">")
+	return &result
 }
 
 func (jp JPart) Headers() []EmailHeader {

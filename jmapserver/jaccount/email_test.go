@@ -434,29 +434,175 @@ Content-Transfer-Encoding: 7bit
 				AssertEqualString(t, "text/html", *bodyStructure.SubParts[1].Type)
 			}
 
-			//FIXME do the bodyvalues part
+			/*
+				bvTxt, mErr := jem.BodyValues(true, false, false, nil)
+				RequireNoError(t, mErr)
+				AssertEqualInt(t, 1, len(bvTxt))
 
-			bvTxt, mErr := jem.BodyValues(true, false, false, nil)
-			RequireNoError(t, mErr)
-			AssertEqualInt(t, 1, len(bvTxt))
-
-			if textValue, ok := bvTxt["0"]; !ok {
-				t.Logf("was expecting partId 0 in body values map")
-				t.FailNow()
-			} else {
-				AssertEqualString(t, "Hi,\r\n\r\nA.\r\n", textValue.Value)
-			}
+					if textValue, ok := bvTxt["0"]; !ok {
+						t.Logf("was expecting partId 0 in body values map")
+						t.FailNow()
+					} else {
+						AssertEqualString(t, "Hi,\r\n\r\nA.\r\n", textValue.Value)
+					}
+			*/
 
 			bvHTML, mErr := jem.BodyValues(false, true, false, nil)
 			RequireNoError(t, mErr)
 			AssertEqualInt(t, 1, len(bvHTML))
 
 			if textValue, ok := bvHTML["1"]; !ok {
-				t.Logf("was expecting partId 0 in body values map")
+				t.Logf("was expecting partId 1 in body values map")
 				t.FailNow()
 			} else {
 				AssertEqualString(t, "<html></html>\r\n", textValue.Value)
 			}
+		})
+
+		t.Run("Mail to JEmail. Picture", func(t *testing.T) {
+			mail := `X-Mox-Reason: msgtofull
+Delivered-To: jmap@km42.nl
+Return-Path: <me@km42.nl>
+Authentication-Results: mail.km42.nl; iprev=pass (without dnssec)
+	policy.iprev=2a02:2770::21a:4aff:fe09:2980; dkim=pass (without dnssec)
+	header.d=km42.nl header.s=2023a header.a=ed25519-sha256 header.b=MloqXOsyamEz
+	header.i=me@km42.nl; dkim=pass (2048 bit rsa, without dnssec)
+	header.d=km42.nl header.s=2023b header.a=rsa-sha256 header.b=YRfIQ8JhSMMK
+	header.i=me@km42.nl; spf=pass (without dnssec) smtp.mailfrom=km42.nl;
+	dmarc=pass (without dnssec) header.from=km42.nl
+Received-SPF: pass (domain km42.nl) client-ip="2a02:2770::21a:4aff:fe09:2980";
+	envelope-from="me@km42.nl"; helo=mail.km42.nl;
+	mechanism="ip6:2a02:2770::21a:4aff:fe09:2980"; receiver=mail.km42.nl;
+	identity=mailfrom
+Received: from mail.km42.nl ([IPv6:2a02:2770::21a:4aff:fe09:2980]) by
+	mail.km42.nl ([IPv6:2a02:2770::21a:4aff:fe09:2980]) via tcp with ESMTPS id
+	7_jO3KP4COnlTQm3SYtefQ (TLS1.3 TLS_AES_128_GCM_SHA256) for <jmap@km42.nl>;
+	15 Nov 2023 21:38:59 +0100
+Received: from mail.km42.nl by mail.km42.nl ([46.19.33.172]) via tcp with
+	ESMTPSA id Kn4f0j26XW4HmrhWCoWxTQ (TLS1.3 TLS_AES_128_GCM_SHA256) for
+	<jmap@km42.nl>; 15 Nov 2023 21:38:59 +0100
+DKIM-Signature: v=1; d=km42.nl; s=2023a; i=me@km42.nl; a=ed25519-sha256;
+	t=1700080739; x=1700339939; h=From:To:Cc:Bcc:Reply-To:References:In-Reply-To:
+	Subject:Date:Message-Id:Content-Type:From:To:Subject:Date:Message-Id:
+	Content-Type; bh=uVgXySeyW0cQ+CvbpukhA0uP6zzMx5KKnL3ZA5QkYlc=; b=MloqXOsyamEz
+	sP1yAvisewIn0PI+FY5Dhcznk8XzyiBJfdjYWX0hvaUI8fYBb54ddJPlIf0ANuo2kNZqW5ImBw==
+DKIM-Signature: v=1; d=km42.nl; s=2023b; i=me@km42.nl; a=rsa-sha256;
+	t=1700080739; x=1700339939; h=From:To:Cc:Bcc:Reply-To:References:In-Reply-To:
+	Subject:Date:Message-Id:Content-Type:From:To:Subject:Date:Message-Id:
+	Content-Type; bh=uVgXySeyW0cQ+CvbpukhA0uP6zzMx5KKnL3ZA5QkYlc=; b=YRfIQ8JhSMMK
+	iGhp19P8GYMtbq5YWQpzxnha7Pr0K4ayc2bsmA4ZKYdJdjD6ESOeuyoIc2ohXH+b631zap6n+mki9
+	Gn1PvIMqe4LUyIEHSEpBSJFsF63kmIpQvUMyoF95x/yy4T3X+//4KgsewZXedgX7SV1rLEBc3Q7kF
+	0gpQ3L4omNpYgbYAItagnq3hjGwPwvgDtR2DHqwIFhGCXNclOdSABtB8VbQUvC13IksjpJdNB8bX/
+	lSl6GWSFhP81DcXnSo/AXO5ceTQ+ibPJfkirrFA7E1iQaGZOzDreGJlTIpRr5D9y1QtY0o8bpzwHT
+	GqzNIhvaSIUxjEi/syFVEQ==
+Authentication-Results: mail.km42.nl; auth=pass smtp.mailfrom=me@km42.nl
+Content-Type: multipart/alternative;
+ boundary="------------70p0smUx9red4W60tXQ0HJyx"
+Message-ID: <ae7a6a03-df9e-47c8-a6c4-a3dd6ff33599@km42.nl>
+Date: Wed, 15 Nov 2023 21:38:58 +0100
+MIME-Version: 1.0
+User-Agent: Mozilla Thunderbird
+Content-Language: en-US
+To: jmap@km42.nl
+From: me <me@km42.nl>
+Subject: image
+
+This is a multi-part message in MIME format.
+--------------70p0smUx9red4W60tXQ0HJyx
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+
+My first image
+
+--------------70p0smUx9red4W60tXQ0HJyx
+Content-Type: multipart/related;
+ boundary="------------sSdEUDikeN4cbn6FvgeAoU0v"
+
+--------------sSdEUDikeN4cbn6FvgeAoU0v
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+  <head>
+
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  </head>
+  <body>
+    <p>My first image <img src="cid:part1.Nj2N9maO.uVlYYEhk@km42.nl"
+        alt=""></p>
+  </body>
+</html>
+--------------sSdEUDikeN4cbn6FvgeAoU0v
+Content-Type: image/png; name="kOp2KOEom97WsgRN.png"
+Content-Disposition: inline; filename="kOp2KOEom97WsgRN.png"
+Content-Id: <part1.Nj2N9maO.uVlYYEhk@km42.nl>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAACEAAAAhCAIAAADYhlU4AAAACXBIWXMAABYlAAAWJQFJUiTw
+AAABbklEQVRIie3WsVOCUBwH8J9dk88xaJTnCK3A7ixzruGsa/oX5BvMu+o/cIG2imtpbHp4
+TT5aofU5Zfy8thq8c2gQVGwovxtf+N3nHhzwSu+zD9hxDnYN7I1/aRzmvC5FfI0iOZW6btQo
+Ld6YCMEYQ8TFoWVbvfNufiP7XqWIjDFFORoMBqPRyHXPQh56vlekEXKOiN1ur0ZphRCn4ZiW
+GYZhkYacSgA4VtVlU6M0jpMije2zhpEics5XN9saQfDQZ2x1s62xcfbG3thF8n7bAUBVVAC4
+YP1IRJpWzT33ucb/o16vx0kSBIGiqu12BwAQ55mDX7PnbINqFAAiIWzbbrluy3WXp4SYZC5o
++nSX/Txs2y6XiX/r/+g550ny5jSc1eOP9y+lPPtEznmfMUq15mlTNwwp5Xgcep6vadXh5TBz
+PJexYK6ub+ZzXDamZXbanQohhRkAkCJGQsRJTAgxjJP8O4c1jI3zV97z3zC+ASthnSqsAY+j
+AAAAAElFTkSuQmCC
+
+--------------sSdEUDikeN4cbn6FvgeAoU0v--
+
+--------------70p0smUx9red4W60tXQ0HJyx--
+`
+
+			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+
+			part, err := message.Parse(mlog.New("test"), true, mReader)
+			RequireNoError(t, err)
+
+			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+
+			msg := store.Message{
+				ID:       1,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test"))
+
+			to, mErr := jem.To()
+			RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			if to[0].Email != "jmap@km42.nl" {
+				t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
+				t.FailNow()
+			}
+
+			bs, merr := jem.BodyStructure(defaultEmailBodyProperties)
+			RequireNoError(t, merr)
+
+			AssertEqualInt(t, 2, len(bs.SubParts))
+
+			AssertEqualInt(t, 2, len(bs.SubParts[1].SubParts))
+
+			imgPart := bs.SubParts[1].SubParts[1]
+			AssertEqualString(t, "image/png", *imgPart.Type)
+			AssertEqualString(t, "part1.Nj2N9maO.uVlYYEhk@km42.nl", *imgPart.Cid)
+			AssertEqualString(t, "kOp2KOEom97WsgRN.png", *imgPart.Name)
+			AssertEqualString(t, "2", *imgPart.PartId)
+
+			bv, mErr := jem.BodyValues(false, true, false, nil)
+			RequireNoError(t, mErr)
+			AssertEqualInt(t, 1, len(bv))
+			htmlBodyValue, ok := bv["1"]
+			AssertTrue(t, ok)
+			AssertEqualString(t, "<!DOCTYPE html>\r\n<html>\r\n  <head>\r\n\r\n    <meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\r\n  </head>\r\n  <body>\r\n    <p>My first image <img src=\"cid:part1.Nj2N9maO.uVlYYEhk@km42.nl\"\r\n        alt=\"\"></p>\r\n  </body>\r\n</html>", htmlBodyValue.Value)
+
+			htmlBody, mErr := jem.HTMLBody(defaultEmailBodyProperties)
+			RequireNoError(t, mErr)
+			AssertEqualInt(t, 2, len(htmlBody))
 		})
 	})
 }
