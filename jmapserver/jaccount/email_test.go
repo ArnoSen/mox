@@ -188,7 +188,7 @@ Content-Transfer-Encoding: 7bit
 			RequireNoError(t, mErr)
 
 			if AssertNotNil(t, bs.Type) {
-				AssertEqualString(t, "text/plain", *bs.Type)
+				AssertEqualString(t, "text/plain", bs.Type.String())
 			}
 			if AssertNotNil(t, bs.Language) {
 				//NB: | is an arbitrary token to stringify a string slice to make it comparable
@@ -334,7 +334,7 @@ On 18-07-2023 17:59, me wrote:
 			AssertNil(t, bs.Name)
 
 			if AssertNotNil(t, bs.Type) {
-				AssertEqualString(t, "text/plain", *bs.Type)
+				AssertEqualString(t, "text/plain", bs.Type.String())
 			}
 
 			if AssertNotNil(t, bs.CharSet) {
@@ -427,11 +427,11 @@ Content-Transfer-Encoding: 7bit
 			AssertEqualInt(t, 2, len(bodyStructure.SubParts))
 
 			if AssertNotNil(t, bodyStructure.SubParts[0].Type) {
-				AssertEqualString(t, "text/plain", *bodyStructure.SubParts[0].Type)
+				AssertEqualString(t, "text/plain", bodyStructure.SubParts[0].Type.String())
 			}
 
 			if AssertNotNil(t, bodyStructure.SubParts[1].Type) {
-				AssertEqualString(t, "text/html", *bodyStructure.SubParts[1].Type)
+				AssertEqualString(t, "text/html", bodyStructure.SubParts[1].Type.String())
 			}
 
 			/*
@@ -459,7 +459,7 @@ Content-Transfer-Encoding: 7bit
 			}
 		})
 
-		t.Run("Mail to JEmail. Picture", func(t *testing.T) {
+		t.Run("Mail to JEmail. Inline picture", func(t *testing.T) {
 			mail := `X-Mox-Reason: msgtofull
 Delivered-To: jmap@km42.nl
 Return-Path: <me@km42.nl>
@@ -588,7 +588,7 @@ AAAAAElFTkSuQmCC
 			AssertEqualInt(t, 2, len(bs.SubParts[1].SubParts))
 
 			imgPart := bs.SubParts[1].SubParts[1]
-			AssertEqualString(t, "image/png", *imgPart.Type)
+			AssertEqualString(t, "image/png", imgPart.Type.String())
 			AssertEqualString(t, "part1.Nj2N9maO.uVlYYEhk@km42.nl", *imgPart.Cid)
 			AssertEqualString(t, "kOp2KOEom97WsgRN.png", *imgPart.Name)
 			AssertEqualString(t, "2", *imgPart.PartId)
@@ -603,6 +603,130 @@ AAAAAElFTkSuQmCC
 			htmlBody, mErr := jem.HTMLBody(defaultEmailBodyProperties)
 			RequireNoError(t, mErr)
 			AssertEqualInt(t, 2, len(htmlBody))
+		})
+
+		t.Run("Mail to JEmail. Picture as attachemnt. No html available", func(t *testing.T) {
+			mail := `X-Mox-Reason: no-bad-signals
+Delivered-To: jmap@km42.nl
+Return-Path: <arno.overgaauw@mailbox.org>
+Authentication-Results: mail.km42.nl; iprev=pass (without dnssec)
+	policy.iprev=2001:67c:2050:0:465::103; dkim=pass
+	(2048 bit rsa, without dnssec) header.d=mailbox.org header.s=mail20150812
+	header.a=rsa-sha256 header.b=ZySjhVQq20fa; spf=pass (without dnssec) smtp.mailfrom=mailbox.org; dmarc=pass (without dnssec)
+	header.from=mailbox.org
+Received-SPF: pass (domain mailbox.org) client-ip="2001:67c:2050:0:465::103";
+	envelope-from="arno.overgaauw@mailbox.org"; helo=mout-p-103.mailbox.org;
+	mechanism="ip6:2001:67c:2050::/48"; receiver=mail.km42.nl; identity=mailfrom
+Received: from mout-p-103.mailbox.org ([IPv6:2001:67c:2050:0:465::103]) by
+	mail.km42.nl ([IPv6:2a02:2770::21a:4aff:fe09:2980]) via tcp with ESMTPS id
+	HDUnJVspeTh-eTnzPmFomQ (TLS1.3 TLS_AES_128_GCM_SHA256) for <jmap@km42.nl>;
+	16 Nov 2023 00:46:02 +0100
+Received: from smtp2.mailbox.org (smtp2.mailbox.org [IPv6:2001:67c:2050:b231:465::2])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (4096 bits) server-digest SHA256)
+	(No client certificate requested)
+	by mout-p-103.mailbox.org (Postfix) with ESMTPS id 4SW0D73vfqz9skp
+	for <jmap@km42.nl>; Thu, 16 Nov 2023 00:45:59 +0100 (CET)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=mailbox.org; s=mail20150812;
+	t=1700091959;
+	h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+	 to:to:cc:mime-version:mime-version:content-type:content-type:
+	 content-transfer-encoding:content-transfer-encoding;
+	bh=cv+PD0yMNTODhvrvvv2jP983OT7lFjRK7HP51VzcBFg=;
+	b=ZySjhVQq20fahe5Bh5aTj5UFwXrybE7BIP7s7dNDGSxVNazgD4zMlcz9lbS3p+lzylA6UO
+	jv3PQWF8bReGOP0t/CWgRge7BlqvztaA46eTatnQ7NQmIWkDOJWiGrB1v41gGr9QtorRnx
+	e7svIIsjpF+L8HQOyoWn7mIrSoL783ncfJz9bDGlVE/ASfm/auYjdV+H2aSPtC760x4FSG
+	UWmHjr8y6/8Vme0It7WImQ8BumN5+oZXJDnv0x6AjtT0kCqMfENBTYV1UYMLuptv9XGrH2
+	brFtnxDkYph7gMqBwE8t02agATKogHnOTJHh8910rdSUfq8GUTPG2DXmaYQanA==
+Content-Type: multipart/mixed; boundary=Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA
+Content-Transfer-Encoding: 7bit
+From: Arno Overgaauw <arno.overgaauw@mailbox.org>
+Mime-Version: 1.0 (1.0)
+Date: Thu, 16 Nov 2023 00:45:57 +0100
+Subject: Test2
+Message-Id: <0667EA89-1A31-4740-8453-89A2699EDA21@mailbox.org>
+To: jmap@km42.nl
+X-MBO-RS-ID: a053518dbb361b91200
+X-MBO-RS-META: cxmncpms3ofwi5u8b9wytbxfdqwb59dp
+
+
+--Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA
+Content-Type: text/plain;
+	charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+
+
+
+--Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA
+Content-Type: image/png;
+	name=IMG_0361.PNG;
+	x-apple-part-url=DE3DAE08-C43E-4537-A42F-F32617D93C6D
+Content-Disposition: inline;
+	filename=IMG_0361.PNG
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAALQAAAFAEAIAAADKSx2dAAAAAXNSR0IArs4c6QAAAI5lWElmTU0A
+KgAAAAgAAgESAAMAAAABAAEAAIdpAAQAAAABAAAAJgAAAAAABZADAAIAAAAUAAAAaJKGAAcAAAAS
+AAAAfKABAAMAAAABAAEAAKACAAQAAAABAAAAtKADAAQAAAABAAABQAAAAAAyMDIzOjExOjEyIDEy
+RVZ8FVJzaZKbmi1iEK3SU8Cx86ggoTigWSSCfsyau/IQWry/lNh+LW8fCgPWS6GGWWQPRYGVGCSH
+nOyqEPF33Kr5Dxki/AZvMotqA6MkUxHkVRyvoUfjGNn8UCBZNqKk2UQvO+gx/pKUd9/M0BZl1kE8
+UcLPiOxzRnaYb8VDtz03D0SKp0dw7QCwFIl6NDOZlBrB2y0l0/661ABaZKl8Rtl00pYKKKXbmXUN
+p5RzbKngn+oSFbMHljoQ9Ea2NIq6NCFbj9GvrgJd5TVXmtRSnEE2RzoFxnAcioWkOZIWi/il+GQp
+MUS3GiWeINu6Suppwpwf4VcxAfd3ac66HM/gH6Wsi7wkyBSdyLJgbMyPTgA6ntfSwomkkCwkJbdo
+xQ5GUMwL8y7jq5euKqOlxB3raKF5YGr4mZBt4QhGUNuWYGmGFnq6nIB1HSvL2K9JrJGu/wE+vnrF
+5la42AAAAABJRU5ErkJggg==
+
+--Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA
+Content-Type: text/plain;
+	charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+
+
+Sent from mobile
+--Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA--`
+			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+
+			part, err := message.Parse(mlog.New("test"), true, mReader)
+			RequireNoError(t, err)
+
+			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+
+			msg := store.Message{
+				ID:       1,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test"))
+
+			to, mErr := jem.To()
+			RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			if to[0].Email != "jmap@km42.nl" {
+				t.Logf("unexpected to. To name: %v email: %s", to[0].Name, to[0].Email)
+				t.FailNow()
+			}
+
+			bs, merr := jem.BodyStructure(defaultEmailBodyProperties)
+			RequireNoError(t, merr)
+
+			AssertEqualInt(t, 3, len(bs.SubParts))
+
+			textBodyParts, merr := jem.TextBody(defaultEmailBodyProperties)
+			RequireNoError(t, merr)
+			AssertEqualInt(t, 3, len(textBodyParts))
+			AssertEqualString(t, "0", *textBodyParts[0].PartId)
+			AssertEqualString(t, "1", *textBodyParts[1].PartId)
+			AssertEqualString(t, "2", *textBodyParts[2].PartId)
+
+			hasAttachment, merr := jem.HasAttachment()
+			RequireNoError(t, merr)
+			AssertTrue(t, !hasAttachment)
 		})
 	})
 }

@@ -98,13 +98,13 @@ func (e Email) MarshalJSON() ([]byte, error) {
 }
 
 type EmailBodyParts struct {
-	BodyStructure EmailBodyPart              `json:"bodyStructure"`
-	BodyValues    map[string]EmailBodyValue  `json:"bodyValues"`
-	TextBody      []EmailBodyPartKnownFields `json:"textBody"`
-	HTMLBody      []EmailBodyPartKnownFields `json:"htmlBody"`
-	Attachments   []EmailBodyPartKnownFields `json:"attachments"`
-	HasAttachment bool                       `json:"hasAttachment"`
-	Preview       string                     `json:"preview"`
+	BodyStructure EmailBodyPart             `json:"bodyStructure"`
+	BodyValues    map[string]EmailBodyValue `json:"bodyValues"`
+	TextBody      []EmailBodyPart           `json:"textBody"`
+	HTMLBody      []EmailBodyPart           `json:"htmlBody"`
+	Attachments   []EmailBodyPart           `json:"attachments"`
+	HasAttachment bool                      `json:"hasAttachment"`
+	Preview       string                    `json:"preview"`
 }
 
 type HeaderFieldsProperties struct {
@@ -172,7 +172,7 @@ type EmailBodyPartKnownFields struct {
 	Name *string `json:"name"`
 
 	//The value of the Content-Type header field of the part, if present; otherwise, the implicit type as per the MIME standard (text/plain or message/rfc822 if inside a multipart/digest). CFWS is removed and any parameters are stripped.
-	Type *string `json:"type"`
+	Type *ContentType `json:"type"`
 
 	//The value of the charset parameter of the Content-Type header field, if present, or null if the header field is present but not of type text/*. If there is no Content-Type header field, or it exists and is of type text/* but has no charset parameter, this is the implicit charset as per the MIME standard: us-ascii.
 	CharSet *string `json:"charSet"`
@@ -543,6 +543,42 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.BodyValues = bvs
+		}
+
+		if HasAny(properties, "textBody") {
+			textBody, mErr := jem.HTMLBody(bodyProperties)
+			if mErr != nil {
+				ja.mlog.Error("error getting textBody", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.TextBody = textBody
+		}
+
+		if HasAny(properties, "htmlBody") {
+			htmlBody, mErr := jem.HTMLBody(bodyProperties)
+			if mErr != nil {
+				ja.mlog.Error("error getting htmlBody", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.HTMLBody = htmlBody
+		}
+
+		if HasAny(properties, "attachments") {
+			attachments, mErr := jem.Attachments(bodyProperties)
+			if mErr != nil {
+				ja.mlog.Error("error getting attachments", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.Attachments = attachments
+		}
+
+		if HasAny(properties, "hasAttachment") {
+			hasAttachment, mErr := jem.HasAttachment()
+			if mErr != nil {
+				ja.mlog.Error("error getting hasAttachment", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.HasAttachment = hasAttachment
 		}
 
 		result = append(result, resultElement)
@@ -972,7 +1008,7 @@ func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, body
 		ebd.Location = jPart.Location()
 		ebd.Language = jPart.Language()
 
-		if t := jPart.Type(); t != nil && !strings.HasPrefix(strings.ToLower(*t), "multipart/") {
+		if ebd.Type != nil && !ebd.Type.IsMultipart() {
 			//This is null if, and only if, the part is of type multipart/*
 			partIDStr := fmt.Sprintf("%d", *nextPartID)
 			ebd.PartId = &partIDStr
@@ -1027,11 +1063,7 @@ func (jem JEmail) GetPartBody(partIDToLookFor string) (string, *mlevelerrors.Met
 
 func searchPartRecursive(partID string, part message.Part, nextNum *int) (string, *mlevelerrors.MethodLevelError) {
 	//FIXME need an error to indicate the part was not found
-	fmt.Printf("looking for part %s\n", partID)
-	fmt.Printf("mediatype is %s-%s\n", part.MediaType, part.MediaSubType)
-	fmt.Printf("nextnum is %d\n", *nextNum)
 	if part.MediaType != "MULTIPART" {
-		fmt.Printf("partID %s =? %d\n", partID, *nextNum)
 		if partID == fmt.Sprintf("%d", *nextNum) {
 			fullBody, err := io.ReadAll(part.Reader())
 			if err != nil {
@@ -1040,7 +1072,6 @@ func searchPartRecursive(partID string, part message.Part, nextNum *int) (string
 			return string(fullBody), nil
 		}
 		*nextNum++
-		fmt.Printf("new next num is %d\n", *nextNum)
 	}
 	for _, subPart := range part.Parts {
 		body, err := searchPartRecursive(partID, subPart, nextNum)
@@ -1068,7 +1099,7 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 
 		for _, bp := range textBodyParts {
-			if bp.Type != nil && strings.HasPrefix(*bp.Type, "text/") {
+			if bp.Type != nil && bp.Type.IsText() {
 				uniquePartsToGet[*bp.PartId] = nil
 			}
 		}
@@ -1081,7 +1112,7 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 
 		for _, bp := range htmlBodyParts {
-			if bp.Type != nil && strings.HasPrefix(*bp.Type, "text/") {
+			if bp.Type != nil && bp.Type.IsText() {
 				uniquePartsToGet[*bp.PartId] = nil
 			}
 		}
@@ -1126,13 +1157,140 @@ func (jem JEmail) HTMLBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerr
 }
 
 func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
+	return jem.attachments(bodyProperties)
+}
+
+func (jem JEmail) attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	/*
 		A list, traversing depth-first, of all parts in bodyStructure that satisfy either of the following conditions:
 		- not of type multipart/* and not included in textBody or htmlBody
 		- of type image/*, audio/*, or video/* and not in both textBody and htmlBody
+
+
+		FIXME: it should be a lot simpeler defining what the above output is other than implementing the lines literally like below
 	*/
+
+	var result []EmailBodyPart
+
+	textBodyParts, mErr := jem.TextBody(bodyProperties)
+	if mErr != nil {
+		return result, mErr
+	}
+
+	htmlBodyParts, mErr := jem.HTMLBody(bodyProperties)
+	if mErr != nil {
+		return result, mErr
+	}
+
 	nextPartID := 0
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeAttachments), nil
+	nonMultiPartParts, mErr := getPartsNotOfTypeMultipart(jem.part, jem.em.ID, &nextPartID, bodyProperties), nil
+	if mErr != nil {
+		return result, mErr
+	}
+
+loopNonMultipartResultCandidates:
+	for _, resultCandidate := range nonMultiPartParts {
+		for _, textBodyPart := range textBodyParts {
+			if *textBodyPart.PartId == *resultCandidate.PartId {
+				continue loopNonMultipartResultCandidates
+			}
+		}
+		for _, htmlBodyPart := range htmlBodyParts {
+			if *htmlBodyPart.PartId == *resultCandidate.PartId {
+				continue loopNonMultipartResultCandidates
+			}
+		}
+
+		result = append(result, resultCandidate)
+	}
+
+	nextPartID = 0
+	vidAudImgParts := getPartsOfTypeImageAudioVideo(jem.part, jem.em.ID, &nextPartID, bodyProperties)
+
+loopMediaFiles:
+	for _, resultCandidate := range vidAudImgParts {
+		var inTextBodyParts, inHTMLBodyParts bool
+
+		for _, textBodyPart := range textBodyParts {
+			if *textBodyPart.PartId == *resultCandidate.PartId {
+				inTextBodyParts = true
+			}
+		}
+		for _, htmlBodyPart := range htmlBodyParts {
+			if *htmlBodyPart.PartId == *resultCandidate.PartId {
+				inHTMLBodyParts = true
+			}
+		}
+
+		if !inTextBodyParts && !inHTMLBodyParts {
+			//we can potentially include it unless we already have it
+			for _, resultItem := range result {
+				if *resultItem.PartId == *resultCandidate.PartId {
+					continue loopMediaFiles
+				}
+			}
+			result = append(result, resultCandidate)
+		}
+
+	}
+	//FIXME need to sort the result on partID
+
+	return result, nil
+}
+
+func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
+	/*
+		This is true if there are one or more parts in the message that a client UI should offer as downloadable. A server SHOULD set hasAttachment to true if the attachments list contains at least one item that does not have Content-Disposition: inline. The server MAY ignore parts in this list that are processed automatically in some way or are referenced as embedded images in one of the text/html parts of the message.
+	*/
+
+	attachments, mErr := jem.attachments([]string{"disposition"})
+	if mErr != nil {
+		return false, mErr
+	}
+
+	for _, attachment := range attachments {
+		if attachment.Disposition != nil && *attachment.Disposition != "inline" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func getPartsNotOfTypeMultipart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string) []EmailBodyPart {
+	var result []EmailBodyPart
+
+	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
+	if topLevelPart.Type != nil {
+		if !topLevelPart.Type.IsMultipart() {
+			result = append(result, partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties))
+		}
+	}
+
+	for _, p := range part.Parts {
+		result = append(result, getPartsNotOfTypeMultipart(p, messageIDInt64, nextPartID, bodyProperties)...)
+	}
+
+	return result
+}
+
+func getPartsOfTypeImageAudioVideo(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string) []EmailBodyPart {
+	var result []EmailBodyPart
+
+	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
+	if topLevelPart.Type != nil {
+		if topLevelPart.Type.IsVideo() || topLevelPart.Type.IsAudio() || topLevelPart.Type.IsImage() {
+			result = append(result, partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties))
+		} else if !topLevelPart.Type.IsMultipart() {
+			//we must keep the partIDs correct
+			*nextPartID++
+		}
+	}
+
+	for _, p := range part.Parts {
+		result = append(result, getPartsOfTypeImageAudioVideo(p, messageIDInt64, nextPartID, bodyProperties)...)
+	}
+
+	return result
 }
 
 // includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
@@ -1141,7 +1299,6 @@ type flattenType int
 const (
 	flattenTypeText flattenType = iota
 	flattenTypeHTML
-	flattenTypeAttachments
 )
 
 func flattenPartToEmailBodyPart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string, flattenType flattenType) []EmailBodyPart {
@@ -1155,44 +1312,45 @@ func flattenPartToEmailBodyPart(part message.Part, messageIDInt64 int64, nextPar
 
 	if topLevelPart.Type != nil {
 
-		if flattenType == flattenTypeText || flattenType == flattenTypeHTML {
-			switch {
-			case strings.HasPrefix(*topLevelPart.Type, "multipart/alternative"):
-				for _, p := range part.Parts {
-					partBodyPart := partToEmailBodyPart(p, nextPartID, messageIDInt64, bodyProperties)
+		switch {
+		case topLevelPart.Type.IsMultpartAlternative():
+			for _, p := range part.Parts {
+				partBodyPart := partToEmailBodyPart(p, nextPartID, messageIDInt64, bodyProperties)
 
+				if partBodyPart.Type != nil {
 					switch flattenType {
 					case flattenTypeHTML:
-						if partBodyPart.Type != nil && *partBodyPart.Type == "text/html" {
+						if partBodyPart.Type.IsTextHTML() {
 							result = append(result, partBodyPart)
 						}
 					case flattenTypeText:
-						if partBodyPart.Type != nil && *partBodyPart.Type == "text/plain" {
+						if partBodyPart.Type.IsTextPlain() {
 							result = append(result, partBodyPart)
 						}
 					}
-					for _, pParts := range p.Parts {
-						result = append(result, flattenPartToEmailBodyPart(pParts, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
-					}
-				}
-			default:
-				var include bool
-				switch {
-				case HasAny([]string{"text/plain", "text/html"}, *topLevelPart.Type):
-					include = true
-				case strings.HasPrefix(*topLevelPart.Type, "image/"), strings.HasPrefix(*topLevelPart.Type, "audio/"), strings.HasPrefix(*topLevelPart.Type, "video/"):
-					include = true
-				}
 
-				if include {
-					result = append(result, topLevelPart)
 				}
-
-				for _, p := range part.Parts {
-					result = append(result, flattenPartToEmailBodyPart(p, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
+				for _, pParts := range p.Parts {
+					result = append(result, flattenPartToEmailBodyPart(pParts, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
 				}
-
 			}
+		default:
+			var include bool
+			switch {
+			case topLevelPart.Type.IsTextHTML() || topLevelPart.Type.IsTextPlain():
+				include = true
+			case topLevelPart.Type.IsImage(), topLevelPart.Type.IsAudio(), topLevelPart.Type.IsVideo():
+				include = true
+			}
+
+			if include {
+				result = append(result, topLevelPart)
+			}
+
+			for _, p := range part.Parts {
+				result = append(result, flattenPartToEmailBodyPart(p, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
+			}
+
 		}
 
 	}
@@ -1288,12 +1446,55 @@ func (jp JPart) Name() *string {
 	return nil
 }
 
-func (jp JPart) Type() *string {
+type ContentType string
+
+func NewContentType(t string) ContentType {
+	return ContentType(t)
+}
+
+func (ct ContentType) IsMultipart() bool {
+	return strings.HasPrefix(string(ct), "multipart/")
+}
+
+func (ct ContentType) IsText() bool {
+	return strings.HasPrefix(string(ct), "text/")
+}
+
+func (ct ContentType) IsAudio() bool {
+	return strings.HasPrefix(string(ct), "audio/")
+}
+
+func (ct ContentType) IsVideo() bool {
+	return strings.HasPrefix(string(ct), "video/")
+}
+
+func (ct ContentType) IsImage() bool {
+	return strings.HasPrefix(string(ct), "image/")
+}
+
+func (ct ContentType) IsMultpartAlternative() bool {
+	return ct == "multipart/alternative"
+}
+
+func (ct ContentType) IsTextPlain() bool {
+	return ct == "text/plain"
+}
+
+func (ct ContentType) IsTextHTML() bool {
+	return ct == "text/html"
+}
+
+func (ct ContentType) String() string {
+	return string(ct)
+}
+
+func (jp JPart) Type() *ContentType {
 	if jp.headerInOrder != nil {
 		if val := jp.headerInOrder.Last("Content-Type"); val != "" {
 			mediaType, _, err := mime.ParseMediaType(val)
 			if err == nil {
-				return &mediaType
+				ct := NewContentType(mediaType)
+				return &ct
 			}
 		}
 	}
