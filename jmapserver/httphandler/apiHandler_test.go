@@ -34,7 +34,7 @@ func TestAPIHandler(t *testing.T) {
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, core.NewCore(core.CoreCapabilitySettings{})}, NewSessionStateStub("abc"), "key", nil, mlog.New("test")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, core.NewCore(core.CoreCapabilitySettings{})}, NewSessionStateStub("abc"), "key", nil, mlog.New("test", nil)))
 
 		resp, err := srv.Client().Post(srv.URL, "text/html", nil)
 		if err != nil {
@@ -69,7 +69,7 @@ func TestAPIHandler(t *testing.T) {
 			MaxSizeRequest: 100,
 		})
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("def"), "key", nil, mlog.New("test")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("def"), "key", nil, mlog.New("test", nil)))
 
 		b := bytes.NewBuffer([]byte(strings.Repeat("a", 101)))
 
@@ -106,7 +106,7 @@ func TestAPIHandler(t *testing.T) {
 			MaxSizeRequest: 100,
 		})
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("abc"), "key", nil, mlog.New("test")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("abc"), "key", nil, mlog.New("test", nil)))
 
 		b := bytes.NewBuffer([]byte(strings.Repeat("a", 10)))
 
@@ -145,7 +145,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxSizeRequest: 100,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ttt"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ttt"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader("{}")
 			resp, err := srv.Client().Post(srv.URL, "application/json", b)
@@ -183,7 +183,7 @@ func TestAPIHandler(t *testing.T) {
 			MaxSizeRequest: 100,
 		})
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("iii"), "key", nil, mlog.New("test")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("iii"), "key", nil, mlog.New("test", nil)))
 
 		b := strings.NewReader(`{ "using": ["urn:nonexisting"], "methodCalls": [ ["method", null, "c1"] ] }`)
 		resp, err := srv.Client().Post(srv.URL, "application/json", b)
@@ -219,7 +219,7 @@ func TestAPIHandler(t *testing.T) {
 			MaxSizeRequest: 100,
 		})
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("fff"), "key", nil, mlog.New("test")))
+		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("fff"), "key", nil, mlog.New("test", nil)))
 
 		b := strings.NewReader(`{ 
 "using": ["urn:test"], 
@@ -258,7 +258,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -298,7 +298,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("lll"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("lll"), "key", nil, mlog.New("test", nil)))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": 123,"ids": ["id1", "id2"]}, "c1"] ]
@@ -337,7 +337,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zzz"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zzz"), "key", nil, mlog.New("test", nil)))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": "abc", "#accountId":{ "resultOf":"c1", "name":"Test/get", "path":"/ids" }, "ids": ["id1", "id2"]}, "c1"] ]
@@ -377,7 +377,7 @@ func TestAPIHandler(t *testing.T) {
 					MaxObjectsInGet: 2,
 				})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("qqq"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("qqq"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -417,7 +417,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("hhh"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("hhh"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -457,7 +457,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ppp"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ppp"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -497,7 +497,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("aaa"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("aaa"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -537,7 +537,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 1,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 
@@ -579,7 +579,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInSet: 1,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zyx"), "key", nil, mlog.New("test")))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zyx"), "key", nil, mlog.New("test", nil)))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 
