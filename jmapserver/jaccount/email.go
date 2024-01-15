@@ -145,6 +145,7 @@ type EmailAddress struct {
 	Email string  `json:"email"`
 }
 
+// EmailAddressGroup is not yet implemented in mox
 type EmailAddressGroup struct {
 	Name      *string        `json:"name"`
 	Addresses []EmailAddress `json:"addresses"`
@@ -204,7 +205,7 @@ type EmailBodyPart struct {
 }
 
 func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
-	//we need to do some merging of the known fields together with the fields in BespokeHeaders
+	//we need to do some merging of the known fields together with the fields in BespokeProperties
 	//there must be a simpeler method than this
 	edpBytes, err := json.Marshal(ebp.EmailBodyPartKnownFields)
 	if err != nil {
@@ -217,7 +218,7 @@ func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	//remove all the fields we do not need
+	//remove all the fields we do not need except for subparts
 	for k := range edpMapStringAny {
 		if k == "subParts" {
 			//although not made very explicit in the standard, we should always keep subParts
@@ -281,6 +282,7 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 	}
 
 	for _, s := range sort {
+		//FIXME we only support sorting at max one level
 		switch s.Property {
 		case "receivedAt":
 			if s.IsAscending {
@@ -364,7 +366,8 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 	for _, id := range ids {
 		idInt64, err := id.Int64()
 		if err != nil {
-			//the email ids are imap ids meaning they are int64
+			//the email ids are imap ids meaning they are int64. When they cannot be converted to int64
+			//we know that we never going to be able to return them
 			notFound = append(notFound, id)
 			continue
 		}
@@ -389,6 +392,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		}
 
 		if len(properties) == 0 {
+			//no property list found so we return the default set as defined by the standard
 			properties = defaultEmailPropertyFields
 		}
 
@@ -958,6 +962,7 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 }
 
 func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
+	//FIXME this needs to be more specific and take into account that we can have multipart also in the first subpart
 
 	partForPreview := jem.part
 	if len(jem.part.Parts) > 0 {
@@ -996,7 +1001,7 @@ func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, body
 	}
 
 	jPart, headerParseErr := NewJPart(part)
-	ebd.Size = jPart.Size()
+	ebd.Size = jPart.Size() //TODO: are these properties here on purpose?
 	ebd.Cid = jPart.Cid()
 
 	if headerParseErr == nil {
@@ -1091,6 +1096,7 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 
 	//fetchAllBodyValues is a combination of fetchTextBodyValues and fetchHTMLBodyValues
 
+	//the approach is that we first determine which parts to get and then to get them
 	if fetchTextBodyValues || fetchAllBodyValues {
 		//get the part ids
 		textBodyParts, mErr := jem.TextBody([]string{"partId"})
