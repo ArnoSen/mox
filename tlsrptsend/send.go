@@ -29,6 +29,9 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/slices"
+	"golang.org/x/exp/slog"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -78,13 +81,13 @@ var jitteredTimeUntil = func(t time.Time) time.Duration {
 // reports. Reports are sent spread out over a 4 hour period.
 func Start(resolver dns.Resolver) {
 	go func() {
-		log := mlog.New("tlsrptsend")
+		log := mlog.New("tlsrptsend", nil)
 
 		defer func() {
 			// In case of panic don't take the whole program down.
 			x := recover()
 			if x != nil {
-				log.Error("recover from panic", mlog.Field("panic", x))
+				log.Error("recover from panic", slog.Any("panic", x))
 				debug.PrintStack()
 				metrics.PanicInc(metrics.Tlsrptdb)
 			}
@@ -115,7 +118,7 @@ func Start(resolver dns.Resolver) {
 			log.Check(err, "removing stale tls results from database")
 
 			clog := log.WithCid(mox.Cid())
-			clog.Info("sending tls reports", mlog.Field("day", dayUTC))
+			clog.Info("sending tls reports", slog.String("day", dayUTC))
 			if err := sendReports(ctx, clog, resolver, db, dayUTC, endUTC); err != nil {
 				clog.Errorx("sending tls reports", err)
 				metricReportError.Inc()
@@ -157,32 +160,36 @@ var sleepBetween = func(ctx context.Context, between time.Duration) (ok bool) {
 // sendReports gathers all policy domains that have results that should receive a
 // TLS report and sends a report to each if their TLSRPT DNS record has reporting
 // addresses.
-func sendReports(ctx context.Context, log *mlog.Log, resolver dns.Resolver, db *bstore.DB, dayUTC string, endTimeUTC time.Time) error {
+func sendReports(ctx context.Context, log mlog.Log, resolver dns.Resolver, db *bstore.DB, dayUTC string, endTimeUTC time.Time) error {
 	type key struct {
 		policyDomain string
 		dayUTC       string
 	}
-	destDomains := map[key]bool{}
 
 	// Gather all policy domains we plan to send to.
+	rcptDoms := map[key]bool{}    // Results where recipient domain is equal to policy domain, regardless of IsHost.
+	nonRcptDoms := map[key]bool{} // MX domains (without those that are also recipient domains).
 	var nsend int
 	q := bstore.QueryDB[tlsrptdb.TLSResult](ctx, db)
 	q.FilterLessEqual("DayUTC", dayUTC)
-	q.SortAsc("PolicyDomain", "DayUTC", "RecipientDomain") // Sort for testability.
 	err := q.ForEach(func(e tlsrptdb.TLSResult) error {
-		k := key{e.PolicyDomain, dayUTC}
-		if e.SendReport && !destDomains[k] {
+		doms := rcptDoms
+		if e.PolicyDomain != e.RecipientDomain {
+			doms = nonRcptDoms
+		}
+		k := key{e.PolicyDomain, e.DayUTC}
+		if e.SendReport && !doms[k] {
 			nsend++
 		}
-		destDomains[k] = destDomains[k] || e.SendReport
+		doms[k] = doms[k] || e.SendReport
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("looking for domains to send tls reports to: %v", err)
 	}
 
-	// Send report to each domain. We stretch sending over 4 hours, but only if there
-	// are quite a few message. ../rfc/8460:479
+	// Stretch sending reports over max 4 hours, but only if there are quite a few
+	// messages. ../rfc/8460:479
 	between := 4 * time.Hour
 	if nsend > 0 {
 		between = between / time.Duration(nsend)
@@ -194,61 +201,88 @@ func sendReports(ctx context.Context, log *mlog.Log, resolver dns.Resolver, db *
 	var wg sync.WaitGroup
 
 	var n int
-	for k, send := range destDomains {
-		// Cleanup results for domain that doesn't need to get a report (e.g. for TLS
-		// connections that were the result of delivering TLSRPT messages).
-		if !send {
-			removeResults(ctx, log, db, k.policyDomain, k.dayUTC)
-			continue
-		}
 
-		if n > 0 {
-			ok := sleepBetween(ctx, between)
-			if !ok {
-				return nil
+	remove := map[key]struct{}{}
+	var removeMutex sync.Mutex
+
+	sendDomains := func(isRcptDom bool, doms map[key]bool) {
+		for k, send := range doms {
+			if !send {
+				removeMutex.Lock()
+				remove[k] = struct{}{}
+				removeMutex.Unlock()
+				continue
 			}
-		}
-		n++
 
-		// In goroutine, so our timing stays independent of how fast we process.
-		wg.Add(1)
-		go func(policyDomain string, dayUTC string) {
-			defer func() {
-				// In case of panic don't take the whole program down.
-				x := recover()
-				if x != nil {
-					log.Error("unhandled panic in tlsrptsend sendReports", mlog.Field("panic", x))
-					debug.PrintStack()
-					metrics.PanicInc(metrics.Tlsrptdb)
+			if n > 0 {
+				ok := sleepBetween(ctx, between)
+				if !ok {
+					return
 				}
-			}()
-			defer wg.Done()
-
-			rlog := log.WithCid(mox.Cid()).Fields(mlog.Field("policydomain", policyDomain), mlog.Field("daytutc", dayUTC))
-			rlog.Info("sending tls report")
-			if _, err := sendReportDomain(ctx, rlog, resolver, db, endTimeUTC, policyDomain, dayUTC); err != nil {
-				rlog.Errorx("sending tls report to domain", err)
-				metricReportError.Inc()
 			}
-		}(k.policyDomain, k.dayUTC)
+			n++
+
+			// In goroutine, so our timing stays independent of how fast we process.
+			wg.Add(1)
+			go func(k key) {
+				defer func() {
+					// In case of panic don't take the whole program down.
+					x := recover()
+					if x != nil {
+						log.Error("unhandled panic in tlsrptsend sendReports", slog.Any("panic", x))
+						debug.PrintStack()
+						metrics.PanicInc(metrics.Tlsrptdb)
+					}
+				}()
+				defer wg.Done()
+
+				rlog := log.WithCid(mox.Cid()).With(slog.String("policydomain", k.policyDomain),
+					slog.String("daytutc", k.dayUTC),
+					slog.Bool("isrcptdom", isRcptDom))
+				rlog.Info("looking to send tls report for domain")
+				cleanup, err := sendReportDomain(ctx, rlog, resolver, db, endTimeUTC, isRcptDom, k.policyDomain, k.dayUTC)
+				if err != nil {
+					rlog.Errorx("sending tls report to domain", err)
+					metricReportError.Inc()
+				}
+				if cleanup {
+					removeMutex.Lock()
+					defer removeMutex.Unlock()
+					remove[k] = struct{}{}
+				}
+			}(k)
+		}
 	}
 
+	// We send to recipient domains first. That will store the reporting addresses for
+	// the recipient domains, which are used when sending to nonRcptDoms to potentially
+	// skip sending a duplicate report.
+	sendDomains(true, rcptDoms)
+	wg.Wait()
+	sendDomains(false, nonRcptDoms)
 	wg.Wait()
 
-	return nil
-}
+	// Remove all records that have been processed.
+	err = db.Write(ctx, func(tx *bstore.Tx) error {
+		for k := range remove {
+			q := bstore.QueryTx[tlsrptdb.TLSResult](tx)
+			q.FilterNonzero(tlsrptdb.TLSResult{PolicyDomain: k.policyDomain, DayUTC: k.dayUTC})
+			_, err := q.Delete()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	log.Check(err, "cleaning up tls results in database")
 
-func removeResults(ctx context.Context, log *mlog.Log, db *bstore.DB, policyDomain string, dayUTC string) {
-	q := bstore.QueryDB[tlsrptdb.TLSResult](ctx, db)
-	q.FilterNonzero(tlsrptdb.TLSResult{PolicyDomain: policyDomain, DayUTC: dayUTC})
-	_, err := q.Delete()
-	log.Check(err, "removing tls results from database")
+	return nil
 }
 
 // replaceable for testing.
 var queueAdd = queue.Add
 
-func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver, db *bstore.DB, endUTC time.Time, policyDomain, dayUTC string) (cleanup bool, rerr error) {
+func sendReportDomain(ctx context.Context, log mlog.Log, resolver dns.Resolver, db *bstore.DB, endUTC time.Time, isRcptDom bool, policyDomain, dayUTC string) (cleanup bool, rerr error) {
 	polDom, err := dns.ParseDomain(policyDomain)
 	if err != nil {
 		return false, fmt.Errorf("parsing policy domain for sending tls reports: %v", err)
@@ -287,14 +321,13 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 
 	defer func() {
 		if !cleanup || tempError {
+			cleanup = false
 			log.Debug("not cleaning up results after attempting to send tls report")
-		} else {
-			removeResults(ctx, log, db, policyDomain, dayUTC)
 		}
 	}()
 
 	// Get TLSRPT record. If there are no reporting addresses, we're not going to send at all.
-	record, _, err := tlsrpt.Lookup(ctx, resolver, polDom)
+	record, _, err := tlsrpt.Lookup(ctx, log.Logger, resolver, polDom)
 	if err != nil {
 		// If there is no TLSRPT record, that's fine, we'll remove what we tracked.
 		if errors.Is(err, tlsrpt.ErrNoRecord) {
@@ -305,22 +338,24 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 	}
 
 	var recipients []message.NameAddress
+	var recipientStrs []string
 
 	for _, l := range record.RUAs {
 		for _, s := range l {
 			u, err := url.Parse(string(s))
 			if err != nil {
-				log.Debugx("parsing rua uri in tlsrpt dns record, ignoring", err, mlog.Field("rua", s))
+				log.Debugx("parsing rua uri in tlsrpt dns record, ignoring", err, slog.Any("rua", s))
 				continue
 			}
 
 			if u.Scheme == "mailto" {
 				addr, err := smtp.ParseAddress(u.Opaque)
 				if err != nil {
-					log.Debugx("parsing mailto uri in tlsrpt record rua value, ignoring", err, mlog.Field("rua", s))
+					log.Debugx("parsing mailto uri in tlsrpt record rua value, ignoring", err, slog.Any("rua", s))
 					continue
 				}
 				recipients = append(recipients, message.NameAddress{Address: addr})
+				recipientStrs = append(recipientStrs, string(s))
 			} else if u.Scheme == "https" {
 				// Although "report" is ambiguous and could mean both only the JSON data or an
 				// entire message (including DKIM-Signature) with the JSON data, it appears the
@@ -333,9 +368,9 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 				// them.
 				// ../rfc/8460:320 ../rfc/8460:1055
 				// todo spec: would be good to have clearer distinction between "report" (JSON) and "report message" (message with report attachment, that can be DKIM signed). propose sending report message over https that includes DKIM signature so authenticity can be verified and the report used. ../rfc/8460:310
-				log.Debug("https scheme in rua uri in tlsrpt record, ignoring since they will likey not be used to due lack of authentication", mlog.Field("rua", s))
+				log.Debug("https scheme in rua uri in tlsrpt record, ignoring since they will likey not be used to due lack of authentication", slog.Any("rua", s))
 			} else {
-				log.Debug("unknown scheme in rua uri in tlsrpt record, ignoring", mlog.Field("rua", s))
+				log.Debug("unknown scheme in rua uri in tlsrpt record, ignoring", slog.Any("rua", s))
 			}
 		}
 	}
@@ -346,10 +381,12 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 		return true, nil
 	}
 
-	log.Info("sending tlsrpt report")
-
 	q := bstore.QueryDB[tlsrptdb.TLSResult](ctx, db)
-	q.FilterNonzero(tlsrptdb.TLSResult{PolicyDomain: policyDomain, DayUTC: dayUTC})
+	if isRcptDom {
+		q.FilterNonzero(tlsrptdb.TLSResult{RecipientDomain: policyDomain, DayUTC: dayUTC})
+	} else {
+		q.FilterNonzero(tlsrptdb.TLSResult{PolicyDomain: policyDomain, DayUTC: dayUTC})
+	}
 	tlsResults, err := q.List()
 	if err != nil {
 		return true, fmt.Errorf("get tls results from database: %v", err)
@@ -358,6 +395,13 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 	if len(tlsResults) == 0 {
 		// Should not happen. But no point in sending messages with empty reports.
 		return true, fmt.Errorf("no tls results found")
+	}
+
+	// Stop if we already sent a report for this destination.
+	for _, r := range tlsResults {
+		if r.PolicyDomain == r.RecipientDomain && (isRcptDom && r.SentToRecipientDomain || !isRcptDom && r.SentToPolicyDomain) {
+			return true, nil
+		}
 	}
 
 	beginUTC := endUTC.Add(-24 * time.Hour)
@@ -370,15 +414,68 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 		},
 		ContactInfo: "postmaster@" + fromDom.ASCII,
 		// todo spec: ../rfc/8460:968 ../rfc/8460:1772 ../rfc/8460:691 subject header assumes a report-id in the form of a msg-id, but example and report-id json field explanation allows free-form report-id's (assuming we're talking about the same report-id here).
-		ReportID: endUTC.Format("20060102") + "." + polDom.ASCII + "@" + fromDom.ASCII,
+		ReportID: endUTC.Add(-12*time.Hour).Format("20060102") + "." + polDom.ASCII + "@" + fromDom.ASCII,
+	}
+
+	rcptDomAddresses := map[string][]string{}
+	for _, tlsResult := range tlsResults {
+		rcptDomAddresses[tlsResult.RecipientDomain] = tlsResult.RecipientDomainReportingAddresses
 	}
 
 	// Merge all results into this report.
-	for _, tlsResult := range tlsResults {
+	// If we are sending to a recipient domain, we include all relevant policy domains,
+	// so possibly multiple MX hosts (with DANE policies). That means we may be sending
+	// multiple "no-policy-found" results (1 for sts and 0 or more for mx hosts). An
+	// explicit no-sts or no-tlsa would make these less ambiguous, but the
+	// policy-domain's will make clear which is the MX and which is the recipient
+	// domain. Only for recipient domains with an MX target equal to the recipient host
+	// could it be confusing.
+	// If we are sending to MX targets (that aren't recipient domains), we mention the
+	// affected recipient domains as policy-domain while keeping the original policy
+	// domain (MX target) in the "mx-host" field. This behaviour isn't in the RFC, but
+	// seems useful to give MX operators insight into the recipient domains affected.
+	// We also won't include results for a recipient domain if its TLSRPT policy has
+	// the same reporting addresses as the MX target TLSRPT policy.
+	for i, tlsResult := range tlsResults {
+		if !isRcptDom {
+			if slices.Equal(rcptDomAddresses[tlsResult.RecipientDomain], recipientStrs) {
+				continue
+			}
+			for j, r := range tlsResult.Results {
+				if tlsResult.IsHost {
+					tlsResults[i].Results[j].Policy.MXHost = []string{r.Policy.Domain}
+				}
+				tlsResults[i].Results[j].Policy.Domain = tlsResult.RecipientDomain
+			}
+		}
+
 		report.Merge(tlsResult.Results...)
 	}
 
-	reportFile, err := store.CreateMessageTemp("tlsreportout")
+	// We may not have any results left, i.e. when this is an MX target and we already
+	// sent all results in the report to the recipient domain with identical reporting
+	// addresses.
+	if len(report.Policies) == 0 {
+		return true, nil
+	}
+
+	if !mox.Conf.Static.OutgoingTLSReportsForAllSuccess {
+		var haveFailure bool
+		// Check there is at least one failure. If not, we don't send a report.
+		for _, r := range report.Policies {
+			if r.Summary.TotalFailureSessionCount > 0 || len(r.FailureDetails) > 0 {
+				haveFailure = true
+				break
+			}
+		}
+		if !haveFailure {
+			return true, nil
+		}
+	}
+
+	log.Info("sending tls report")
+
+	reportFile, err := store.CreateMessageTemp(log, "tlsreportout")
 	if err != nil {
 		return false, fmt.Errorf("creating temporary file for outgoing tls report: %v", err)
 	}
@@ -389,7 +486,7 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 	enc := json.NewEncoder(gzw)
 	enc.SetIndent("", "\t")
 	if err == nil {
-		err = enc.Encode(report)
+		err = enc.Encode(report.Convert())
 	}
 	if err == nil {
 		err = gzw.Close()
@@ -398,7 +495,7 @@ func sendReportDomain(ctx context.Context, log *mlog.Log, resolver dns.Resolver,
 		return false, fmt.Errorf("writing tls report as json with gzip: %v", err)
 	}
 
-	msgf, err := store.CreateMessageTemp("tlsreportmsgout")
+	msgf, err := store.CreateMessageTemp(log, "tlsreportmsgout")
 	if err != nil {
 		return false, fmt.Errorf("creating temporary message file with outgoing tls report: %v", err)
 	}
@@ -440,6 +537,41 @@ Period: %s - %s UTC
 	}
 	msgSize := int64(len(msgPrefix)) + msgInfo.Size()
 
+	// Already mark the report as sent. If it won't succeed below, it probably won't
+	// succeed on a later retry either. And if we would fail to mark a report as sent
+	// after sending it, we may sent duplicates or even get in some kind of sending
+	// loop.
+	err = db.Write(ctx, func(tx *bstore.Tx) error {
+		if isRcptDom {
+			q := bstore.QueryTx[tlsrptdb.TLSResult](tx)
+			q.FilterNonzero(tlsrptdb.TLSResult{DayUTC: dayUTC, RecipientDomain: policyDomain})
+			_, err := q.UpdateNonzero(tlsrptdb.TLSResult{SentToRecipientDomain: true})
+			if err != nil {
+				return fmt.Errorf("already marking tls results as sent for recipient domain: %v", err)
+			}
+
+			// Also set reporting addresses for the recipient domain results.
+			q = bstore.QueryTx[tlsrptdb.TLSResult](tx)
+			q.FilterNonzero(tlsrptdb.TLSResult{DayUTC: dayUTC, RecipientDomain: policyDomain})
+			_, err = q.UpdateNonzero(tlsrptdb.TLSResult{RecipientDomainReportingAddresses: recipientStrs})
+			if err != nil {
+				return fmt.Errorf("storing recipient domain reporting addresses: %v", err)
+			}
+		} else {
+			q := bstore.QueryTx[tlsrptdb.TLSResult](tx)
+			q.FilterNonzero(tlsrptdb.TLSResult{DayUTC: dayUTC, PolicyDomain: policyDomain})
+			_, err := q.UpdateNonzero(tlsrptdb.TLSResult{SentToPolicyDomain: true})
+			if err != nil {
+				return fmt.Errorf("already marking tls results as sent for policy domain: %v", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("marking tls results as sent: %v", err)
+	}
+
+	var queued bool
 	for _, rcpt := range recipients {
 		// If recipient is on suppression list, we won't queue the reporting message.
 		q := bstore.QueryDB[tlsrptdb.TLSRPTSuppressAddress](ctx, db)
@@ -450,7 +582,7 @@ Period: %s - %s UTC
 			return false, fmt.Errorf("querying suppress list: %v", err)
 		}
 		if exists {
-			log.Info("suppressing outgoing tls report", mlog.Field("reportingaddress", rcpt.Address))
+			log.Info("suppressing outgoing tls report", slog.Any("reportingaddress", rcpt.Address))
 			continue
 		}
 
@@ -466,11 +598,13 @@ Period: %s - %s UTC
 
 		err = queueAdd(ctx, log, &qm, msgf)
 		if err != nil {
-			tempError = true
+			tempError = !queued
 			log.Errorx("queueing message with tls report", err)
 			metricReportError.Inc()
 		} else {
-			log.Debug("tls report queued", mlog.Field("recipient", rcpt))
+			queued = true
+			tempError = false
+			log.Debug("tls report queued", slog.Any("recipient", rcpt))
 			metricReport.Inc()
 		}
 	}
@@ -482,7 +616,7 @@ Period: %s - %s UTC
 	return true, nil
 }
 
-func composeMessage(ctx context.Context, log *mlog.Log, mf *os.File, policyDomain dns.Domain, confDKIM config.DKIM, fromAddr smtp.Address, recipients []message.NameAddress, subject, text, filename string, reportFile *os.File) (msgPrefix string, has8bit, smtputf8 bool, messageID string, rerr error) {
+func composeMessage(ctx context.Context, log mlog.Log, mf *os.File, policyDomain dns.Domain, confDKIM config.DKIM, fromAddr smtp.Address, recipients []message.NameAddress, subject, text, filename string, reportFile *os.File) (msgPrefix string, has8bit, smtputf8 bool, messageID string, rerr error) {
 	xc := message.NewComposer(mf, 100*1024*1024)
 	defer func() {
 		x := recover()
@@ -554,15 +688,14 @@ func composeMessage(ctx context.Context, log *mlog.Log, mf *os.File, policyDomai
 
 	xc.Flush()
 
-	selectors := map[string]config.Selector{}
-	for name, sel := range confDKIM.Selectors {
+	selectors := mox.DKIMSelectors(confDKIM)
+	for i, sel := range selectors {
 		// Also sign the TLS-Report headers. ../rfc/8460:940
-		sel.HeadersEffective = append(append([]string{}, sel.HeadersEffective...), "TLS-Report-Domain", "TLS-Report-Submitter")
-		selectors[name] = sel
+		sel.Headers = append(append([]string{}, sel.Headers...), "TLS-Report-Domain", "TLS-Report-Submitter")
+		selectors[i] = sel
 	}
-	confDKIM.Selectors = selectors
 
-	dkimHeader, err := dkim.Sign(ctx, fromAddr.Localpart, fromAddr.Domain, confDKIM, smtputf8, mf)
+	dkimHeader, err := dkim.Sign(ctx, log.Logger, fromAddr.Localpart, fromAddr.Domain, selectors, smtputf8, mf)
 	xc.Checkf(err, "dkim-signing report message")
 
 	return dkimHeader, xc.Has8bit, xc.SMTPUTF8, messageID, nil

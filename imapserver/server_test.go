@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/mjl-/mox/imapclient"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/store"
 )
 
 var ctxbg = context.Background()
+var pkglog = mlog.New("imapserver", nil)
 
 func init() {
 	sanityChecks = true
@@ -325,14 +327,14 @@ func xparseNumSet(s string) imapclient.NumSet {
 var connCounter int64
 
 func start(t *testing.T) *testconn {
-	return startArgs(t, true, false, true)
+	return startArgs(t, true, false, true, true, "mjl")
 }
 
 func startNoSwitchboard(t *testing.T) *testconn {
-	return startArgs(t, false, false, true)
+	return startArgs(t, false, false, true, false, "mjl")
 }
 
-func startArgs(t *testing.T, first, isTLS, allowLoginWithoutTLS bool) *testconn {
+func startArgs(t *testing.T, first, isTLS, allowLoginWithoutTLS, setPassword bool, accname string) *testconn {
 	limitersInit() // Reset rate limiters.
 
 	if first {
@@ -341,10 +343,10 @@ func startArgs(t *testing.T, first, isTLS, allowLoginWithoutTLS bool) *testconn 
 	mox.Context = ctxbg
 	mox.ConfigStaticPath = filepath.FromSlash("../testdata/imap/mox.conf")
 	mox.MustLoadConfig(true, false)
-	acc, err := store.OpenAccount("mjl")
+	acc, err := store.OpenAccount(pkglog, accname)
 	tcheck(t, err, "open account")
-	if first {
-		err = acc.SetPassword("testtest")
+	if setPassword {
+		err = acc.SetPassword(pkglog, "testtest")
 		tcheck(t, err, "set password")
 	}
 	switchStop := func() {}

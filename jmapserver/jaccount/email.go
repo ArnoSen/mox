@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/exp/slog"
+
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -245,7 +247,7 @@ func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
 
 func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
-	ja.mlog.Debug("JAccount QueryEmail", mlog.Field("collapseThreads", collapseThreads))
+	ja.mlog.Debug("JAccount QueryEmail", slog.Any("collapseThreads", collapseThreads))
 
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
 
@@ -314,7 +316,7 @@ search:
 				// Note: if we don't iterate until an error, Close must be called on the query for cleanup.
 				break search
 			} else if err != nil {
-				ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
+				ja.mlog.Error("error getting next id", slog.Any("err", err.Error()))
 				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 
@@ -336,7 +338,7 @@ search:
 			if err == bstore.ErrAbsent {
 				break search
 			} else if err != nil {
-				ja.mlog.Error("error getting message", mlog.Field("err", err.Error()))
+				ja.mlog.Error("error getting message", slog.Any("err", err.Error()))
 				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 
@@ -361,7 +363,7 @@ search:
 
 func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
-	ja.mlog.Debug("custom get params", mlog.Field("bodyProperties", strings.Join(bodyProperties, ",")), mlog.Field("FetchTextBodyValues", FetchTextBodyValues), mlog.Field("FetchHTMLBodyValues", FetchHTMLBodyValues), mlog.Field("FetchAllBodyValues", FetchAllBodyValues), mlog.Field("MaxBodyValueBytes", MaxBodyValueBytes))
+	ja.mlog.Debug("custom get params", slog.Any("bodyProperties", strings.Join(bodyProperties, ",")), slog.Any("FetchTextBodyValues", FetchTextBodyValues), slog.Any("FetchHTMLBodyValues", FetchHTMLBodyValues), slog.Any("FetchAllBodyValues", FetchAllBodyValues), slog.Any("MaxBodyValueBytes", MaxBodyValueBytes))
 
 	for _, id := range ids {
 		idInt64, err := id.Int64()
@@ -381,13 +383,13 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 				notFound = append(notFound, id)
 				continue
 			}
-			ja.mlog.Error("error getting message from db", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting message from db", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		jem, merr := ja.NewEmail(em)
 		if merr != nil {
-			ja.mlog.Error("error instantiating new JEmail", mlog.Field("id", idInt64), mlog.Field("error", merr.Error()))
+			ja.mlog.Error("error instantiating new JEmail", slog.Any("id", idInt64), slog.Any("error", merr.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
@@ -418,73 +420,73 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 
 		resultElement.MessageId, mErr = jem.MessagedId()
 		if mErr != nil {
-			ja.mlog.Error("error getting messageId", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting messageId", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.SentAt, mErr = jem.SendAt()
 		if mErr != nil {
-			ja.mlog.Error("error getting date", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting date", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.Subject, mErr = jem.Subject()
 		if mErr != nil {
-			ja.mlog.Error("error getting subject", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting subject", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.From, mErr = jem.From()
 		if mErr != nil {
-			ja.mlog.Error("error getting from", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting from", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.To, mErr = jem.To()
 		if mErr != nil {
-			ja.mlog.Error("error getting to", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting to", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.CC, mErr = jem.CC()
 		if mErr != nil {
-			ja.mlog.Error("error getting cc", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting cc", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.BCC, mErr = jem.BCC()
 		if mErr != nil {
-			ja.mlog.Error("error getting bcc", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting bcc", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.BCC, mErr = jem.Sender()
 		if mErr != nil {
-			ja.mlog.Error("error getting sender", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting sender", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.ReplyTo, mErr = jem.ReplyTo()
 		if mErr != nil {
-			ja.mlog.Error("error getting replyTo", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting replyTo", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.InReplyTo, mErr = jem.InReplyTo()
 		if mErr != nil {
-			ja.mlog.Error("error getting inReplyTo", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting inReplyTo", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.Preview, mErr = jem.Preview()
 		if mErr != nil {
-			ja.mlog.Error("error getting preview", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting preview", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.References, mErr = jem.References()
 		if mErr != nil {
-			ja.mlog.Error("error getting references", mlog.Field("id", idInt64), mlog.Field("error", err.Error()))
+			ja.mlog.Error("error getting references", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
@@ -521,9 +523,9 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 					resultElement.DynamicProperties = make(map[string]any, 1)
 				}
 
-				resultElement.DynamicProperties[prop], mErr = jem.HeaderAs(headerName, headerFormat, returnAll)
+				resultElement.DynamicProperties[prop], mErr = jem.HeaderAs(ja.mlog, headerName, headerFormat, returnAll)
 				if mErr != nil {
-					ja.mlog.Error("error getting bespoke header", mlog.Field("id", idInt64), mlog.Field("prop", prop), mlog.Field("error", err.Error()))
+					ja.mlog.Error("error getting bespoke header", slog.Any("id", idInt64), slog.Any("prop", prop), slog.Any("error", err.Error()))
 					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 				}
 			}
@@ -533,7 +535,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 			//FIXME In addition, the client may request/send EmailBodyPart properties representing individual header fields, following the same syntax and semantics as for the Email object, e.g., header:Content-Type.
 			bs, mErr := jem.BodyStructure(bodyProperties)
 			if mErr != nil {
-				ja.mlog.Error("error getting body structure", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting body structure", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 
 			}
@@ -543,7 +545,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		if HasAny(properties, "bodyValues") {
 			bvs, mErr := jem.BodyValues(FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues, MaxBodyValueBytes)
 			if mErr != nil {
-				ja.mlog.Error("error getting body values", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting body values", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.BodyValues = bvs
@@ -552,7 +554,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		if HasAny(properties, "textBody") {
 			textBody, mErr := jem.HTMLBody(bodyProperties)
 			if mErr != nil {
-				ja.mlog.Error("error getting textBody", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting textBody", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.TextBody = textBody
@@ -561,7 +563,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		if HasAny(properties, "htmlBody") {
 			htmlBody, mErr := jem.HTMLBody(bodyProperties)
 			if mErr != nil {
-				ja.mlog.Error("error getting htmlBody", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting htmlBody", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.HTMLBody = htmlBody
@@ -570,7 +572,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		if HasAny(properties, "attachments") {
 			attachments, mErr := jem.Attachments(bodyProperties)
 			if mErr != nil {
-				ja.mlog.Error("error getting attachments", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting attachments", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.Attachments = attachments
@@ -579,7 +581,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 		if HasAny(properties, "hasAttachment") {
 			hasAttachment, mErr := jem.HasAttachment()
 			if mErr != nil {
-				ja.mlog.Error("error getting hasAttachment", mlog.Field("id", idInt64), mlog.Field("error", mErr.Error()))
+				ja.mlog.Error("error getting hasAttachment", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.HasAttachment = hasAttachment
@@ -632,7 +634,7 @@ type JEmail struct {
 	//part is contains parsed parts of the message
 	part message.Part
 
-	logger *mlog.Log
+	logger mlog.Log
 
 	//partsHaveBeenWalked is set to true when the subparts of part have been 'walked' meaning that the subparts have been populated
 	partsHaveBeenWalked bool
@@ -640,7 +642,7 @@ type JEmail struct {
 	errorWhileWalkingParts bool
 }
 
-func NewJEmail(em store.Message, part message.Part, logger *mlog.Log) JEmail {
+func NewJEmail(em store.Message, part message.Part, logger mlog.Log) JEmail {
 	return JEmail{
 		em:     em,
 		part:   part,
@@ -710,7 +712,7 @@ func (jem JEmail) Keywords() map[string]bool {
 
 // MessagedId returns the messageId property
 func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
-	msgIDsIface, merr := jem.HeaderAs("Message-ID", "asMessageIds", false)
+	msgIDsIface, merr := jem.HeaderAs(jem.logger, "Message-ID", "asMessageIds", false)
 
 	if msgIDs, ok := msgIDsIface.([]string); ok {
 		return msgIDs, nil
@@ -721,7 +723,7 @@ func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
 
 // InReplyTo returns inReplyTo
 func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
-	msgIDsIface, merr := jem.HeaderAs("In-Reply-To", "asMessageIds", false)
+	msgIDsIface, merr := jem.HeaderAs(jem.logger, "In-Reply-To", "asMessageIds", false)
 	if msgIDs, ok := msgIDsIface.([]string); ok {
 		return msgIDs, nil
 	}
@@ -829,7 +831,7 @@ func (jem JEmail) ReplyTo() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 // References return the RFC822 header with the same name
 func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 
-	result, merr := jem.HeaderAs("References", "asMessageIds", false)
+	result, merr := jem.HeaderAs(jem.logger, "References", "asMessageIds", false)
 	if merr != nil {
 		return nil, merr
 	}
@@ -844,10 +846,10 @@ func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 }
 
 // HeaderAs returns a header in a specific format
-func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
+func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
 	orderedHeaders, err := jem.part.HeaderInOrder()
 	if err != nil {
-		jem.logger.Error("getting ordered headers failed", mlog.Field("err", err.Error()))
+		jem.logger.Error("getting ordered headers failed", slog.Any("err", err.Error()))
 		return "", mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
@@ -910,7 +912,7 @@ func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, 
 			var result []EmailAddress
 
 			if !retAll {
-				for _, addr := range message.ParseAddressList(nil, mail.Header(orderedHeaders.MIMEHeader()), headerName) {
+				for _, addr := range message.ParseAddressList(jem.logger, mail.Header(orderedHeaders.MIMEHeader()), headerName) {
 					result = append(result, msgAddressToEmailAddress(addr))
 				}
 			} else {

@@ -31,6 +31,7 @@ import (
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/dnsbl"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/store"
@@ -535,7 +536,7 @@ messages over SMTP.
 		for _, zone := range zones {
 			for _, ip := range hostIPs {
 				dnsblctx, dnsblcancel := context.WithTimeout(resolveCtx, 5*time.Second)
-				status, expl, err := dnsbl.Lookup(dnsblctx, resolver, zone, net.ParseIP(ip))
+				status, expl, err := dnsbl.Lookup(dnsblctx, c.log.Logger, resolver, zone, net.ParseIP(ip))
 				dnsblcancel()
 				if status == dnsbl.StatusPass {
 					continue
@@ -609,8 +610,9 @@ many authentication failures).
 	if !existingWebserver {
 		sc.ACME = map[string]config.ACME{
 			"letsencrypt": {
-				DirectoryURL: "https://acme-v02.api.letsencrypt.org/directory",
-				ContactEmail: args[0], // todo: let user specify an alternative fallback address?
+				DirectoryURL:     "https://acme-v02.api.letsencrypt.org/directory",
+				ContactEmail:     args[0], // todo: let user specify an alternative fallback address?
+				IssuerDomainName: "letsencrypt.org",
 			},
 		}
 	}
@@ -712,12 +714,15 @@ and check the admin page for the needed DNS records.`)
 	}
 	internal.AccountHTTP.Enabled = true
 	internal.AdminHTTP.Enabled = true
-	internal.MetricsHTTP.Enabled = true
 	internal.WebmailHTTP.Enabled = true
+	internal.MetricsHTTP.Enabled = true
 	if existingWebserver {
 		internal.AccountHTTP.Port = 1080
+		internal.AccountHTTP.Forwarded = true
 		internal.AdminHTTP.Port = 1080
+		internal.AdminHTTP.Forwarded = true
 		internal.WebmailHTTP.Port = 1080
+		internal.WebmailHTTP.Forwarded = true
 		internal.AutoconfigHTTPS.Enabled = true
 		internal.AutoconfigHTTPS.Port = 81
 		internal.AutoconfigHTTPS.NonTLS = true
@@ -813,7 +818,7 @@ and check the admin page for the needed DNS records.`)
 
 	// Verify config.
 	loadTLSKeyCerts := !existingWebserver
-	mc, errs := mox.ParseConfig(context.Background(), filepath.FromSlash("config/mox.conf"), true, loadTLSKeyCerts, false)
+	mc, errs := mox.ParseConfig(context.Background(), c.log, filepath.FromSlash("config/mox.conf"), true, loadTLSKeyCerts, false)
 	if len(errs) > 0 {
 		if len(errs) > 1 {
 			log.Printf("checking generated config, multiple errors:")
@@ -834,16 +839,24 @@ and check the admin page for the needed DNS records.`)
 		fatalf("cannot find domain in new config")
 	}
 
-	acc, _, err := store.OpenEmail(args[0])
+	acc, _, err := store.OpenEmail(c.log, args[0])
 	if err != nil {
 		fatalf("open account: %s", err)
 	}
 	cleanupPaths = append(cleanupPaths, dataDir, filepath.Join(dataDir, "accounts"), filepath.Join(dataDir, "accounts", accountName), filepath.Join(dataDir, "accounts", accountName, "index.db"))
 
 	password := pwgen()
-	if err := acc.SetPassword(password); err != nil {
+
+	// Kludge to cause no logging to be printed about setting a new password.
+	loglevel := mox.Conf.Log[""]
+	mox.Conf.Log[""] = mlog.LevelWarn
+	mlog.SetConfig(mox.Conf.Log)
+	if err := acc.SetPassword(c.log, password); err != nil {
 		fatalf("setting password: %s", err)
 	}
+	mox.Conf.Log[""] = loglevel
+	mlog.SetConfig(mox.Conf.Log)
+
 	if err := acc.Close(); err != nil {
 		fatalf("closing account: %s", err)
 	}
@@ -858,8 +871,9 @@ autoconfig/autodiscover does not work, use these settings:
 Configuration files have been written to config/mox.conf and
 config/domains.conf.
 
-Create the DNS records below. The admin interface can show these same records, and
-has a page to check they have been configured correctly.
+Create the DNS records below, by adding them to your zone file or through the
+web interface of your DNS operator. The admin interface can show these same
+records, and has a page to check they have been configured correctly.
 
 You must configure your existing webserver to forward requests for:
 
@@ -878,14 +892,17 @@ The paths are relative to config/ directory that holds mox.conf! To test if your
 config is valid, run:
 
 	./mox config test
+
+The DNS records to add:
 `, domain.ASCII, domain.ASCII, dnshostname.ASCII)
 	} else {
 		fmt.Printf(`
 Configuration files have been written to config/mox.conf and
-config/domains.conf. You should review them. Then create the DNS records below.
-You can also skip creating the DNS records and start mox immediately. The admin
-interface can show these same records, and has a page to check they have been
-configured correctly.
+config/domains.conf. You should review them. Then create the DNS records below,
+by adding them to your zone file or through the web interface of your DNS
+operator. You can also skip creating the DNS records and start mox immediately.
+The admin interface can show these same records, and has a page to check they
+have been configured correctly. The DNS records to add:
 `)
 	}
 
@@ -893,7 +910,7 @@ configured correctly.
 	// priming dns caches with negative/absent records, causing our "quick setup" to
 	// appear to fail or take longer than "quick".
 
-	records, err := mox.DomainRecords(confDomain, domain, domainDNSSECResult.Authentic)
+	records, err := mox.DomainRecords(confDomain, domain, domainDNSSECResult.Authentic, "letsencrypt.org", "")
 	if err != nil {
 		fatalf("making required DNS records")
 	}

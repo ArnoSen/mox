@@ -14,6 +14,7 @@ import (
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
+	"golang.org/x/exp/slog"
 )
 
 const (
@@ -38,14 +39,14 @@ type JMAPServerHandler struct {
 
 	//CORSAllowFrom defines the hosts that can access JMAP resources from a browser
 	CORSAllowFrom []string
-	Logger        *mlog.Log
+	Logger        mlog.Log
 
 	contextUserKey string
 
 	sessionCapabilityInfo map[string]interface{}
 }
 
-func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, accountOpener AccountOpener, corsAllowFrom []string, logger *mlog.Log) JMAPServerHandler {
+func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, accountOpener AccountOpener, corsAllowFrom []string, logger mlog.Log) JMAPServerHandler {
 
 	result := JMAPServerHandler{
 		Hostname: hostname,
@@ -85,15 +86,15 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 	return result
 }
 
-type OpenEmailAuthFunc func(email, password string) (*store.Account, error)
+type OpenEmailAuthFunc func(log mlog.Log, email, password string) (*store.Account, error)
 
 type AuthenticationMiddleware struct {
 	OpenEmailAuthFunc OpenEmailAuthFunc
-	Logger            *mlog.Log
+	Logger            mlog.Log
 	contextUserKey    string
 }
 
-func NewAuthenticationMiddleware(openEmailAccountFunc OpenEmailAuthFunc, logger *mlog.Log, contextUserKey string) AuthenticationMiddleware {
+func NewAuthenticationMiddleware(openEmailAccountFunc OpenEmailAuthFunc, logger mlog.Log, contextUserKey string) AuthenticationMiddleware {
 	return AuthenticationMiddleware{
 		OpenEmailAuthFunc: openEmailAccountFunc,
 		Logger:            logger,
@@ -117,7 +118,7 @@ func (authM AuthenticationMiddleware) Authenticate(hf http.Handler) http.Handler
 		//remove the auth header so it does not end up in the logs when we dump requests in debug
 		r.Header.Del("Authorization")
 
-		account, err := authM.OpenEmailAuthFunc(email, password)
+		account, err := authM.OpenEmailAuthFunc(authM.Logger, email, password)
 		if err != nil {
 			//there is no details in the spec what needs to send when the authentication fails
 			authM.Logger.Debug(fmt.Sprintf("authentication err %s", err))
@@ -189,7 +190,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	//find out what we were called from because we need this information in the sessionHandler
 	baseURL := fmt.Sprintf("https://%s:%d", jh.Hostname, jh.Port)
 
-	jh.Logger.Debug("log url", mlog.Field("base-url", baseURL))
+	jh.Logger.Debug("log url", slog.Any("base-url", baseURL))
 
 	// ../../rfc/8620:679
 	sessionPath := jh.Path + "session"
@@ -241,7 +242,7 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			corsMR.HandleMethodOptions(
 				authMW.Authenticate(sessionHandler))))
 
-	jh.Logger.Debug("register path", mlog.Field("sessionPath", sessionPath))
+	jh.Logger.Debug("register path", slog.Any("sessionPath", sessionPath))
 	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
 		corsMR.HandleMethodOptions(
 			authMW.Authenticate(apiHandler))))

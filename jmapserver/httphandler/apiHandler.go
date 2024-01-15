@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/exp/slog"
+
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/datatyper"
@@ -261,7 +263,7 @@ func resolveJSONPointer(msg json.RawMessage, pointer string) (json.RawMessage, *
 							//FIXME if it is not map[string]interface{}....
 							// 2 options: convert it here, or do it before we call this function: maybe we should have this fn only except json.Rawmessage
 							// so we do not care about any 'real' types here. I think that would be the best solution
-							mlog.New("mlog-singleton").Debug("unexpected type", mlog.Field("arrElement type", fmt.Sprintf("%T", arrElement)))
+							mlog.New("mlog-singleton", nil).Debug("unexpected type", slog.Any("arrElement type", fmt.Sprintf("%T", arrElement)))
 							return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("elements in array referenced by '*' must be of type map[string]Object")
 						}
 
@@ -340,7 +342,7 @@ func (sss StubSessionStater) SessionState() string {
 	return "stubstate"
 }
 
-type AccountOpener func(name string) (*store.Account, error)
+type AccountOpener func(log mlog.Log, name string) (*store.Account, error)
 
 // APIHandler implements http.Handler
 type APIHandler struct {
@@ -348,10 +350,10 @@ type APIHandler struct {
 	SessionStater  SessionStater
 	AccountOpener  AccountOpener
 	contextUserKey string
-	logger         *mlog.Log
+	logger         mlog.Log
 }
 
-func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger *mlog.Log) *APIHandler {
+func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger mlog.Log) *APIHandler {
 	result := &APIHandler{
 		Capabilities:   capabilties,
 		SessionStater:  sessionStater,
@@ -359,7 +361,7 @@ func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater Session
 		AccountOpener:  accountOpener,
 		logger:         logger,
 	}
-	//logger.Debug("test", mlog.Field("a", (&spew.ConfigState{DisableMethods: true, DisablePointerMethods: true}).Sdump(result)))
+	//logger.Debug("test", slog.Any("a", (&spew.ConfigState{DisableMethods: true, DisablePointerMethods: true}).Sdump(result)))
 	return result
 }
 
@@ -388,7 +390,7 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	reqBody, err := httputil.DumpRequest(r, true)
 	if err == nil {
-		ah.logger.Debug("dump http request", mlog.Field("payload", string(reqBody)))
+		ah.logger.Debug("dump http request", slog.Any("payload", string(reqBody)))
 	}
 
 	if !isContentTypeJSON(r.Header.Get(HeaderContentType)) {
@@ -462,7 +464,7 @@ loopUsing:
 			continue
 		}
 
-		ah.logger.Debug("method called", mlog.Field("method", invocation.Name))
+		ah.logger.Debug("method called", slog.Any("method", invocation.Name))
 
 		switch nameParts[1] {
 		case "echo":
@@ -582,14 +584,14 @@ loopUsing:
 
 			userObj, ok := userIface.(user.User)
 			if !ok {
-				ah.logger.Debug("user is not of type user.User", mlog.Field("unexpectedtype", fmt.Sprintf("%T", userIface)))
+				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
 				continue
 			}
 
-			mAccount, err := ah.AccountOpener(userObj.Name)
+			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
 			if err != nil {
-				ah.logger.Debug("error opening account", mlog.Field("err", err.Error()), mlog.Field("accountname", userObj.Email))
+				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
 				continue
 			}
@@ -627,7 +629,7 @@ loopUsing:
 			// ../../rfc/8620:1608
 			propertyFilteredList, err := filterProperties(list, append(finalProperties), []string{"id"})
 			if err != nil {
-				ah.logger.Error("applying filtering failed ", mlog.Field("err", err.Error()))
+				ah.logger.Error("applying filtering failed ", slog.Any("err", err.Error()))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue
 			}
@@ -901,14 +903,14 @@ loopUsing:
 
 			userObj, ok := userIface.(user.User)
 			if !ok {
-				ah.logger.Debug("user is not of type user.User", mlog.Field("unexpectedtype", fmt.Sprintf("%T", userIface)))
+				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
 				continue
 			}
 
-			mAccount, err := ah.AccountOpener(userObj.Name)
+			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
 			if err != nil {
-				ah.logger.Debug("error opening account", mlog.Field("err", err.Error()), mlog.Field("accountname", userObj.Email))
+				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
 				continue
 			}
@@ -951,10 +953,10 @@ loopUsing:
 			}))
 
 			ah.logger.Debug("query results",
-				mlog.Field("queryState", queryState),
-				mlog.Field("canCalculateChanges", canCalculateChanges),
-				mlog.Field("position", retPosition),
-				mlog.Field("ids", func(ids []basetypes.Id) string {
+				slog.Any("queryState", queryState),
+				slog.Any("canCalculateChanges", canCalculateChanges),
+				slog.Any("position", retPosition),
+				slog.Any("ids", func(ids []basetypes.Id) string {
 					var result string
 					for i, id := range ids {
 						if i == 0 {
@@ -965,8 +967,8 @@ loopUsing:
 					}
 					return result
 				}(ids)),
-				mlog.Field("total", total),
-				mlog.Field("limit", retLimit),
+				slog.Any("total", total),
+				slog.Any("limit", retLimit),
 			)
 
 		case "queryChanges":
@@ -1034,7 +1036,7 @@ loopUsing:
 }
 
 // writeOutput encodes a the body into json and writes the output the the reponse writer
-func writeOutput(statusCode int, body interface{}, w http.ResponseWriter, logger *mlog.Log) {
+func writeOutput(statusCode int, body interface{}, w http.ResponseWriter, logger mlog.Log) {
 
 	if statusCode == http.StatusInternalServerError {
 		w.WriteHeader(statusCode)
@@ -1048,7 +1050,7 @@ func writeOutput(statusCode int, body interface{}, w http.ResponseWriter, logger
 		return
 	}
 
-	logger.Debug("http response", mlog.Field("response", string(jsonBytes)))
+	logger.Debug("http response", slog.Any("response", string(jsonBytes)))
 
 	w.Header().Add(HeaderContentType, HeaderContentTypeJSON)
 	w.WriteHeader(statusCode)

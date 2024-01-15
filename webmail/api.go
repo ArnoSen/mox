@@ -2,6 +2,7 @@ package webmail
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	_ "embed"
 
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/sherpa"
@@ -33,7 +35,6 @@ import (
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/metrics"
-	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/moxio"
 	"github.com/mjl-/mox/moxvar"
@@ -43,19 +44,22 @@ import (
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/smtpclient"
 	"github.com/mjl-/mox/store"
+	"github.com/mjl-/mox/webauth"
 )
 
 //go:embed api.json
 var webmailapiJSON []byte
 
 type Webmail struct {
-	maxMessageSize int64 // From listener.
+	maxMessageSize int64  // From listener.
+	cookiePath     string // From listener.
+	isForwarded    bool   // From listener, whether we look at X-Forwarded-* headers.
 }
 
 func mustParseAPI(api string, buf []byte) (doc sherpadoc.Section) {
 	err := json.Unmarshal(buf, &doc)
 	if err != nil {
-		xlog.Fatalx("parsing webmail api docs", err, mlog.Field("api", api))
+		pkglog.Fatalx("parsing webmail api docs", err, slog.String("api", api))
 	}
 	return doc
 }
@@ -64,22 +68,61 @@ var webmailDoc = mustParseAPI("webmail", webmailapiJSON)
 
 var sherpaHandlerOpts *sherpa.HandlerOpts
 
-func makeSherpaHandler(maxMessageSize int64) (http.Handler, error) {
-	return sherpa.NewHandler("/api/", moxvar.Version, Webmail{maxMessageSize}, &webmailDoc, sherpaHandlerOpts)
+func makeSherpaHandler(maxMessageSize int64, cookiePath string, isForwarded bool) (http.Handler, error) {
+	return sherpa.NewHandler("/api/", moxvar.Version, Webmail{maxMessageSize, cookiePath, isForwarded}, &webmailDoc, sherpaHandlerOpts)
 }
 
 func init() {
 	collector, err := sherpaprom.NewCollector("moxwebmail", nil)
 	if err != nil {
-		xlog.Fatalx("creating sherpa prometheus collector", err)
+		pkglog.Fatalx("creating sherpa prometheus collector", err)
 	}
 
-	sherpaHandlerOpts = &sherpa.HandlerOpts{Collector: collector, AdjustFunctionNames: "none"}
+	sherpaHandlerOpts = &sherpa.HandlerOpts{Collector: collector, AdjustFunctionNames: "none", NoCORS: true}
 	// Just to validate.
-	_, err = makeSherpaHandler(0)
+	_, err = makeSherpaHandler(0, "", false)
 	if err != nil {
-		xlog.Fatalx("sherpa handler", err)
+		pkglog.Fatalx("sherpa handler", err)
 	}
+}
+
+// LoginPrep returns a login token, and also sets it as cookie. Both must be
+// present in the call to Login.
+func (w Webmail) LoginPrep(ctx context.Context) string {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	var data [8]byte
+	_, err := cryptorand.Read(data[:])
+	xcheckf(ctx, err, "generate token")
+	loginToken := base64.RawURLEncoding.EncodeToString(data[:])
+
+	webauth.LoginPrep(ctx, log, "webmail", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, loginToken)
+
+	return loginToken
+}
+
+// Login returns a session token for the credentials, or fails with error code
+// "user:badLogin". Call LoginPrep to get a loginToken.
+func (w Webmail) Login(ctx context.Context, loginToken, username, password string) store.CSRFToken {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	csrfToken, err := webauth.Login(ctx, log, webauth.Accounts, "webmail", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, loginToken, username, password)
+	if _, ok := err.(*sherpa.Error); ok {
+		panic(err)
+	}
+	xcheckf(ctx, err, "login")
+	return csrfToken
+}
+
+// Logout invalidates the session token.
+func (w Webmail) Logout(ctx context.Context) {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	err := webauth.Logout(ctx, log, webauth.Accounts, "webmail", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, reqInfo.AccountName, reqInfo.SessionToken)
+	xcheckf(ctx, err, "logout")
 }
 
 // Token returns a token to use for an SSE connection. A token can only be used for
@@ -87,7 +130,7 @@ func init() {
 // with at most 10 unused tokens (the most recently created) per account.
 func (Webmail) Token(ctx context.Context) string {
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	return sseTokens.xgenerate(ctx, reqInfo.AccountName, reqInfo.LoginAddress)
+	return sseTokens.xgenerate(ctx, reqInfo.AccountName, reqInfo.LoginAddress, reqInfo.SessionToken)
 }
 
 // Requests sends a new request for an open SSE connection. Any currently active
@@ -112,9 +155,9 @@ func (Webmail) Request(ctx context.Context, req Request) {
 // ParsedMessage returns enough to render the textual body of a message. It is
 // assumed the client already has other fields through MessageItem.
 func (Webmail) ParsedMessage(ctx context.Context, msgID int64) (pm ParsedMessage) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -233,9 +276,21 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 
 	// todo: consider making this an HTTP POST, so we can upload as regular form, which is probably more efficient for encoding for the client and we can stream the data in.
 
+	// Prevent any accidental control characters, or attempts at getting bare \r or \n
+	// into messages.
+	for _, l := range [][]string{m.To, m.Cc, m.Bcc, {m.From, m.Subject, m.ReplyTo, m.UserAgent}} {
+		for _, s := range l {
+			for _, c := range s {
+				if c < 0x20 {
+					xcheckuserf(ctx, errors.New("control characters not allowed"), "checking header values")
+				}
+			}
+		}
+	}
+
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	log := xlog.WithContext(ctx).Fields(mlog.Field("account", reqInfo.AccountName))
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	log := pkglog.WithContext(ctx).With(slog.String("account", reqInfo.AccountName))
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -326,7 +381,7 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 	}
 
 	// Create file to compose message into.
-	dataFile, err := store.CreateMessageTemp("webmail-submit")
+	dataFile, err := store.CreateMessageTemp(log, "webmail-submit")
 	xcheckf(ctx, err, "creating temporary file for message")
 	defer store.CloseRemoveTempFile(log, dataFile, "message to submit")
 
@@ -361,7 +416,7 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 		// Note: we don't have "via" or "with", there is no registered for webmail.
 		recvHdr.Add(" ", "Received:", "from", recvFrom, "by", recvBy, "id", recvID) // ../rfc/5321:3158
 		if reqInfo.Request.TLS != nil {
-			recvHdr.Add(" ", message.TLSReceivedComment(log, *reqInfo.Request.TLS)...)
+			recvHdr.Add(" ", mox.TLSReceivedComment(log, *reqInfo.Request.TLS)...)
 		}
 		recvHdr.Add(" ", "for", "<"+rcptTo+">;", time.Now().Format(message.RFC5322Z))
 		return recvHdr.String()
@@ -557,8 +612,9 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 	var msgPrefix string
 	fd := fromAddr.Address.Domain
 	confDom, _ := mox.Conf.Domain(fd)
-	if len(confDom.DKIM.Sign) > 0 {
-		dkimHeaders, err := dkim.Sign(ctx, fromAddr.Address.Localpart, fd, confDom.DKIM, smtputf8, dataFile)
+	selectors := mox.DKIMSelectors(confDom.DKIM)
+	if len(selectors) > 0 {
+		dkimHeaders, err := dkim.Sign(ctx, log.Logger, fromAddr.Address.Localpart, fd, selectors, smtputf8, dataFile)
 		if err != nil {
 			metricServerErrors.WithLabelValues("dkimsign").Inc()
 		}
@@ -627,7 +683,7 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 				}
 			}
 
-			sentmb, err := bstore.QueryDB[store.Mailbox](ctx, acc.DB).FilterEqual("Sent", true).Get()
+			sentmb, err := bstore.QueryTx[store.Mailbox](tx).FilterEqual("Sent", true).Get()
 			if err == bstore.ErrAbsent {
 				// There is no mailbox designated as Sent mailbox, so we're done.
 				return
@@ -649,12 +705,18 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 				MsgPrefix:     []byte(msgPrefix),
 			}
 
+			if ok, maxSize, err := acc.CanAddMessageSize(tx, sentm.Size); err != nil {
+				xcheckf(ctx, err, "checking quota")
+			} else if !ok {
+				xcheckuserf(ctx, fmt.Errorf("account over maximum total message size %d", maxSize), "checking quota")
+			}
+
 			// Update mailbox before delivery, which changes uidnext.
 			sentmb.Add(sentm.MailboxCounts())
 			err = tx.Update(&sentmb)
 			xcheckf(ctx, err, "updating sent mailbox for counts")
 
-			err = acc.DeliverMessage(log, tx, &sentm, dataFile, true, false, false)
+			err = acc.DeliverMessage(log, tx, &sentm, dataFile, true, false, false, true)
 			if err != nil {
 				metricSubmission.WithLabelValues("storesenterror").Inc()
 				metricked = true
@@ -671,9 +733,9 @@ func (w Webmail) MessageSubmit(ctx context.Context, m SubmitMessage) {
 // MessageMove moves messages to another mailbox. If the message is already in
 // the mailbox an error is returned.
 func (Webmail) MessageMove(ctx context.Context, messageIDs []int64, mailboxID int64) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -802,9 +864,9 @@ func (Webmail) MessageMove(ctx context.Context, messageIDs []int64, mailboxID in
 
 // MessageDelete permanently deletes messages, without moving them to the Trash mailbox.
 func (Webmail) MessageDelete(ctx context.Context, messageIDs []int64) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -824,8 +886,10 @@ func (Webmail) MessageDelete(ctx context.Context, messageIDs []int64) {
 			var mb store.Mailbox
 			remove := make([]store.Message, 0, len(messageIDs))
 
+			var totalSize int64
 			for _, mid := range messageIDs {
 				m := xmessageID(ctx, tx, mid)
+				totalSize += m.Size
 
 				if m.MailboxID != mb.ID {
 					if mb.ID != 0 {
@@ -866,6 +930,9 @@ func (Webmail) MessageDelete(ctx context.Context, messageIDs []int64) {
 				changes = append(changes, mb.ChangeCounts())
 			}
 
+			err = acc.AddMessageSize(log, tx, -totalSize)
+			xcheckf(ctx, err, "updating disk usage")
+
 			// Mark removed messages as not needing training, then retrain them, so if they
 			// were trained, they get untrained.
 			for i := range remove {
@@ -895,9 +962,9 @@ func (Webmail) MessageDelete(ctx context.Context, messageIDs []int64) {
 // FlagsAdd adds flags, either system flags like \Seen or custom keywords. The
 // flags should be lower-case, but will be converted and verified.
 func (Webmail) FlagsAdd(ctx context.Context, messageIDs []int64, flaglist []string) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -978,9 +1045,9 @@ func (Webmail) FlagsAdd(ctx context.Context, messageIDs []int64, flaglist []stri
 
 // FlagsClear clears flags, either system flags like \Seen or custom keywords.
 func (Webmail) FlagsClear(ctx context.Context, messageIDs []int64, flaglist []string) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1056,9 +1123,9 @@ func (Webmail) FlagsClear(ctx context.Context, messageIDs []int64, flaglist []st
 
 // MailboxCreate creates a new mailbox.
 func (Webmail) MailboxCreate(ctx context.Context, name string) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1086,9 +1153,9 @@ func (Webmail) MailboxCreate(ctx context.Context, name string) {
 
 // MailboxDelete deletes a mailbox and all its messages.
 func (Webmail) MailboxDelete(ctx context.Context, mailboxID int64) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1123,16 +1190,16 @@ func (Webmail) MailboxDelete(ctx context.Context, mailboxID int64) {
 	for _, mID := range removeMessageIDs {
 		p := acc.MessagePath(mID)
 		err := os.Remove(p)
-		log.Check(err, "removing message file for mailbox delete", mlog.Field("path", p))
+		log.Check(err, "removing message file for mailbox delete", slog.String("path", p))
 	}
 }
 
 // MailboxEmpty empties a mailbox, removing all messages from the mailbox, but not
 // its child mailboxes.
 func (Webmail) MailboxEmpty(ctx context.Context, mailboxID int64) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1170,10 +1237,12 @@ func (Webmail) MailboxEmpty(ctx context.Context, mailboxID int64) {
 			xcheckf(ctx, err, "removing message recipients")
 
 			// Adjust mailbox counts, gather UIDs for broadcasted change, prepare for untraining.
+			var totalSize int64
 			uids := make([]store.UID, len(expunged))
 			for i, m := range expunged {
 				m.Expunged = false // Gather returns updated values.
 				mb.Sub(m.MailboxCounts())
+				totalSize += m.Size
 				uids[i] = m.UID
 
 				expunged[i].Junk = false
@@ -1182,6 +1251,9 @@ func (Webmail) MailboxEmpty(ctx context.Context, mailboxID int64) {
 
 			err = tx.Update(&mb)
 			xcheckf(ctx, err, "updating mailbox for counts")
+
+			err = acc.AddMessageSize(log, tx, -totalSize)
+			xcheckf(ctx, err, "updating disk usage")
 
 			err = acc.RetrainMessages(ctx, log, tx, expunged, true)
 			xcheckf(ctx, err, "retraining expunged messages")
@@ -1196,16 +1268,16 @@ func (Webmail) MailboxEmpty(ctx context.Context, mailboxID int64) {
 	for _, m := range expunged {
 		p := acc.MessagePath(m.ID)
 		err := os.Remove(p)
-		log.Check(err, "removing message file after emptying mailbox", mlog.Field("path", p))
+		log.Check(err, "removing message file after emptying mailbox", slog.String("path", p))
 	}
 }
 
 // MailboxRename renames a mailbox, possibly moving it to a new parent. The mailbox
 // ID and its messages are unchanged.
 func (Webmail) MailboxRename(ctx context.Context, mailboxID int64, newName string) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1239,9 +1311,9 @@ func (Webmail) MailboxRename(ctx context.Context, mailboxID int64, newName strin
 // matches, most recently used first, and whether this is the full list and further
 // requests for longer prefixes aren't necessary.
 func (Webmail) CompleteRecipient(ctx context.Context, search string) ([]string, bool) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1342,9 +1414,9 @@ func addressString(a message.Address, smtputf8 bool) string {
 
 // MailboxSetSpecialUse sets the special use flags of a mailbox.
 func (Webmail) MailboxSetSpecialUse(ctx context.Context, mb store.Mailbox) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1395,9 +1467,9 @@ func (Webmail) MailboxSetSpecialUse(ctx context.Context, mb store.Mailbox) {
 // children. The messageIDs are typically thread roots. But not all roots
 // (without parent) of a thread need to have the same collapsed state.
 func (Webmail) ThreadCollapse(ctx context.Context, messageIDs []int64, collapse bool) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1455,9 +1527,9 @@ func (Webmail) ThreadCollapse(ctx context.Context, messageIDs []int64, collapse 
 // ThreadMute saves the ThreadMute field for the messages and their children.
 // If messages are muted, they are also marked collapsed.
 func (Webmail) ThreadMute(ctx context.Context, messageIDs []int64, mute bool) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -1555,7 +1627,7 @@ type RecipientSecurity struct {
 // RecipientSecurity looks up security properties of the address in the
 // single-address message addressee (as it appears in a To/Cc/Bcc/etc header).
 func (Webmail) RecipientSecurity(ctx context.Context, messageAddressee string) (RecipientSecurity, error) {
-	resolver := dns.StrictResolver{Pkg: "webmail"}
+	resolver := dns.StrictResolver{Pkg: "webmail", Log: pkglog.WithContext(ctx).Logger}
 	return recipientSecurity(ctx, resolver, messageAddressee)
 }
 
@@ -1565,15 +1637,15 @@ func logPanic(ctx context.Context) {
 	if x == nil {
 		return
 	}
-	log := xlog.WithContext(ctx)
-	log.Error("recover from panic", mlog.Field("panic", x))
+	log := pkglog.WithContext(ctx)
+	log.Error("recover from panic", slog.Any("panic", x))
 	debug.PrintStack()
 	metrics.PanicInc(metrics.Webmail)
 }
 
 // separate function for testing with mocked resolver.
 func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddressee string) (RecipientSecurity, error) {
-	log := xlog.WithContext(ctx)
+	log := pkglog.WithContext(ctx)
 
 	rs := RecipientSecurity{
 		SecurityResultUnknown,
@@ -1601,7 +1673,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		policy, _, _, err := mtastsdb.Get(ctx, resolver, addr.Domain)
+		policy, _, _, err := mtastsdb.Get(ctx, log.Logger, resolver, addr.Domain)
 		if policy != nil && policy.Mode == mtasts.ModeEnforce {
 			rs.MTASTS = SecurityResultYes
 		} else if err == nil {
@@ -1617,7 +1689,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		_, origNextHopAuthentic, expandedNextHopAuthentic, _, hosts, _, err := smtpclient.GatherDestinations(ctx, log, resolver, dns.IPDomain{Domain: addr.Domain})
+		_, origNextHopAuthentic, expandedNextHopAuthentic, _, hosts, _, err := smtpclient.GatherDestinations(ctx, log.Logger, resolver, dns.IPDomain{Domain: addr.Domain})
 		if err != nil {
 			rs.DNSSEC = SecurityResultError
 			return
@@ -1641,7 +1713,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 
 		// Resolve the IPs. Required for DANE to prevent bad DNS servers from causing an
 		// error result instead of no-DANE result.
-		authentic, expandedAuthentic, expandedHost, _, _, err := smtpclient.GatherIPs(ctx, log, resolver, host, map[string][]net.IP{})
+		authentic, expandedAuthentic, expandedHost, _, _, err := smtpclient.GatherIPs(ctx, log.Logger, resolver, host, map[string][]net.IP{})
 		if err != nil {
 			rs.DANE = SecurityResultError
 			return
@@ -1651,7 +1723,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 			return
 		}
 
-		daneRequired, _, _, err := smtpclient.GatherTLSA(ctx, log, resolver, host.Domain, expandedAuthentic, expandedHost)
+		daneRequired, _, _, err := smtpclient.GatherTLSA(ctx, log.Logger, resolver, host.Domain, expandedAuthentic, expandedHost)
 		if err != nil {
 			rs.DANE = SecurityResultError
 			return
@@ -1664,7 +1736,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 
 	// STARTTLS and RequireTLS
 	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
-	acc, err := store.OpenAccount(reqInfo.AccountName)
+	acc, err := store.OpenAccount(log, reqInfo.AccountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		if acc != nil {
@@ -1682,7 +1754,7 @@ func recipientSecurity(ctx context.Context, resolver dns.Resolver, messageAddres
 		} else if err != nil {
 			rs.STARTTLS = SecurityResultError
 			rs.RequireTLS = SecurityResultError
-			log.Errorx("looking up recipient domain", err, mlog.Field("domain", addr.Domain))
+			log.Errorx("looking up recipient domain", err, slog.Any("domain", addr.Domain))
 			return nil
 		}
 		if rd.STARTTLS {

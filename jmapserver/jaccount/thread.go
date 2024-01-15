@@ -6,8 +6,8 @@ import (
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
-	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
+	"golang.org/x/exp/slog"
 )
 
 type Thread struct {
@@ -38,7 +38,7 @@ func (ja *JAccount) GetThread(ctx context.Context, ids []basetypes.Id) (state st
 			if err := q.NextID(&mailID); err == bstore.ErrAbsent {
 				break
 			} else if err != nil {
-				ja.mlog.Error("error getting next id", mlog.Field("err", err.Error()))
+				ja.mlog.Error("error getting next id", slog.Any("err", err.Error()))
 				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			th.EmailIds = append(th.EmailIds, basetypes.NewIdFromInt64(mailID))

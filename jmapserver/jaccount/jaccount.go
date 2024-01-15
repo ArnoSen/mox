@@ -7,6 +7,7 @@ import (
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
+	"golang.org/x/exp/slog"
 )
 
 // JAccount is an adaptor for a mox account. It serves the JMAP specific datatypes
@@ -28,10 +29,10 @@ var _ JAccounter = &JAccount{}
 
 type JAccount struct {
 	mAccount *store.Account
-	mlog     *mlog.Log
+	mlog     mlog.Log
 }
 
-func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
+func NewJAccount(mAccount *store.Account, mlog mlog.Log) *JAccount {
 	return &JAccount{
 		mAccount: mAccount,
 		mlog:     mlog,
@@ -41,7 +42,7 @@ func NewJAccount(mAccount *store.Account, mlog *mlog.Log) *JAccount {
 func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
 	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
 	if err != nil {
-		ja.mlog.Error("error loading part", mlog.Field("err", err.Error()))
+		ja.mlog.Error("error loading part", slog.Any("err", err.Error()))
 		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 	return NewJEmail(em, part, ja.mlog), nil

@@ -21,6 +21,7 @@ import (
 	_ "net/http/pprof"
 
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -39,7 +40,7 @@ import (
 	"github.com/mjl-/mox/webmail"
 )
 
-var xlog = mlog.New("http")
+var pkglog = mlog.New("http", nil)
 
 var (
 	// metricRequest tracks performance (time to write response header) of server.
@@ -98,11 +99,11 @@ type loggingWriter struct {
 	Err                          error
 	WebsocketResponse            bool        // If this was a successful websocket connection with backend.
 	SizeFromClient, SizeToClient int64       // Websocket data.
-	Fields                       []mlog.Pair // Additional fields to log.
+	Attrs                        []slog.Attr // Additional fields to log.
 }
 
-func (w *loggingWriter) AddField(p mlog.Pair) {
-	w.Fields = append(w.Fields, p)
+func (w *loggingWriter) AddAttr(a slog.Attr) {
+	w.Attrs = append(w.Attrs, a)
 }
 
 func (w *loggingWriter) Flush() {
@@ -312,43 +313,43 @@ func (w *loggingWriter) Done() {
 	if err == nil {
 		err = w.R.Context().Err()
 	}
-	fields := []mlog.Pair{
-		mlog.Field("httpaccess", ""),
-		mlog.Field("handler", w.Handler),
-		mlog.Field("method", method),
-		mlog.Field("url", w.R.URL),
-		mlog.Field("host", w.R.Host),
-		mlog.Field("duration", time.Since(w.Start)),
-		mlog.Field("statuscode", w.StatusCode),
-		mlog.Field("proto", strings.ToLower(w.R.Proto)),
-		mlog.Field("remoteaddr", w.R.RemoteAddr),
-		mlog.Field("tlsinfo", tlsinfo),
-		mlog.Field("useragent", w.R.Header.Get("User-Agent")),
-		mlog.Field("referrr", w.R.Header.Get("Referrer")),
+	attrs := []slog.Attr{
+		slog.String("httpaccess", ""),
+		slog.String("handler", w.Handler),
+		slog.String("method", method),
+		slog.Any("url", w.R.URL),
+		slog.String("host", w.R.Host),
+		slog.Duration("duration", time.Since(w.Start)),
+		slog.Int("statuscode", w.StatusCode),
+		slog.String("proto", strings.ToLower(w.R.Proto)),
+		slog.Any("remoteaddr", w.R.RemoteAddr),
+		slog.String("tlsinfo", tlsinfo),
+		slog.String("useragent", w.R.Header.Get("User-Agent")),
+		slog.String("referrr", w.R.Header.Get("Referrer")),
 	}
 	if w.WebsocketRequest {
-		fields = append(fields,
-			mlog.Field("websocketrequest", true),
+		attrs = append(attrs,
+			slog.Bool("websocketrequest", true),
 		)
 	}
 	if w.WebsocketResponse {
-		fields = append(fields,
-			mlog.Field("websocket", true),
-			mlog.Field("sizetoclient", w.SizeToClient),
-			mlog.Field("sizefromclient", w.SizeFromClient),
+		attrs = append(attrs,
+			slog.Bool("websocket", true),
+			slog.Int64("sizetoclient", w.SizeToClient),
+			slog.Int64("sizefromclient", w.SizeFromClient),
 		)
 	} else if w.UncompressedSize > 0 {
-		fields = append(fields,
-			mlog.Field("size", w.Size),
-			mlog.Field("uncompressedsize", w.UncompressedSize),
+		attrs = append(attrs,
+			slog.Int64("size", w.Size),
+			slog.Int64("uncompressedsize", w.UncompressedSize),
 		)
 	} else {
-		fields = append(fields,
-			mlog.Field("size", w.Size),
+		attrs = append(attrs,
+			slog.Int64("size", w.Size),
 		)
 	}
-	fields = append(fields, w.Fields...)
-	xlog.WithContext(w.R.Context()).Debugx("http request", err, fields...)
+	attrs = append(attrs, w.Attrs...)
+	pkglog.WithContext(w.R.Context()).Debugx("http request", err, attrs...)
 }
 
 // Set some http headers that should prevent potential abuse. Better safe than sorry.
@@ -407,9 +408,9 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 	// Rate limiting as early as possible.
 	ipstr, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		xlog.Debugx("split host:port client remoteaddr", err, mlog.Field("remoteaddr", r.RemoteAddr))
+		pkglog.Debugx("split host:port client remoteaddr", err, slog.Any("remoteaddr", r.RemoteAddr))
 	} else if ip := net.ParseIP(ipstr); ip == nil {
-		xlog.Debug("parsing ip for client remoteaddr", mlog.Field("remoteaddr", r.RemoteAddr))
+		pkglog.Debug("parsing ip for client remoteaddr", slog.Any("remoteaddr", r.RemoteAddr))
 	} else if !limiterConnectionrate.Add(ip, now, 1) {
 		method := metricHTTPMethod(r.Method)
 		proto := "http"
@@ -538,7 +539,7 @@ func Listen() {
 				path = l.AccountHTTP.Path
 			}
 			srv := ensureServe(false, port, "account-http at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handler(path, l.AccountHTTP.Forwarded))))
 			srv.Handle("account", nil, path, handler)
 			redirectToTrailingSlash(srv, "account", path)
 		}
@@ -549,7 +550,7 @@ func Listen() {
 				path = l.AccountHTTPS.Path
 			}
 			srv := ensureServe(true, port, "account-https at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webaccount.Handler(path, l.AccountHTTPS.Forwarded))))
 			srv.Handle("account", nil, path, handler)
 			redirectToTrailingSlash(srv, "account", path)
 		}
@@ -561,7 +562,7 @@ func Listen() {
 				path = l.AdminHTTP.Path
 			}
 			srv := ensureServe(false, port, "admin-http at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handler(path, l.AdminHTTP.Forwarded))))
 			srv.Handle("admin", nil, path, handler)
 			redirectToTrailingSlash(srv, "admin", path)
 		}
@@ -572,7 +573,7 @@ func Listen() {
 				path = l.AdminHTTPS.Path
 			}
 			srv := ensureServe(true, port, "admin-https at "+path)
-			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handle)))
+			handler := safeHeaders(http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webadmin.Handler(path, l.AdminHTTPS.Forwarded))))
 			srv.Handle("admin", nil, path, handler)
 			redirectToTrailingSlash(srv, "admin", path)
 		}
@@ -588,7 +589,8 @@ func Listen() {
 				path = l.WebmailHTTP.Path
 			}
 			srv := ensureServe(false, port, "webmail-http at "+path)
-			srv.Handle("webmail", nil, path, http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize))))
+			handler := http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize, path, l.WebmailHTTP.Forwarded)))
+			srv.Handle("webmail", nil, path, handler)
 			redirectToTrailingSlash(srv, "webmail", path)
 		}
 		if l.WebmailHTTPS.Enabled {
@@ -598,7 +600,8 @@ func Listen() {
 				path = l.WebmailHTTPS.Path
 			}
 			srv := ensureServe(true, port, "webmail-https at "+path)
-			srv.Handle("webmail", nil, path, http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize))))
+			handler := http.StripPrefix(path[:len(path)-1], http.HandlerFunc(webmail.Handler(maxMsgSize, path, l.WebmailHTTPS.Forwarded)))
+			srv.Handle("webmail", nil, path, handler)
 			redirectToTrailingSlash(srv, "webmail", path)
 		}
 
@@ -654,7 +657,7 @@ func Listen() {
 			// Importing net/http/pprof registers handlers on the default serve mux.
 			port := config.Port(l.PprofHTTP.Port, 8011)
 			if _, ok := portServe[port]; ok {
-				xlog.Fatal("cannot serve pprof on same endpoint as other http services")
+				pkglog.Fatal("cannot serve pprof on same endpoint as other http services")
 			}
 			srv := &serve{[]string{"pprof-http"}, nil, nil, false}
 			portServe[port] = srv
@@ -672,7 +675,7 @@ func Listen() {
 		}
 		if l.JMAPHTTPS.Enabled {
 			const path = "/jmap/"
-			xlog.Debug("jmap https is enabled")
+			pkglog.Debug("jmap https is enabled")
 			port := config.Port(l.JMAPHTTPS.Port, 443)
 			srv := ensureServe(true, port, "jmap-https")
 			srv.Webserver = true
@@ -683,7 +686,7 @@ func Listen() {
 			} else {
 				hostname = "localhost"
 			}
-			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, store.OpenAccount, l.JMAPHTTPS.CORSAllowOrigin, mlog.New("jmap")))
+			srv.Handle("jmap", nil, path, httphandler.NewHandler(hostname, path, port, store.OpenEmailAuth, store.OpenAccount, l.JMAPHTTPS.CORSAllowOrigin, mlog.New("jmap", nil)))
 
 			srv.Handle("jmap-wellknown", nil, "/.well-known/jmap", http.HandlerFunc(httphandler.NewCORSMiddleware(l.JMAPHTTPS.CORSAllowOrigin, []string{"Authorization", "*"}).HandleMethodOptions(func(resp http.ResponseWriter, req *http.Request) {
 				//FIXME this is ugly but it works
@@ -713,7 +716,7 @@ func Listen() {
 			// presence of TLS certificates for.
 			for _, name := range mox.Conf.Domains() {
 				if dom, err := dns.ParseDomain(name); err != nil {
-					xlog.Errorx("parsing domain from config", err)
+					pkglog.Errorx("parsing domain from config", err)
 				} else if d, _ := mox.Conf.Domain(dom); d.DMARC != nil && d.DMARC.Domain != "" && d.DMARC.DNSDomain != dom {
 					// Do not gather autoconfig name if this domain is configured to process reports
 					// for domains hosted elsewhere.
@@ -722,7 +725,7 @@ func Listen() {
 
 				autoconfdom, err := dns.ParseDomain("autoconfig." + name)
 				if err != nil {
-					xlog.Errorx("parsing domain from config for autoconfig", err)
+					pkglog.Errorx("parsing domain from config for autoconfig", err)
 				} else {
 					hosts[autoconfdom] = struct{}{}
 				}
@@ -772,20 +775,26 @@ func listen1(ip string, port int, tlsConfig *tls.Config, name string, kinds []st
 	if tlsConfig == nil {
 		protocol = "http"
 		if os.Getuid() == 0 {
-			xlog.Print("http listener", mlog.Field("name", name), mlog.Field("kinds", strings.Join(kinds, ",")), mlog.Field("address", addr))
+			pkglog.Print("http listener",
+				slog.String("name", name),
+				slog.String("kinds", strings.Join(kinds, ",")),
+				slog.String("address", addr))
 		}
 		ln, err = mox.Listen(mox.Network(ip), addr)
 		if err != nil {
-			xlog.Fatalx("http: listen", err, mlog.Field("addr", addr))
+			pkglog.Fatalx("http: listen", err, slog.Any("addr", addr))
 		}
 	} else {
 		protocol = "https"
 		if os.Getuid() == 0 {
-			xlog.Print("https listener", mlog.Field("name", name), mlog.Field("kinds", strings.Join(kinds, ",")), mlog.Field("address", addr))
+			pkglog.Print("https listener",
+				slog.String("name", name),
+				slog.String("kinds", strings.Join(kinds, ",")),
+				slog.String("address", addr))
 		}
 		ln, err = mox.Listen(mox.Network(ip), addr)
 		if err != nil {
-			xlog.Fatalx("https: listen", err, mlog.Field("addr", addr))
+			pkglog.Fatalx("https: listen", err, slog.String("addr", addr))
 		}
 		ln = tls.NewListener(ln, tlsConfig)
 	}
@@ -795,11 +804,11 @@ func listen1(ip string, port int, tlsConfig *tls.Config, name string, kinds []st
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       65 * time.Second, // Chrome closes connections after 60 seconds, firefox after 115 seconds.
-		ErrorLog:          golog.New(mlog.ErrWriter(xlog.Fields(mlog.Field("pkg", "net/http")), mlog.LevelInfo, protocol+" error"), "", 0),
+		ErrorLog:          golog.New(mlog.LogWriter(pkglog.With(slog.String("pkg", "net/http")), slog.LevelInfo, protocol+" error"), "", 0),
 	}
 	serve := func() {
 		err := server.Serve(ln)
-		xlog.Fatalx(protocol+": serve", err)
+		pkglog.Fatalx(protocol+": serve", err)
 	}
 	servers = append(servers, serve)
 }
@@ -808,7 +817,6 @@ func listen1(ip string, port int, tlsConfig *tls.Config, name string, kinds []st
 func Serve() {
 	loadStaticGzipCache(mox.DataDirPath("tmp/httpstaticcompresscache"), 512*1024*1024)
 
-	go webadmin.ManageAuthCache()
 	go webaccount.ImportManage()
 
 	for _, serve := range servers {
@@ -821,6 +829,14 @@ func Serve() {
 		i := 0
 		for m, hosts := range ensureManagerHosts {
 			for host := range hosts {
+				// Check if certificate is already available. If so, we don't print as much after a
+				// restart, and finish more quickly if only a few certificates are missing/old.
+				if avail, err := m.CertAvailable(mox.Shutdown, pkglog, host); err != nil {
+					pkglog.Errorx("checking acme certificate availability", err, slog.Any("host", host))
+				} else if avail {
+					continue
+				}
+
 				if i >= 10 {
 					// Just in case someone adds quite some domains to their config. We don't want to
 					// hit any ACME rate limits.
@@ -842,9 +858,9 @@ func Serve() {
 					SignatureSchemes:  []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
 					SupportedVersions: []uint16{tls.VersionTLS13},
 				}
-				xlog.Print("ensuring certificate availability", mlog.Field("hostname", host))
+				pkglog.Print("ensuring certificate availability", slog.Any("hostname", host))
 				if _, err := m.Manager.GetCertificate(hello); err != nil {
-					xlog.Errorx("requesting automatic certificate", err, mlog.Field("hostname", host))
+					pkglog.Errorx("requesting automatic certificate", err, slog.Any("hostname", host))
 				}
 			}
 		}

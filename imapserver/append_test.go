@@ -59,6 +59,10 @@ func TestAppend(t *testing.T) {
 	tc2.xuntagged(imapclient.UntaggedExists(2))
 	tc2.xcodeArg(imapclient.CodeAppendUID{UIDValidity: 1, UID: 2})
 
+	tc2.transactf("ok", "append inbox (\\Seen) \" 1-Jan-2022 10:10:00 +0100\" UTF8 ({31+}\r\ncontent-type: text/plain;\n\ntest)")
+	tc2.xuntagged(imapclient.UntaggedExists(3))
+	tc2.xcodeArg(imapclient.CodeAppendUID{UIDValidity: 1, UID: 3})
+
 	// Messages that we cannot parse are marked as application/octet-stream. Perhaps
 	// the imap client knows how to deal with them.
 	tc2.transactf("ok", "uid fetch 2 body")
@@ -74,4 +78,15 @@ func TestAppend(t *testing.T) {
 		},
 	}
 	tc2.xuntagged(imapclient.UntaggedFetch{Seq: 2, Attrs: []imapclient.FetchAttr{uid2, xbs}})
+
+	tclimit := startArgs(t, false, false, true, true, "limit")
+	defer tclimit.close()
+	tclimit.client.Login("limit@mox.example", "testtest")
+	tclimit.client.Select("inbox")
+	// First message of 1 byte is within limits.
+	tclimit.transactf("ok", "append inbox (\\Seen Label1 $label2) \" 1-Jan-2022 10:10:00 +0100\" {1+}\r\nx")
+	tclimit.xuntagged(imapclient.UntaggedExists(1))
+	// Second message would take account past limit.
+	tclimit.transactf("no", "append inbox (\\Seen Label1 $label2) \" 1-Jan-2022 10:10:00 +0100\" {1+}\r\nx")
+	tclimit.xcode("OVERQUOTA")
 }

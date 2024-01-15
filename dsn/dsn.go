@@ -5,7 +5,6 @@ package dsn
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,11 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mjl-/mox/dkim"
-	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
-	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/smtp"
 )
 
@@ -46,7 +42,6 @@ type Message struct {
 	// Message subject header, e.g. describing mail delivery failure.
 	Subject string
 
-	// Set when message is composed.
 	MessageID string
 
 	// References header, with Message-ID of original message this DSN is about. So
@@ -134,8 +129,8 @@ type Recipient struct {
 // supports smtputf8. This influences the message media (sub)types used for the
 // DSN.
 //
-// DKIM signatures are added if DKIM signing is configured for the "from" domain.
-func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
+// Called may want to add DKIM-Signature headers.
+func (m *Message) Compose(log mlog.Log, smtputf8 bool) ([]byte, error) {
 	// ../rfc/3462:119
 	// ../rfc/3464:377
 	// We'll make a multipart/report with 2 or 3 parts:
@@ -166,7 +161,9 @@ func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
 	header("From", fmt.Sprintf("<%s>", m.From.XString(smtputf8))) // todo: would be good to have a local ascii-only name for this address.
 	header("To", fmt.Sprintf("<%s>", m.To.XString(smtputf8)))     // todo: we could just leave this out if it has utf-8 and remote does not support utf-8.
 	header("Subject", m.Subject)
-	m.MessageID = mox.MessageIDGen(smtputf8)
+	if m.MessageID == "" {
+		return nil, fmt.Errorf("missing message-id")
+	}
 	header("Message-Id", fmt.Sprintf("<%s>", m.MessageID))
 	if m.References != "" {
 		header("References", m.References)
@@ -365,31 +362,6 @@ func (m *Message) Compose(log *mlog.Log, smtputf8 bool) ([]byte, error) {
 	}
 
 	data := msgw.w.Bytes()
-
-	// Add DKIM signature for domain, even if higher up than the full mail hostname.
-	// This helps with an assumed (because default) relaxed DKIM policy. If the DMARC
-	// policy happens to be strict, the signature won't help, but won't hurt either.
-	fd := m.From.IPDomain.Domain
-	var zerodom dns.Domain
-	for fd != zerodom {
-		confDom, ok := mox.Conf.Domain(fd)
-		if !ok {
-			var nfd dns.Domain
-			_, nfd.ASCII, _ = strings.Cut(fd.ASCII, ".")
-			_, nfd.Unicode, _ = strings.Cut(fd.Unicode, ".")
-			fd = nfd
-			continue
-		}
-
-		dkimHeaders, err := dkim.Sign(context.Background(), m.From.Localpart, fd, confDom.DKIM, smtputf8, bytes.NewReader(data))
-		if err != nil {
-			log.Errorx("dsn: dkim sign for domain, returning unsigned dsn", err, mlog.Field("domain", fd))
-		} else {
-			data = append([]byte(dkimHeaders), data...)
-		}
-		break
-	}
-
 	return data, nil
 }
 

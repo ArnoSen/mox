@@ -2,9 +2,12 @@ package queue
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"time"
+
+	"golang.org/x/exp/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -27,7 +30,7 @@ var (
 	)
 )
 
-func deliverDSNFailure(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string) {
+func deliverDSNFailure(ctx context.Context, log mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string) {
 	const subject = "mail delivery failed"
 	message := fmt.Sprintf(`
 Delivery has failed permanently for your email to:
@@ -41,10 +44,10 @@ Error during the last delivery attempt:
 	%s
 `, m.Recipient().XString(m.SMTPUTF8), errmsg)
 
-	deliverDSN(log, m, remoteMTA, secodeOpt, errmsg, true, nil, subject, message)
+	deliverDSN(ctx, log, m, remoteMTA, secodeOpt, errmsg, true, nil, subject, message)
 }
 
-func deliverDSNDelay(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string, retryUntil time.Time) {
+func deliverDSNDelay(ctx context.Context, log mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string, retryUntil time.Time) {
 	// Should not happen, but doesn't hurt to prevent sending delayed delivery
 	// notifications for DMARC reports. We don't want to waste postmaster attention.
 	if m.IsDMARCReport {
@@ -65,21 +68,21 @@ Error during the last delivery attempt:
 	%s
 `, m.Recipient().XString(false), errmsg)
 
-	deliverDSN(log, m, remoteMTA, secodeOpt, errmsg, false, &retryUntil, subject, message)
+	deliverDSN(ctx, log, m, remoteMTA, secodeOpt, errmsg, false, &retryUntil, subject, message)
 }
 
 // We only queue DSNs for delivery failures for emails submitted by authenticated
 // users. So we are delivering to local users. ../rfc/5321:1466
 // ../rfc/5321:1494
 // ../rfc/7208:490
-func deliverDSN(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string, permanent bool, retryUntil *time.Time, subject, textBody string) {
+func deliverDSN(ctx context.Context, log mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg string, permanent bool, retryUntil *time.Time, subject, textBody string) {
 	kind := "delayed delivery"
 	if permanent {
 		kind = "failure"
 	}
 
 	qlog := func(text string, err error) {
-		log.Errorx("queue dsn: "+text+": sender will not be informed about dsn", err, mlog.Field("sender", m.Sender().XString(m.SMTPUTF8)), mlog.Field("kind", kind))
+		log.Errorx("queue dsn: "+text+": sender will not be informed about dsn", err, slog.String("sender", m.Sender().XString(m.SMTPUTF8)), slog.String("kind", kind))
 	}
 
 	msgf, err := os.Open(m.MessagePath())
@@ -122,6 +125,7 @@ func deliverDSN(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg st
 		From:       smtp.Path{Localpart: "postmaster", IPDomain: dns.IPDomain{Domain: mox.Conf.Static.HostnameDomain}},
 		To:         m.Sender(),
 		Subject:    subject,
+		MessageID:  mox.MessageIDGen(false),
 		References: m.MessageID,
 		TextBody:   textBody,
 
@@ -148,7 +152,7 @@ func deliverDSN(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg st
 		return
 	}
 
-	msgData = append(msgData, []byte("Return-Path: <"+dsnMsg.From.XString(m.SMTPUTF8)+">\r\n")...)
+	msgData = append([]byte("Return-Path: <"+dsnMsg.From.XString(m.SMTPUTF8)+">\r\n"), msgData...)
 
 	mailbox := "Inbox"
 	senderAccount := m.SenderAccount
@@ -156,9 +160,9 @@ func deliverDSN(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg st
 		// senderAccount should already by postmaster, but doesn't hurt to ensure it.
 		senderAccount = mox.Conf.Static.Postmaster.Account
 	}
-	acc, err := store.OpenAccount(senderAccount)
+	acc, err := store.OpenAccount(log, senderAccount)
 	if err != nil {
-		acc, err = store.OpenAccount(mox.Conf.Static.Postmaster.Account)
+		acc, err = store.OpenAccount(log, mox.Conf.Static.Postmaster.Account)
 		if err != nil {
 			qlog("looking up postmaster account after sender account was not found", err)
 			return
@@ -167,10 +171,10 @@ func deliverDSN(log *mlog.Log, m Msg, remoteMTA dsn.NameIP, secodeOpt, errmsg st
 	}
 	defer func() {
 		err := acc.Close()
-		log.Check(err, "queue dsn: closing account", mlog.Field("sender", m.Sender().XString(m.SMTPUTF8)), mlog.Field("kind", kind))
+		log.Check(err, "queue dsn: closing account", slog.String("sender", m.Sender().XString(m.SMTPUTF8)), slog.String("kind", kind))
 	}()
 
-	msgFile, err := store.CreateMessageTemp("queue-dsn")
+	msgFile, err := store.CreateMessageTemp(log, "queue-dsn")
 	if err != nil {
 		qlog("creating temporary message file", err)
 		return

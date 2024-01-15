@@ -107,6 +107,7 @@ const zindexes = {
 	popover: '5',
 	attachments: '5',
 	shortcut: '6',
+	login: '7',
 }
 
 // From HTML.
@@ -224,7 +225,103 @@ let loginAddress: api.MessageAddress | null = null
 // the account has an address for.
 let domainAddressConfigs: {[domainASCII: string]: api.DomainAddressConfig} = {}
 
-const client = new api.Client()
+// Mailbox containing rejects.
+let rejectsMailbox: string = ''
+
+// Last known server version. For asking to reload.
+let lastServerVersion: string = ''
+
+const login = async (reason: string) => {
+	return new Promise<string>((resolve: (v: string) => void, _) => {
+		const origFocus = document.activeElement
+		let reasonElem: HTMLElement
+		let fieldset: HTMLFieldSetElement
+		let autosize: HTMLElement
+		let username: HTMLInputElement
+		let password: HTMLInputElement
+		const root = dom.div(
+			style({position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: zindexes.login, animation: 'fadein .15s ease-in'}),
+			dom.div(
+				reasonElem=reason ? dom.div(style({marginBottom: '2ex', textAlign: 'center'}), reason) : dom.div(),
+				dom.div(
+					style({backgroundColor: 'white', borderRadius: '.25em', padding: '1em', boxShadow: '0 0 20px rgba(0, 0, 0, 0.1)', border: '1px solid #ddd', maxWidth: '95vw', overflowX: 'auto', maxHeight: '95vh', overflowY: 'auto', marginBottom: '20vh'}),
+					dom.form(
+						async function submit(e: SubmitEvent) {
+							e.preventDefault()
+							e.stopPropagation()
+
+							reasonElem.remove()
+
+							try {
+								fieldset.disabled = true
+								const loginToken = await client.LoginPrep()
+								const token = await client.Login(loginToken, username.value, password.value)
+								try {
+									window.localStorage.setItem('webmailcsrftoken', token)
+								} catch (err) {
+									console.log('saving csrf token in localStorage', err)
+								}
+								root.remove()
+								if (origFocus && origFocus instanceof HTMLElement && origFocus.parentNode) {
+									origFocus.focus()
+								}
+								resolve(token)
+							} catch (err) {
+								console.log('login error', err)
+								window.alert('Error: ' + errmsg(err))
+							} finally {
+								fieldset.disabled = false
+							}
+						},
+						fieldset=dom.fieldset(
+							dom.h1('Mail'),
+							dom.label(
+								style({display: 'block', marginBottom: '2ex'}),
+								dom.div('Email address', style({marginBottom: '.5ex'})),
+								autosize=dom.span(dom._class('autosize'),
+									username=dom.input(
+										attr.required(''),
+										attr.placeholder('jane@example.org'),
+										function change() { autosize.dataset.value = username.value },
+										function input() { autosize.dataset.value = username.value },
+									),
+								),
+							),
+							dom.label(
+								style({display: 'block', marginBottom: '2ex'}),
+								dom.div('Password', style({marginBottom: '.5ex'})),
+								password=dom.input(attr.type('password'), attr.required('')),
+							),
+							dom.div(
+								style({textAlign: 'center'}),
+								dom.submitbutton('Login'),
+							),
+						),
+					)
+				)
+			)
+		)
+		document.body.appendChild(root)
+		username.focus()
+	})
+}
+
+const localStorageGet = (k: string): string | null => {
+	try {
+		return window.localStorage.getItem(k)
+	} catch (err) {
+		return null
+	}
+}
+
+const localStorageRemove = (k: string) => {
+	try {
+		return window.localStorage.removeItem(k)
+	} catch (err) {
+	}
+}
+
+const client = new api.Client().withOptions({csrfHeader: 'x-mox-csrf', login: login}).withAuthToken(localStorageGet('webmailcsrftoken') || '')
 
 // Link returns a clickable link with rel="noopener noreferrer".
 const link = (href: string, anchorOpt?: string): HTMLElement => dom.a(attr.href(href), attr.rel('noopener noreferrer'), attr.target('_blank'), anchorOpt || href)
@@ -571,6 +668,8 @@ const newAddressComplete = (): any => {
 	let completeSearch: string
 	let completeFull: boolean
 
+	let aborter: {abort?: () => void} = {}
+
 	return async function keydown(e: KeyboardEvent) {
 		const target = e.target as HTMLInputElement
 		if (!datalist) {
@@ -597,12 +696,18 @@ const newAddressComplete = (): any => {
 		} else if (search === completeSearch) {
 			return
 		}
+		if (aborter.abort) {
+			aborter.abort()
+		}
+		aborter = {}
 		try {
-			[completeMatches, completeFull] = await withStatus('Autocompleting addresses', client.CompleteRecipient(search))
+			[completeMatches, completeFull] = await withStatus('Autocompleting addresses', client.withOptions({aborter: aborter}).CompleteRecipient(search))
 			completeSearch = search
 			dom._kids(datalist, (completeMatches || []).map(s => dom.option(s)))
 		} catch (err) {
 			log('autocomplete error', errmsg(err))
+		} finally {
+			aborter = {}
 		}
 	}
 }
@@ -1283,13 +1388,13 @@ const compose = (opts: ComposeOptions) => {
 
 			const color = (v: api.SecurityResult) => {
 				if (v === api.SecurityResult.SecurityResultYes) {
-					return '#50c40f'
+					return underlineGreen
 				} else if (v === api.SecurityResult.SecurityResultNo) {
-					return '#e15d1c'
+					return underlineRed
 				} else if (v === api.SecurityResult.SecurityResultUnknown) {
 					return 'white'
 				}
-				return '#aaa'
+				return underlineGrey
 			}
 			const setBar = (c0: string, c1: string, c2: string, c3: string, c4: string) => {
 				const stops = [
@@ -1379,6 +1484,7 @@ const compose = (opts: ComposeOptions) => {
 						autosizeElem.dataset.value = inputElem.value
 					},
 					function change() {
+						autosizeElem.dataset.value = inputElem.value
 						fetchRecipientSecurity()
 					},
 				),
@@ -1977,6 +2083,66 @@ const newMsgitemView = (mi: api.MessageItem, msglistView: MsglistView, otherMail
 			}
 		}
 
+		const correspondentAddrs = (miv: MsgitemView): [api.MessageAddress[], api.MessageAddress[]] => {
+			let fromAddrs = miv.messageitem.Envelope.From || []
+			let toAddrs: api.MessageAddress[] = []
+			if (listMailboxes().find(mb => mb.ID === miv.messageitem.Message.MailboxID)?.Sent) {
+				toAddrs = [...(miv.messageitem.Envelope.To || []), ...(miv.messageitem.Envelope.CC || []), ...(miv.messageitem.Envelope.BCC || [])]
+			}
+			return [fromAddrs, toAddrs]
+		}
+
+		// Correspondents for a message, possibly a collapsed thread root.
+		const correspondents = () => {
+			let fromAddrs: api.MessageAddress[] = []
+			let toAddrs: api.MessageAddress[] = []
+			if (msgitemView.isCollapsedThreadRoot()) {
+				// Gather both all correspondents in thread.
+				;[msgitemView, ...(msgitemView.descendants())].forEach(miv => {
+					const [fa, ta] = correspondentAddrs(miv)
+					fromAddrs = [...fromAddrs, ...fa]
+					toAddrs = [...toAddrs, ...ta]
+				})
+			} else {
+				[fromAddrs, toAddrs] = correspondentAddrs(msgitemView)
+			}
+
+			const seen = new Set<string>()
+			let fa: api.MessageAddress[] = []
+			let ta: api.MessageAddress[] = []
+			for (const a of fromAddrs) {
+				const k = a.User+'@'+a.Domain.ASCII
+				if (!seen.has(k)) {
+					seen.add(k)
+					fa.push(a)
+				}
+			}
+			for (const a of toAddrs) {
+				const k = a.User+'@'+a.Domain.ASCII
+				if (!seen.has(k)) {
+					seen.add(k)
+					ta.push(a)
+				}
+			}
+			let title = fa.map(a => formatAddressFull(a)).join(', ')
+			if (ta.length > 0) {
+				if (title) {
+					title += ',\n'
+				}
+				title += 'addressed: '+ta.map(a => formatAddressFull(a)).join(', ')
+			}
+			return [
+				attr.title(title),
+				join(
+					[
+						...fa.map(a => formatAddressShort(a)),
+						...ta.map(a => dom.span(style({fontStyle: 'italic'}), formatAddressShort(a))),
+					],
+					() => ', '
+				),
+			]
+		}
+
 		// When rerendering, we remember active & focus states. So we don't have to make
 		// the caller also call redraw on MsglistView.
 		const active = msgitemView.root && msgitemView.root.classList.contains('active')
@@ -2039,11 +2205,7 @@ const newMsgitemView = (mi: api.MessageItem, msglistView: MsglistView, otherMail
 			),
 			dom.div(dom._class('msgitemcell', 'msgitemfrom'),
 				dom.div(style({display: 'flex', justifyContent: 'space-between'}),
-					dom.div(dom._class('msgitemfromtext', 'silenttitle'),
-						// todo: for collapsed messages, show all participants in thread?
-						attr.title((mi.Envelope.From || []).map(a => formatAddressFull(a)).join(', ')),
-						join((mi.Envelope.From || []).map(a => formatAddressShort(a)), () => ', ')
-					),
+					dom.div(dom._class('msgitemfromtext', 'silenttitle'), correspondents()),
 					identityHeader,
 				),
 				// Thread messages are connected by a vertical bar. The first and last message are
@@ -2184,7 +2346,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		parsedMessageReject = reject
 	})
 
-	const react = async (to: api.MessageAddress[] | null, forward: boolean, all: boolean) => {
+	const react = async (to: api.MessageAddress[], cc: api.MessageAddress[], bcc: api.MessageAddress[], forward: boolean, all: boolean) => {
 		const pm = await parsedMessagePromise
 		let body = ''
 		const sel = window.getSelection()
@@ -2218,9 +2380,9 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		subject = (RegExp('^'+subjectPrefix, 'i').test(subject) ? '' : subjectPrefix+' ') + subject
 		const opts: ComposeOptions = {
 			from: mi.Envelope.To || undefined,
-			to: (to || []).map(a => formatAddress(a)),
-			cc: [],
-			bcc: [],
+			to: to.map(a => formatAddress(a)),
+			cc: cc.map(a => formatAddress(a)),
+			bcc: bcc.map(a => formatAddress(a)),
 			subject: subject,
 			body: body,
 			isForward: forward,
@@ -2237,9 +2399,13 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 	}
 
 	const reply = async (all: boolean, toOpt?: api.MessageAddress[]) => {
-		await react(toOpt || ((mi.Envelope.ReplyTo || []).length > 0 ? mi.Envelope.ReplyTo : mi.Envelope.From) || null, false, all)
+		if (!all && !toOpt && (mi.Envelope.From || []).length === 1 && envelopeIdentity(mi.Envelope.From || [])) {
+			await react(mi.Envelope.To || [], mi.Envelope.CC || [], mi.Envelope.BCC || [], false, all)
+		} else {
+			await react(toOpt || ((mi.Envelope.ReplyTo || []).length > 0 ? mi.Envelope.ReplyTo : mi.Envelope.From) || [], [], [], false, all)
+		}
 	}
-	const cmdForward = async () => { react([], true, false) }
+	const cmdForward = async () => { react([], [], [], true, false) }
 	const cmdReplyList = async () => {
 		const pm = await parsedMessagePromise
 		if (pm.ListReplyAddress) {
@@ -2436,7 +2602,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 	}
 	loadButtons(parsedMessageOpt || null)
 
-	loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword)
+	loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword, false)
 
 	const loadHeaderDetails = (pm: api.ParsedMessage) => {
 		if (msgheaderdetailsElem) {
@@ -2705,7 +2871,7 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		updateKeywords: async (modseq: number, keywords: string[]) => {
 			mi.Message.ModSeq = modseq
 			mi.Message.Keywords = keywords
-			loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword)
+			loadMsgheaderView(msgheaderElem, miv.messageitem, settings.showHeaders, refineKeyword, false)
 			loadMoreHeaders(await parsedMessagePromise)
 		},
 	}
@@ -2782,7 +2948,8 @@ const newMsgView = (miv: MsgitemView, msglistView: MsglistView, listMailboxes: l
 		}
 		if (!miv.messageitem.Message.Junk && !miv.messageitem.Message.Notjunk) {
 			window.setTimeout(async () => {
-				if (!miv.messageitem.Message.Junk && !miv.messageitem.Message.Notjunk && miv.messageitem.Message.ID === msglistView.activeMessageID()) {
+				const mailboxIsReject = () => !!listMailboxes().find(mb => mb.ID === miv.messageitem.Message.MailboxID && mb.Name === rejectsMailbox)
+				if (!miv.messageitem.Message.Junk && !miv.messageitem.Message.Notjunk && miv.messageitem.Message.ID === msglistView.activeMessageID() && !mailboxIsReject()) {
 					await withStatus('Marking current message as not junk', client.FlagsAdd([miv.messageitem.Message.ID], ['$notjunk']))
 				}
 			}, 5*1000)
@@ -2907,7 +3074,7 @@ const newMsglistView = (msgElem: HTMLElement, listMailboxes: listMailboxes, setL
 		}
 	}
 	const cmdDelete = async () => {
-		if (!confirm('Are you sure you want to permanently delete?')) {
+		if (!window.confirm('Are you sure you want to permanently delete?')) {
 			return
 		}
 		await withStatus('Permanently deleting messages', client.MessageDelete(mlv.selected().map(miv => miv.messageitem.Message.ID)))
@@ -5275,6 +5442,7 @@ type listMailboxes = () => api.Mailbox[]
 const init = async () => {
 	let connectionElem: HTMLElement // SSE connection status/error. Empty when connected.
 	let layoutElem: HTMLSelectElement // Select dropdown for layout.
+	let loginAddressElem: HTMLElement
 
 	let msglistscrollElem: HTMLElement
 	let queryactivityElem: HTMLElement // We show ... when a query is active and data is forthcoming.
@@ -5840,7 +6008,18 @@ const init = async () => {
 					' ',
 					dom.clickbutton('Help', attr.title('Show popup with basic usage information and a keyboard shortcuts.'), clickCmd(cmdHelp, shortcuts)),
 					' ',
-					link('https://github.com/mjl-/mox', 'mox'),
+					loginAddressElem=dom.span(),
+					' ',
+					dom.clickbutton('Logout', attr.title('Logout, invalidating this session.'), async function click(e: MouseEvent) {
+						await withStatus('Logging out', client.Logout(), e.target! as HTMLButtonElement)
+						localStorageRemove('webmailcsrftoken')
+						if (eventSource) {
+							eventSource.close()
+							eventSource = null
+						}
+						// Reload so all state is cleared from memory.
+						window.location.reload()
+					}),
 				),
 			),
 		),
@@ -6264,12 +6443,22 @@ const init = async () => {
 		}
 
 		eventSource.addEventListener('start', (e: MessageEvent) => {
-			const start = checkParse(() => api.parser.EventStart(JSON.parse(e.data)))
+			const data = JSON.parse(e.data)
+			if (lastServerVersion && data.Version !== lastServerVersion) {
+				if (window.confirm('Server has been updated to a new version. Reload?')) {
+					window.location.reload()
+					return
+				}
+			}
+			lastServerVersion = data.Version
+
+			const start = checkParse(() => api.parser.EventStart(data))
 			log('event start', start)
 
 			connecting = false
 			sseID = start.SSEID
 			loginAddress = start.LoginAddress
+			dom._kids(loginAddressElem, loginAddress.User + '@' + (loginAddress.Domain.Unicode || loginAddress.Domain.ASCII))
 			const loginAddr = formatEmailASCII(loginAddress)
 			accountAddresses = start.Addresses || []
 			accountAddresses.sort((a, b) => {
@@ -6285,6 +6474,7 @@ const init = async () => {
 				return a.User < b.User ? -1 : 1
 			})
 			domainAddressConfigs = start.DomainAddressConfigs || {}
+			rejectsMailbox = start.RejectsMailbox
 
 			clearList()
 

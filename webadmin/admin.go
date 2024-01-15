@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
@@ -18,11 +19,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime/debug"
 	"sort"
@@ -32,8 +33,8 @@ import (
 
 	_ "embed"
 
-	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/adns"
 
@@ -62,164 +63,129 @@ import (
 	"github.com/mjl-/mox/store"
 	"github.com/mjl-/mox/tlsrpt"
 	"github.com/mjl-/mox/tlsrptdb"
+	"github.com/mjl-/mox/webauth"
 )
 
-var xlog = mlog.New("webadmin")
+var pkglog = mlog.New("webadmin", nil)
 
-//go:embed adminapi.json
+//go:embed api.json
 var adminapiJSON []byte
 
 //go:embed admin.html
 var adminHTML []byte
 
-var adminDoc = mustParseAPI("admin", adminapiJSON)
+//go:embed admin.js
+var adminJS []byte
 
-var adminSherpaHandler http.Handler
+var webadminFile = &mox.WebappFile{
+	HTML:     adminHTML,
+	JS:       adminJS,
+	HTMLPath: filepath.FromSlash("webadmin/admin.html"),
+	JSPath:   filepath.FromSlash("webadmin/admin.js"),
+}
+
+var adminDoc = mustParseAPI("admin", adminapiJSON)
 
 func mustParseAPI(api string, buf []byte) (doc sherpadoc.Section) {
 	err := json.Unmarshal(buf, &doc)
 	if err != nil {
-		xlog.Fatalx("parsing webadmin api docs", err, mlog.Field("api", api))
+		pkglog.Fatalx("parsing webadmin api docs", err, slog.String("api", api))
 	}
 	return doc
+}
+
+var sherpaHandlerOpts *sherpa.HandlerOpts
+
+func makeSherpaHandler(cookiePath string, isForwarded bool) (http.Handler, error) {
+	return sherpa.NewHandler("/api/", moxvar.Version, Admin{cookiePath, isForwarded}, &adminDoc, sherpaHandlerOpts)
 }
 
 func init() {
 	collector, err := sherpaprom.NewCollector("moxadmin", nil)
 	if err != nil {
-		xlog.Fatalx("creating sherpa prometheus collector", err)
+		pkglog.Fatalx("creating sherpa prometheus collector", err)
 	}
 
-	adminSherpaHandler, err = sherpa.NewHandler("/api/", moxvar.Version, Admin{}, &adminDoc, &sherpa.HandlerOpts{Collector: collector, AdjustFunctionNames: "none"})
+	sherpaHandlerOpts = &sherpa.HandlerOpts{Collector: collector, AdjustFunctionNames: "none", NoCORS: true}
+	// Just to validate.
+	_, err = makeSherpaHandler("", false)
 	if err != nil {
-		xlog.Fatalx("sherpa handler", err)
+		pkglog.Fatalx("sherpa handler", err)
+	}
+}
+
+// Handler returns a handler for the webadmin endpoints, customized for the
+// cookiePath.
+func Handler(cookiePath string, isForwarded bool) func(w http.ResponseWriter, r *http.Request) {
+	sh, err := makeSherpaHandler(cookiePath, isForwarded)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err != nil {
+			http.Error(w, "500 - internal server error - cannot handle requests", http.StatusInternalServerError)
+			return
+		}
+		handle(sh, isForwarded, w, r)
 	}
 }
 
 // Admin exports web API functions for the admin web interface. All its methods are
 // exported under api/. Function calls require valid HTTP Authentication
 // credentials of a user.
-type Admin struct{}
-
-// We keep a cache for authentication so we don't bcrypt for each incoming HTTP request with HTTP basic auth.
-// We keep track of the last successful password hash and Authorization header.
-// The cache is cleared periodically, see below.
-var authCache struct {
-	sync.Mutex
-	lastSuccessHash, lastSuccessAuth string
+type Admin struct {
+	cookiePath  string // From listener, for setting authentication cookies.
+	isForwarded bool   // From listener, whether we look at X-Forwarded-* headers.
 }
 
-// started when we start serving. not at package init time, because we don't want
-// to make goroutines that early.
-func ManageAuthCache() {
-	for {
-		authCache.Lock()
-		authCache.lastSuccessHash = ""
-		authCache.lastSuccessAuth = ""
-		authCache.Unlock()
-		time.Sleep(15 * time.Minute)
-	}
+type ctxKey string
+
+var requestInfoCtxKey ctxKey = "requestInfo"
+
+type requestInfo struct {
+	SessionToken store.SessionToken
+	Response     http.ResponseWriter
+	Request      *http.Request // For Proto and TLS connection state during message submit.
 }
 
-// check whether authentication from the config (passwordfile with bcrypt hash)
-// matches the authorization header "authHdr". we don't care about any username.
-// on (auth) failure, a http response is sent and false returned.
-func checkAdminAuth(ctx context.Context, passwordfile string, w http.ResponseWriter, r *http.Request) bool {
-	log := xlog.WithContext(ctx)
-
-	respondAuthFail := func() bool {
-		// note: browsers don't display the realm to prevent users getting confused by malicious realm messages.
-		w.Header().Set("WWW-Authenticate", `Basic realm="mox admin - login with empty username and admin password"`)
-		http.Error(w, "http 401 - unauthorized - mox admin - login with empty username and admin password", http.StatusUnauthorized)
-		return false
-	}
-
-	authResult := "error"
-	start := time.Now()
-	var addr *net.TCPAddr
-	defer func() {
-		metrics.AuthenticationInc("webadmin", "httpbasic", authResult)
-		if authResult == "ok" && addr != nil {
-			mox.LimiterFailedAuth.Reset(addr.IP, start)
-		}
-	}()
-
-	var err error
-	var remoteIP net.IP
-	addr, err = net.ResolveTCPAddr("tcp", r.RemoteAddr)
-	if err != nil {
-		log.Errorx("parsing remote address", err, mlog.Field("addr", r.RemoteAddr))
-	} else if addr != nil {
-		remoteIP = addr.IP
-	}
-	if remoteIP != nil && !mox.LimiterFailedAuth.Add(remoteIP, start, 1) {
-		metrics.AuthenticationRatelimitedInc("webadmin")
-		http.Error(w, "429 - too many auth attempts", http.StatusTooManyRequests)
-		return false
-	}
-
-	authHdr := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHdr, "Basic ") || passwordfile == "" {
-		return respondAuthFail()
-	}
-	buf, err := os.ReadFile(passwordfile)
-	if err != nil {
-		log.Errorx("reading admin password file", err, mlog.Field("path", passwordfile))
-		return respondAuthFail()
-	}
-	passwordhash := strings.TrimSpace(string(buf))
-	authCache.Lock()
-	defer authCache.Unlock()
-	if passwordhash != "" && passwordhash == authCache.lastSuccessHash && authHdr != "" && authCache.lastSuccessAuth == authHdr {
-		authResult = "ok"
-		return true
-	}
-	auth, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHdr, "Basic "))
-	if err != nil {
-		return respondAuthFail()
-	}
-	t := strings.SplitN(string(auth), ":", 2)
-	if len(t) != 2 || len(t[1]) < 8 {
-		log.Info("failed authentication attempt", mlog.Field("username", "admin"), mlog.Field("remote", remoteIP))
-		return respondAuthFail()
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordhash), []byte(t[1])); err != nil {
-		authResult = "badcreds"
-		log.Info("failed authentication attempt", mlog.Field("username", "admin"), mlog.Field("remote", remoteIP))
-		return respondAuthFail()
-	}
-	authCache.lastSuccessHash = passwordhash
-	authCache.lastSuccessAuth = authHdr
-	authResult = "ok"
-	return true
-}
-
-func Handle(w http.ResponseWriter, r *http.Request) {
+func handle(apiHandler http.Handler, isForwarded bool, w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(r.Context(), mlog.CidKey, mox.Cid())
-	if !checkAdminAuth(ctx, mox.ConfigDirPath(mox.Conf.Static.AdminPasswordFile), w, r) {
-		// Response already sent.
-		return
-	}
+	log := pkglog.WithContext(ctx).With(slog.String("adminauth", ""))
 
-	if lw, ok := w.(interface{ AddField(f mlog.Pair) }); ok {
-		lw.AddField(mlog.Field("authadmin", true))
-	}
-
-	if r.Method == "GET" && r.URL.Path == "/" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache; max-age=0")
-		// We typically return the embedded admin.html, but during development it's handy
-		// to load from disk.
-		f, err := os.Open("webadmin/admin.html")
-		if err == nil {
-			defer f.Close()
-			_, _ = io.Copy(w, f)
-		} else {
-			_, _ = w.Write(adminHTML)
+	// HTML/JS can be retrieved without authentication.
+	if r.URL.Path == "/" {
+		switch r.Method {
+		case "GET", "HEAD":
+			webadminFile.Serve(ctx, log, w, r)
+		default:
+			http.Error(w, "405 - method not allowed - use get", http.StatusMethodNotAllowed)
 		}
 		return
 	}
-	adminSherpaHandler.ServeHTTP(w, r.WithContext(ctx))
+
+	isAPI := strings.HasPrefix(r.URL.Path, "/api/")
+	// Only allow POST for calls, they will not work cross-domain without CORS.
+	if isAPI && r.URL.Path != "/api/" && r.Method != "POST" {
+		http.Error(w, "405 - method not allowed - use post", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// All other URLs, except the login endpoint require some authentication.
+	var sessionToken store.SessionToken
+	if r.URL.Path != "/api/LoginPrep" && r.URL.Path != "/api/Login" {
+		var ok bool
+		_, sessionToken, _, ok = webauth.Check(ctx, log, webauth.Admin, "webadmin", isForwarded, w, r, isAPI, isAPI, false)
+		if !ok {
+			// Response has been written already.
+			return
+		}
+	}
+
+	if isAPI {
+		reqInfo := requestInfo{sessionToken, w, r}
+		ctx = context.WithValue(ctx, requestInfoCtxKey, reqInfo)
+		apiHandler.ServeHTTP(w, r.WithContext(ctx))
+		return
+	}
+
+	http.NotFound(w, r)
 }
 
 func xcheckf(ctx context.Context, err error, format string, args ...any) {
@@ -228,8 +194,12 @@ func xcheckf(ctx context.Context, err error, format string, args ...any) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	errmsg := fmt.Sprintf("%s: %s", msg, err)
-	xlog.WithContext(ctx).Errorx(msg, err)
-	panic(&sherpa.Error{Code: "server:error", Message: errmsg})
+	pkglog.WithContext(ctx).Errorx(msg, err)
+	code := "server:error"
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		code = "user:error"
+	}
+	panic(&sherpa.Error{Code: code, Message: errmsg})
 }
 
 func xcheckuserf(ctx context.Context, err error, format string, args ...any) {
@@ -238,8 +208,47 @@ func xcheckuserf(ctx context.Context, err error, format string, args ...any) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	errmsg := fmt.Sprintf("%s: %s", msg, err)
-	xlog.WithContext(ctx).Errorx(msg, err)
+	pkglog.WithContext(ctx).Errorx(msg, err)
 	panic(&sherpa.Error{Code: "user:error", Message: errmsg})
+}
+
+// LoginPrep returns a login token, and also sets it as cookie. Both must be
+// present in the call to Login.
+func (w Admin) LoginPrep(ctx context.Context) string {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	var data [8]byte
+	_, err := cryptorand.Read(data[:])
+	xcheckf(ctx, err, "generate token")
+	loginToken := base64.RawURLEncoding.EncodeToString(data[:])
+
+	webauth.LoginPrep(ctx, log, "webadmin", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, loginToken)
+
+	return loginToken
+}
+
+// Login returns a session token for the credentials, or fails with error code
+// "user:badLogin". Call LoginPrep to get a loginToken.
+func (w Admin) Login(ctx context.Context, loginToken, password string) store.CSRFToken {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	csrfToken, err := webauth.Login(ctx, log, webauth.Admin, "webadmin", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, loginToken, "", password)
+	if _, ok := err.(*sherpa.Error); ok {
+		panic(err)
+	}
+	xcheckf(ctx, err, "login")
+	return csrfToken
+}
+
+// Logout invalidates the session token.
+func (w Admin) Logout(ctx context.Context) {
+	log := pkglog.WithContext(ctx)
+	reqInfo := ctx.Value(requestInfoCtxKey).(requestInfo)
+
+	err := webauth.Logout(ctx, log, webauth.Admin, "webadmin", w.cookiePath, w.isForwarded, reqInfo.Response, reqInfo.Request, "", reqInfo.SessionToken)
+	xcheckf(ctx, err, "logout")
 }
 
 type Result struct {
@@ -333,12 +342,13 @@ type MTASTSCheckResult struct {
 }
 
 type SRVConfCheckResult struct {
-	SRVs map[string][]*net.SRV // Service (e.g. "_imaps") to records.
+	SRVs map[string][]net.SRV // Service (e.g. "_imaps") to records.
 	Result
 }
 
 type AutoconfCheckResult struct {
-	IPs []string
+	ClientSettingsDomainIPs []string
+	IPs                     []string
 	Result
 }
 
@@ -379,8 +389,7 @@ func logPanic(ctx context.Context) {
 	if x == nil {
 		return
 	}
-	log := xlog.WithContext(ctx)
-	log.Error("recover from panic", mlog.Field("panic", x))
+	pkglog.WithContext(ctx).Error("recover from panic", slog.Any("panic", x))
 	debug.PrintStack()
 	metrics.PanicInc(metrics.Webadmin)
 }
@@ -404,14 +413,27 @@ func xsendingIPs(ctx context.Context) []net.IP {
 func (Admin) CheckDomain(ctx context.Context, domainName string) (r CheckResult) {
 	// todo future: should run these checks without a DNS cache so recent changes are picked up.
 
-	resolver := dns.StrictResolver{Pkg: "check"}
+	resolver := dns.StrictResolver{Pkg: "check", Log: pkglog.WithContext(ctx).Logger}
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	nctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return checkDomain(nctx, resolver, dialer, domainName)
 }
 
+func unptr[T any](l []*T) []T {
+	if l == nil {
+		return nil
+	}
+	r := make([]T, len(l))
+	for i, e := range l {
+		r[i] = *e
+	}
+	return r
+}
+
 func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer, domainName string) (r CheckResult) {
+	log := pkglog.WithContext(ctx)
+
 	domain, err := dns.ParseDomain(domainName)
 	xcheckuserf(ctx, err, "parsing domain")
 
@@ -434,7 +456,7 @@ func checkDomain(ctx context.Context, resolver dns.Resolver, dialer *net.Dialer,
 		*l = append(*l, fmt.Sprintf(format, args...))
 	}
 
-	// host must be an absolute dns name, ending with a dot.
+	// Host must be an absolute dns name, ending with a dot.
 	lookupIPs := func(errors *[]string, host string) (ips []string, ourIPs, notOurIPs []net.IP, rerr error) {
 		addrs, _, err := resolver.LookupHost(ctx, host)
 		if err != nil {
@@ -709,7 +731,7 @@ EOF
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			err = conn.SetDeadline(end)
-			xlog.WithContext(ctx).Check(err, "setting deadline")
+			log.WithContext(ctx).Check(err, "setting deadline")
 
 			br := bufio.NewReader(conn)
 			_, err = br.ReadString('\n')
@@ -901,7 +923,7 @@ EOF
 
 		// Verify a domain with the configured IPs that do SMTP.
 		verifySPF := func(kind string, domain dns.Domain) (string, *SPFRecord, spf.Record) {
-			_, txt, record, _, err := spf.Lookup(ctx, resolver, domain)
+			_, txt, record, _, err := spf.Lookup(ctx, log.Logger, resolver, domain)
 			if err != nil {
 				addf(&r.SPF.Errors, "Looking up %s SPF record: %s", kind, err)
 			}
@@ -933,7 +955,7 @@ EOF
 					LocalIP:           net.ParseIP("127.0.0.1"),
 					LocalHostname:     dns.Domain{ASCII: "localhost"},
 				}
-				status, mechanism, expl, _, err := spf.Evaluate(ctx, record, resolver, args)
+				status, mechanism, expl, _, err := spf.Evaluate(ctx, log.Logger, record, resolver, args)
 				if err != nil {
 					addf(&r.SPF.Errors, "Evaluating IP %q against %s SPF record: %s", ip, kind, err)
 				} else if status != spf.StatusPass {
@@ -998,7 +1020,7 @@ EOF
 				haveEd25519 = true
 			}
 
-			_, record, txt, _, err := dkim.Lookup(ctx, resolver, selc.Domain, domain)
+			_, record, txt, _, err := dkim.Lookup(ctx, log.Logger, resolver, selc.Domain, domain)
 			if err != nil {
 				missing = append(missing, sel)
 				if errors.Is(err, dkim.ErrNoRecord) {
@@ -1072,7 +1094,7 @@ EOF
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		_, dmarcDomain, record, txt, _, err := dmarc.Lookup(ctx, resolver, domain)
+		_, dmarcDomain, record, txt, _, err := dmarc.Lookup(ctx, log.Logger, resolver, domain)
 		if err != nil {
 			addf(&r.DMARC.Errors, "Looking up DMARC record: %s", err)
 		} else if record == nil {
@@ -1102,10 +1124,10 @@ EOF
 			// needs a special DNS record to opt-in to receiving reports. We check for that
 			// record.
 			// ../rfc/7489:1541
-			orgDom := publicsuffix.Lookup(ctx, domain)
-			destOrgDom := publicsuffix.Lookup(ctx, domConf.DMARC.DNSDomain)
+			orgDom := publicsuffix.Lookup(ctx, log.Logger, domain)
+			destOrgDom := publicsuffix.Lookup(ctx, log.Logger, domConf.DMARC.DNSDomain)
 			if orgDom != destOrgDom {
-				accepts, status, _, _, _, err := dmarc.LookupExternalReportsAccepted(ctx, resolver, domain, domConf.DMARC.DNSDomain)
+				accepts, status, _, _, _, err := dmarc.LookupExternalReportsAccepted(ctx, log.Logger, resolver, domain, domConf.DMARC.DNSDomain)
 				if status != dmarc.StatusNone {
 					addf(&r.DMARC.Errors, "Checking if external destination accepts reports: %s", err)
 				} else if !accepts {
@@ -1149,7 +1171,7 @@ EOF
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		record, txt, err := tlsrpt.Lookup(ctx, resolver, dom)
+		record, txt, err := tlsrpt.Lookup(ctx, log.Logger, resolver, dom)
 		if err != nil {
 			addf(&result.Errors, "Looking up TLSRPT record: %s", err)
 		}
@@ -1203,7 +1225,7 @@ Ensure a DNS TXT record like the following exists:
 		addf(&result.Instructions, instr)
 	}
 
-	// Hots TLSRPT
+	// Host TLSRPT
 	wg.Add(1)
 	var hostTLSRPTAddr smtp.Address
 	if mox.Conf.Static.HostTLSRPT.Localpart != "" {
@@ -1225,7 +1247,7 @@ Ensure a DNS TXT record like the following exists:
 		defer logPanic(ctx)
 		defer wg.Done()
 
-		record, txt, err := mtasts.LookupRecord(ctx, resolver, domain)
+		record, txt, err := mtasts.LookupRecord(ctx, log.Logger, resolver, domain)
 		if err != nil {
 			addf(&r.MTASTS.Errors, "Looking up MTA-STS record: %s", err)
 		}
@@ -1234,7 +1256,7 @@ Ensure a DNS TXT record like the following exists:
 			r.MTASTS.Record = &MTASTSRecord{*record}
 		}
 
-		policy, text, err := mtasts.FetchPolicy(ctx, domain)
+		policy, text, err := mtasts.FetchPolicy(ctx, log.Logger, domain)
 		if err != nil {
 			addf(&r.MTASTS.Errors, "Fetching MTA-STS policy: %s", err)
 		} else if policy.Mode == mtasts.ModeNone {
@@ -1355,11 +1377,11 @@ When enabling MTA-STS, or updating a policy, always update the policy first (thr
 		srvwg.Wait()
 
 		instr := "Ensure DNS records like the following exist:\n\n"
-		r.SRVConf.SRVs = map[string][]*net.SRV{}
+		r.SRVConf.SRVs = map[string][]net.SRV{}
 		for _, req := range reqs {
 			name := req.name + "_.tcp." + domain.ASCII
 			instr += fmt.Sprintf("\t%s._tcp.%-*s SRV 0 1 %d %s\n", req.name, len("_submissions")-len(req.name)+len(domain.ASCII+"."), domain.ASCII+".", req.port, req.host)
-			r.SRVConf.SRVs[req.name] = req.srvs
+			r.SRVConf.SRVs[req.name] = unptr(req.srvs)
 			if err != nil {
 				addf(&r.SRVConf.Errors, "Looking up SRV record %q: %s", name, err)
 			} else if len(req.srvs) == 0 {
@@ -1376,6 +1398,23 @@ When enabling MTA-STS, or updating a policy, always update the policy first (thr
 	go func() {
 		defer logPanic(ctx)
 		defer wg.Done()
+
+		if domConf.ClientSettingsDomain != "" {
+			addf(&r.Autoconf.Instructions, "Ensure a DNS CNAME record like the following exists:\n\n\t%s CNAME %s\n\nNote: the trailing dot is relevant, it makes the host name absolute instead of relative to the domain name.", domConf.ClientSettingsDNSDomain.ASCII+".", mox.Conf.Static.HostnameDomain.ASCII+".")
+
+			ips, ourIPs, notOurIPs, err := lookupIPs(&r.Autoconf.Errors, domConf.ClientSettingsDNSDomain.ASCII+".")
+			if err != nil {
+				addf(&r.Autoconf.Errors, "Looking up client settings DNS CNAME: %s", err)
+			}
+			r.Autoconf.ClientSettingsDomainIPs = ips
+			if !isUnspecifiedNAT {
+				if len(ourIPs) == 0 {
+					addf(&r.Autoconf.Errors, "Client settings domain does not point to one of our IPs.")
+				} else if len(notOurIPs) > 0 {
+					addf(&r.Autoconf.Errors, "Client settings domain points to some IPs that are not ours: %v", notOurIPs)
+				}
+			}
+		}
 
 		addf(&r.Autoconf.Instructions, "Ensure a DNS CNAME record like the following exists:\n\n\tautoconfig.%s CNAME %s\n\nNote: the trailing dot is relevant, it makes the host name absolute instead of relative to the domain name.", domain.ASCII+".", mox.Conf.Static.HostnameDomain.ASCII+".")
 
@@ -1713,7 +1752,7 @@ type Reverse struct {
 
 // LookupIP does a reverse lookup of ip.
 func (Admin) LookupIP(ctx context.Context, ip string) Reverse {
-	resolver := dns.StrictResolver{Pkg: "webadmin"}
+	resolver := dns.StrictResolver{Pkg: "webadmin", Log: pkglog.WithContext(ctx).Logger}
 	names, _, err := resolver.LookupAddr(ctx, ip)
 	xcheckuserf(ctx, err, "looking up ip")
 	return Reverse{names}
@@ -1727,11 +1766,12 @@ func (Admin) LookupIP(ctx context.Context, ip string) Reverse {
 // The returned value maps IPs to per DNSBL statuses, where "pass" means not listed and
 // anything else is an error string, e.g. "fail: ..." or "temperror: ...".
 func (Admin) DNSBLStatus(ctx context.Context) map[string]map[string]string {
-	resolver := dns.StrictResolver{Pkg: "check"}
-	return dnsblsStatus(ctx, resolver)
+	log := mlog.New("webadmin", nil).WithContext(ctx)
+	resolver := dns.StrictResolver{Pkg: "check", Log: log.Logger}
+	return dnsblsStatus(ctx, log, resolver)
 }
 
-func dnsblsStatus(ctx context.Context, resolver dns.Resolver) map[string]map[string]string {
+func dnsblsStatus(ctx context.Context, log mlog.Log, resolver dns.Resolver) map[string]map[string]string {
 	// todo: check health before using dnsbl?
 	var dnsbls []dns.Domain
 	if l, ok := mox.Conf.Static.Listeners["public"]; ok {
@@ -1750,7 +1790,7 @@ func dnsblsStatus(ctx context.Context, resolver dns.Resolver) map[string]map[str
 		ipstr := ip.String()
 		r[ipstr] = map[string]string{}
 		for _, zone := range dnsbls {
-			status, expl, err := dnsbl.Lookup(ctx, resolver, zone, ip)
+			status, expl, err := dnsbl.Lookup(ctx, log.Logger, resolver, zone, ip)
 			result := string(status)
 			if err != nil {
 				result += ": " + err.Error()
@@ -1767,18 +1807,40 @@ func dnsblsStatus(ctx context.Context, resolver dns.Resolver) map[string]map[str
 // DomainRecords returns lines describing DNS records that should exist for the
 // configured domain.
 func (Admin) DomainRecords(ctx context.Context, domain string) []string {
+	log := pkglog.WithContext(ctx)
+	return DomainRecords(ctx, log, domain)
+}
+
+// DomainRecords is the implementation of API function Admin.DomainRecords, taking
+// a logger.
+func DomainRecords(ctx context.Context, log mlog.Log, domain string) []string {
 	d, err := dns.ParseDomain(domain)
 	xcheckuserf(ctx, err, "parsing domain")
 	dc, ok := mox.Conf.Domain(d)
 	if !ok {
 		xcheckuserf(ctx, errors.New("unknown domain"), "lookup domain")
 	}
-	resolver := dns.StrictResolver{Pkg: "admin"}
+	resolver := dns.StrictResolver{Pkg: "webadmin", Log: pkglog.WithContext(ctx).Logger}
 	_, result, err := resolver.LookupTXT(ctx, domain+".")
 	if !dns.IsNotFound(err) {
 		xcheckf(ctx, err, "looking up record to determine if dnssec is implemented")
 	}
-	records, err := mox.DomainRecords(dc, d, result.Authentic)
+
+	var certIssuerDomainName, acmeAccountURI string
+	public := mox.Conf.Static.Listeners["public"]
+	if public.TLS != nil && public.TLS.ACME != "" {
+		acme, ok := mox.Conf.Static.ACME[public.TLS.ACME]
+		if ok && acme.Manager.Manager.Client != nil {
+			certIssuerDomainName = acme.IssuerDomainName
+			acc, err := acme.Manager.Manager.Client.GetReg(ctx, "")
+			log.Check(err, "get public acme account")
+			if err == nil {
+				acmeAccountURI = acc.URI
+			}
+		}
+	}
+
+	records, err := mox.DomainRecords(dc, d, result.Authentic, certIssuerDomainName, acmeAccountURI)
 	xcheckf(ctx, err, "dns records")
 	return records
 }
@@ -1830,22 +1892,23 @@ func (Admin) AddressRemove(ctx context.Context, address string) {
 // Sessions are not interrupted, and will keep working. New login attempts must use the new password.
 // Password must be at least 8 characters.
 func (Admin) SetPassword(ctx context.Context, accountName, password string) {
+	log := pkglog.WithContext(ctx)
 	if len(password) < 8 {
 		panic(&sherpa.Error{Code: "user:error", Message: "password must be at least 8 characters"})
 	}
-	acc, err := store.OpenAccount(accountName)
+	acc, err := store.OpenAccount(log, accountName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
-		xlog.Check(err, "closing account")
+		log.WithContext(ctx).Check(err, "closing account")
 	}()
-	err = acc.SetPassword(password)
+	err = acc.SetPassword(log, password)
 	xcheckf(ctx, err, "setting password")
 }
 
 // SetAccountLimits set new limits on outgoing messages for an account.
-func (Admin) SetAccountLimits(ctx context.Context, accountName string, maxOutgoingMessagesPerDay, maxFirstTimeRecipientsPerDay int) {
-	err := mox.AccountLimitsSave(ctx, accountName, maxOutgoingMessagesPerDay, maxFirstTimeRecipientsPerDay)
+func (Admin) SetAccountLimits(ctx context.Context, accountName string, maxOutgoingMessagesPerDay, maxFirstTimeRecipientsPerDay int, maxMsgSize int64) {
+	err := mox.AccountLimitsSave(ctx, accountName, maxOutgoingMessagesPerDay, maxFirstTimeRecipientsPerDay, maxMsgSize)
 	xcheckf(ctx, err, "saving account limits")
 }
 
@@ -1886,7 +1949,8 @@ func (Admin) QueueKick(ctx context.Context, id int64, transport string) {
 
 // QueueDrop removes a message from the queue.
 func (Admin) QueueDrop(ctx context.Context, id int64) {
-	n, err := queue.Drop(ctx, id, "", "")
+	log := pkglog.WithContext(ctx)
+	n, err := queue.Drop(ctx, log, id, "", "")
 	if err == nil && n == 0 {
 		err = errors.New("message not found")
 	}
@@ -1904,7 +1968,11 @@ func (Admin) QueueSaveRequireTLS(ctx context.Context, id int64, requireTLS *bool
 func (Admin) LogLevels(ctx context.Context) map[string]string {
 	m := map[string]string{}
 	for pkg, level := range mox.Conf.LogLevels() {
-		m[pkg] = level.String()
+		s, ok := mlog.LevelStrings[level]
+		if !ok {
+			s = level.String()
+		}
+		m[pkg] = s
 	}
 	return m
 }
@@ -1915,12 +1983,12 @@ func (Admin) LogLevelSet(ctx context.Context, pkg string, levelStr string) {
 	if !ok {
 		xcheckuserf(ctx, errors.New("unknown"), "lookup level")
 	}
-	mox.Conf.LogLevelSet(pkg, level)
+	mox.Conf.LogLevelSet(pkglog.WithContext(ctx), pkg, level)
 }
 
 // LogLevelRemove removes a log level for a package, which cannot be the empty string.
 func (Admin) LogLevelRemove(ctx context.Context, pkg string) {
-	mox.Conf.LogLevelRemove(pkg)
+	mox.Conf.LogLevelRemove(pkglog.WithContext(ctx), pkg)
 }
 
 // CheckUpdatesEnabled returns whether checking for updates is enabled.
@@ -2069,10 +2137,15 @@ func (Admin) TLSRPTResults(ctx context.Context) []tlsrptdb.TLSResult {
 }
 
 // TLSRPTResultsPolicyDomain returns the TLS results for a domain.
-func (Admin) TLSRPTResultsPolicyDomain(ctx context.Context, policyDomain string) (dns.Domain, []tlsrptdb.TLSResult) {
+func (Admin) TLSRPTResultsDomain(ctx context.Context, isRcptDom bool, policyDomain string) (dns.Domain, []tlsrptdb.TLSResult) {
 	dom, err := dns.ParseDomain(policyDomain)
 	xcheckf(ctx, err, "parsing domain")
 
+	if isRcptDom {
+		results, err := tlsrptdb.ResultsRecipientDomain(ctx, dom)
+		xcheckf(ctx, err, "get result for recipient domain")
+		return dom, results
+	}
 	results, err := tlsrptdb.ResultsPolicyDomain(ctx, dom)
 	xcheckf(ctx, err, "get result for policy domain")
 	return dom, results
@@ -2081,11 +2154,12 @@ func (Admin) TLSRPTResultsPolicyDomain(ctx context.Context, policyDomain string)
 // LookupTLSRPTRecord looks up a TLSRPT record and returns the parsed form, original txt
 // form from DNS, and error with the TLSRPT record as a string.
 func (Admin) LookupTLSRPTRecord(ctx context.Context, domain string) (record *TLSRPTRecord, txt string, errstr string) {
+	log := pkglog.WithContext(ctx)
 	dom, err := dns.ParseDomain(domain)
 	xcheckf(ctx, err, "parsing domain")
 
-	resolver := dns.StrictResolver{Pkg: "webadmin"}
-	r, txt, err := tlsrpt.Lookup(ctx, resolver, dom)
+	resolver := dns.StrictResolver{Pkg: "webadmin", Log: log.Logger}
+	r, txt, err := tlsrpt.Lookup(ctx, log.Logger, resolver, dom)
 	if err != nil && (errors.Is(err, tlsrpt.ErrNoRecord) || errors.Is(err, tlsrpt.ErrMultipleRecords) || errors.Is(err, tlsrpt.ErrRecordSyntax) || errors.Is(err, tlsrpt.ErrDNS)) {
 		errstr = err.Error()
 		err = nil
@@ -2101,12 +2175,17 @@ func (Admin) LookupTLSRPTRecord(ctx context.Context, domain string) (record *TLS
 
 // TLSRPTRemoveResults removes the TLS results for a domain for the given day. If
 // day is empty, all results are removed.
-func (Admin) TLSRPTRemoveResults(ctx context.Context, domain string, day string) {
+func (Admin) TLSRPTRemoveResults(ctx context.Context, isRcptDom bool, domain string, day string) {
 	dom, err := dns.ParseDomain(domain)
 	xcheckf(ctx, err, "parsing domain")
 
-	err = tlsrptdb.RemoveResultsPolicyDomain(ctx, dom, day)
-	xcheckf(ctx, err, "removing tls results")
+	if isRcptDom {
+		err = tlsrptdb.RemoveResultsRecipientDomain(ctx, dom, day)
+		xcheckf(ctx, err, "removing tls results")
+	} else {
+		err = tlsrptdb.RemoveResultsPolicyDomain(ctx, dom, day)
+		xcheckf(ctx, err, "removing tls results")
+	}
 }
 
 // TLSRPTSuppressAdd adds a reporting address to the suppress list. Outgoing

@@ -14,7 +14,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mjl-/mox/mlog"
 )
+
+var pkglog = mlog.New("tlsrpt", nil)
 
 const reportJSON = `{
      "organization-name": "Company-X",
@@ -111,26 +115,26 @@ Content-Disposition: attachment;
 func TestReport(t *testing.T) {
 	// ../rfc/8460:1756
 
-	var report Report
+	var report ReportJSON
 	dec := json.NewDecoder(strings.NewReader(reportJSON))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&report); err != nil {
 		t.Fatalf("parsing report: %s", err)
 	}
 
-	if _, err := ParseMessage(xlog, strings.NewReader(tlsrptMessage)); err != nil {
+	if _, err := ParseMessage(pkglog.Logger, strings.NewReader(tlsrptMessage)); err != nil {
 		t.Fatalf("parsing TLSRPT from message: %s", err)
 	}
 
-	if _, err := ParseMessage(xlog, strings.NewReader(tlsrptMessage2)); err != nil {
+	if _, err := ParseMessage(pkglog.Logger, strings.NewReader(tlsrptMessage2)); err != nil {
 		t.Fatalf("parsing TLSRPT from message: %s", err)
 	}
 
-	if _, err := ParseMessage(xlog, strings.NewReader(strings.ReplaceAll(tlsrptMessage, "multipart/report", "multipart/related"))); err != ErrNoReport {
+	if _, err := ParseMessage(pkglog.Logger, strings.NewReader(strings.ReplaceAll(tlsrptMessage, "multipart/report", "multipart/related"))); err != ErrNoReport {
 		t.Fatalf("got err %v, expected ErrNoReport", err)
 	}
 
-	if _, err := ParseMessage(xlog, strings.NewReader(strings.ReplaceAll(tlsrptMessage, "application/tlsrpt+json", "application/json"))); err != ErrNoReport {
+	if _, err := ParseMessage(pkglog.Logger, strings.NewReader(strings.ReplaceAll(tlsrptMessage, "application/tlsrpt+json", "application/json"))); err != ErrNoReport {
 		t.Fatalf("got err %v, expected ErrNoReport", err)
 	}
 
@@ -143,7 +147,7 @@ func TestReport(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open %q: %s", file, err)
 		}
-		if _, err := ParseMessage(xlog, f); err != nil {
+		if _, err := ParseMessage(pkglog.Logger, f); err != nil {
 			t.Fatalf("parsing TLSRPT from message %q: %s", file.Name(), err)
 		}
 		f.Close()
@@ -312,6 +316,6 @@ func fakeCert(t *testing.T, name string, expired bool) tls.Certificate {
 func FuzzParseMessage(f *testing.F) {
 	f.Add(tlsrptMessage)
 	f.Fuzz(func(t *testing.T, s string) {
-		ParseMessage(xlog, strings.NewReader(s))
+		ParseMessage(pkglog.Logger, strings.NewReader(s))
 	})
 }

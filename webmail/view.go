@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/exp/slices"
+	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/sherpa"
@@ -30,6 +31,7 @@ import (
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/moxio"
+	"github.com/mjl-/mox/moxvar"
 	"github.com/mjl-/mox/smtp"
 	"github.com/mjl-/mox/store"
 )
@@ -213,6 +215,8 @@ type EventStart struct {
 	DomainAddressConfigs map[string]DomainAddressConfig // ASCII domain to address config.
 	MailboxName          string
 	Mailboxes            []store.Mailbox
+	RejectsMailbox       string
+	Version              string
 }
 
 // DomainAddressConfig has the address (localpart) configuration for a domain, so
@@ -409,10 +413,11 @@ func sseGet(id int64, accountName string) (sse, bool) {
 // ssetoken is a temporary token that has not yet been used to start an SSE
 // connection. Created by Token, consumed by a new SSE connection.
 type ssetoken struct {
-	token      string // Uniquely generated.
-	accName    string
-	address    string // Address used to authenticate in call that created the token.
-	validUntil time.Time
+	token        string // Uniquely generated.
+	accName      string
+	address      string             // Address used to authenticate in call that created the token.
+	sessionToken store.SessionToken // SessionToken that created this token, checked before sending updates.
+	validUntil   time.Time
 }
 
 // ssetokens maintains unused tokens. We have just one, but it's a type so we
@@ -430,11 +435,11 @@ var sseTokens = ssetokens{
 
 // xgenerate creates and saves a new token. It ensures no more than 10 tokens
 // per account exist, removing old ones if needed.
-func (x *ssetokens) xgenerate(ctx context.Context, accName, address string) string {
+func (x *ssetokens) xgenerate(ctx context.Context, accName, address string, sessionToken store.SessionToken) string {
 	buf := make([]byte, 16)
 	_, err := cryptrand.Read(buf)
 	xcheckf(ctx, err, "generating token")
-	st := ssetoken{base64.RawURLEncoding.EncodeToString(buf), accName, address, time.Now().Add(time.Minute)}
+	st := ssetoken{base64.RawURLEncoding.EncodeToString(buf), accName, address, sessionToken, time.Now().Add(time.Minute)}
 
 	x.Lock()
 	defer x.Unlock()
@@ -452,17 +457,17 @@ func (x *ssetokens) xgenerate(ctx context.Context, accName, address string) stri
 }
 
 // check verifies a token, and consumes it if valid.
-func (x *ssetokens) check(token string) (string, string, bool, error) {
+func (x *ssetokens) check(token string) (string, string, store.SessionToken, bool, error) {
 	x.Lock()
 	defer x.Unlock()
 
 	st, ok := x.tokens[token]
 	if !ok {
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
 	delete(x.tokens, token)
 	if i := slices.Index(x.accountTokens[st.accName], st); i < 0 {
-		return "", "", false, errors.New("internal error, could not find token in account")
+		return "", "", "", false, errors.New("internal error, could not find token in account")
 	} else {
 		copy(x.accountTokens[st.accName][i:], x.accountTokens[st.accName][i+1:])
 		x.accountTokens[st.accName] = x.accountTokens[st.accName][:len(x.accountTokens[st.accName])-1]
@@ -471,9 +476,9 @@ func (x *ssetokens) check(token string) (string, string, bool, error) {
 		}
 	}
 	if time.Now().After(st.validUntil) {
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
-	return st.accName, st.address, true, nil
+	return st.accName, st.address, st.sessionToken, true, nil
 }
 
 // ioErr is panicked on i/o errors in serveEvents and handled in a defer.
@@ -483,7 +488,7 @@ type ioErr struct {
 
 // serveEvents serves an SSE connection. Authentication is done through a query
 // string parameter "token", a one-time-use token returned by the Token API call.
-func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *http.Request) {
+func serveEvents(ctx context.Context, log mlog.Log, w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "405 - method not allowed - use get", http.StatusMethodNotAllowed)
 		return
@@ -502,13 +507,17 @@ func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *h
 		http.Error(w, "400 - bad request - missing credentials", http.StatusBadRequest)
 		return
 	}
-	accName, address, ok, err := sseTokens.check(token)
+	accName, address, sessionToken, ok, err := sseTokens.check(token)
 	if err != nil {
 		http.Error(w, "500 - internal server error - "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !ok {
 		http.Error(w, "400 - bad request - bad token", http.StatusBadRequest)
+		return
+	}
+	if _, err := store.SessionUse(ctx, log, accName, sessionToken, ""); err != nil {
+		http.Error(w, "400 - bad request - bad session token", http.StatusBadRequest)
 		return
 	}
 
@@ -566,7 +575,7 @@ func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *h
 		} else if _, ok := x.(ioErr); ok {
 			return
 		} else {
-			log.WithContext(ctx).Error("serveEvents panic", mlog.Field("err", x))
+			log.WithContext(ctx).Error("serveEvents panic", slog.Any("err", x))
 			debug.PrintStack()
 			metrics.PanicInc(metrics.Webmail)
 			panic(x)
@@ -580,7 +589,7 @@ func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *h
 	// We'll be sending quite a bit of message data (text) in JSON (plenty duplicate
 	// keys), so should be quite compressible.
 	var out writeFlusher
-	gz := acceptsGzip(r)
+	gz := mox.AcceptsGzip(r)
 	if gz {
 		h.Set("Content-Encoding", "gzip")
 		out, _ = gzip.NewWriterLevel(w, gzip.BestSpeed)
@@ -590,11 +599,11 @@ func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *h
 	out = httpFlusher{out, flusher}
 
 	// We'll be writing outgoing SSE events through writer.
-	writer = newEventWriter(out, waitMin, waitMax)
+	writer = newEventWriter(out, waitMin, waitMax, accName, sessionToken)
 	defer writer.close()
 
 	// Fetch initial data.
-	acc, err := store.OpenAccount(accName)
+	acc, err := store.OpenAccount(log, accName)
 	xcheckf(ctx, err, "open account")
 	defer func() {
 		err := acc.Close()
@@ -720,7 +729,7 @@ func serveEvents(ctx context.Context, log *mlog.Log, w http.ResponseWriter, r *h
 	}
 
 	// Write first event, allowing client to fill its UI with mailboxes.
-	start := EventStart{sse.ID, loginAddress, addresses, domainAddressConfigs, mailbox.Name, mbl}
+	start := EventStart{sse.ID, loginAddress, addresses, domainAddressConfigs, mailbox.Name, mbl, accConf.RejectsMailbox, moxvar.Version}
 	writer.xsendEvent(ctx, log, "start", start)
 
 	// The goroutine doing the querying will send messages on these channels, which
@@ -1120,7 +1129,7 @@ func (v view) inRange(m store.Message) bool {
 // message). getmsg retrieves the message, which may be necessary depending on the
 // active filters. Used to determine if a store.Change with a new message should be
 // sent, and for the destination and anchor messages in view requests.
-func (v view) matches(log *mlog.Log, acc *store.Account, checkRange bool, messageID int64, mailboxID int64, uid store.UID, flags store.Flags, keywords []string, getmsg func(int64, int64, store.UID) (store.Message, error)) (match bool, rerr error) {
+func (v view) matches(log mlog.Log, acc *store.Account, checkRange bool, messageID int64, mailboxID int64, uid store.UID, flags store.Flags, keywords []string, getmsg func(int64, int64, store.UID) (store.Message, error)) (match bool, rerr error) {
 	var m store.Message
 	ensureMessage := func() bool {
 		if m.ID == 0 && rerr == nil {
@@ -1205,7 +1214,7 @@ type msgResp struct {
 // and sending Event* to the SSE connection.
 //
 // It always closes tx.
-func viewRequestTx(ctx context.Context, log *mlog.Log, acc *store.Account, tx *bstore.Tx, v view, msgc chan EventViewMsgs, errc chan EventViewErr, resetc chan EventViewReset, donec chan int64) {
+func viewRequestTx(ctx context.Context, log mlog.Log, acc *store.Account, tx *bstore.Tx, v view, msgc chan EventViewMsgs, errc chan EventViewErr, resetc chan EventViewReset, donec chan int64) {
 	defer func() {
 		err := tx.Rollback()
 		log.Check(err, "rolling back query transaction")
@@ -1214,7 +1223,7 @@ func viewRequestTx(ctx context.Context, log *mlog.Log, acc *store.Account, tx *b
 
 		x := recover() // Should not happen, but don't take program down if it does.
 		if x != nil {
-			log.WithContext(ctx).Error("viewRequestTx panic", mlog.Field("err", x))
+			log.WithContext(ctx).Error("viewRequestTx panic", slog.Any("err", x))
 			debug.PrintStack()
 			metrics.PanicInc(metrics.Webmailrequest)
 		}
@@ -1293,11 +1302,11 @@ func viewRequestTx(ctx context.Context, log *mlog.Log, acc *store.Account, tx *b
 // It sends on msgc, with several types of messages: errors, whether the view is
 // reset due to missing AnchorMessageID, and when the end of the view was reached
 // and/or for a message.
-func queryMessages(ctx context.Context, log *mlog.Log, acc *store.Account, tx *bstore.Tx, v view, mrc chan msgResp) {
+func queryMessages(ctx context.Context, log mlog.Log, acc *store.Account, tx *bstore.Tx, v view, mrc chan msgResp) {
 	defer func() {
 		x := recover() // Should not happen, but don't take program down if it does.
 		if x != nil {
-			log.WithContext(ctx).Error("queryMessages panic", mlog.Field("err", x))
+			log.WithContext(ctx).Error("queryMessages panic", slog.Any("err", x))
 			debug.PrintStack()
 			mrc <- msgResp{err: fmt.Errorf("query failed")}
 			metrics.PanicInc(metrics.Webmailquery)
@@ -1539,7 +1548,7 @@ func queryMessages(ctx context.Context, log *mlog.Log, acc *store.Account, tx *b
 	}
 }
 
-func gatherThread(log *mlog.Log, tx *bstore.Tx, acc *store.Account, v view, m store.Message, destMessageID int64, first bool) ([]MessageItem, *ParsedMessage, error) {
+func gatherThread(log mlog.Log, tx *bstore.Tx, acc *store.Account, v view, m store.Message, destMessageID int64, first bool) ([]MessageItem, *ParsedMessage, error) {
 	if m.ThreadID == 0 {
 		// If we would continue, FilterNonzero would fail because there are no non-zero fields.
 		return nil, nil, fmt.Errorf("message has threadid 0, account is probably still being upgraded, try turning threading off until the upgrade is done")
@@ -1714,7 +1723,7 @@ func (q Query) flagFilterFn() func(store.Flags, []string) bool {
 // attachmentFilterFn returns a function that filters for the attachment-related
 // filter from the query. A nil function is returned if there are attachment
 // filters.
-func (q Query) attachmentFilterFn(log *mlog.Log, acc *store.Account, state *msgState) func(m store.Message) bool {
+func (q Query) attachmentFilterFn(log mlog.Log, acc *store.Account, state *msgState) func(m store.Message) bool {
 	if q.Filter.Attachments == AttachmentIndifferent && q.NotFilter.Attachments == AttachmentIndifferent {
 		return nil
 	}
@@ -1771,7 +1780,7 @@ var attachmentExtensions = map[string]AttachmentType{
 	".pptx":    AttachmentPresentation,
 }
 
-func attachmentTypes(log *mlog.Log, m store.Message, state *msgState) (map[AttachmentType]bool, error) {
+func attachmentTypes(log mlog.Log, m store.Message, state *msgState) (map[AttachmentType]bool, error) {
 	types := map[AttachmentType]bool{}
 
 	pm, err := parsedMessage(log, m, state, false, false)
@@ -1807,7 +1816,7 @@ func attachmentTypes(log *mlog.Log, m store.Message, state *msgState) (map[Attac
 // used by IMAP, i.e. basic message headers from/to/subject, an unfortunate name
 // clash with SMTP envelope) for the query. A nil function is returned if no
 // filtering is needed.
-func (q Query) envFilterFn(log *mlog.Log, state *msgState) func(m store.Message) bool {
+func (q Query) envFilterFn(log mlog.Log, state *msgState) func(m store.Message) bool {
 	if len(q.Filter.From) == 0 && len(q.Filter.To) == 0 && len(q.Filter.Subject) == 0 && len(q.NotFilter.From) == 0 && len(q.NotFilter.To) == 0 && len(q.NotFilter.Subject) == 0 {
 		return nil
 	}
@@ -1895,7 +1904,7 @@ func (q Query) envFilterFn(log *mlog.Log, state *msgState) func(m store.Message)
 
 // headerFilterFn returns a function that filters for the header filters in the
 // query. A nil function is returned if there are no header filters.
-func (q Query) headerFilterFn(log *mlog.Log, state *msgState) func(m store.Message) bool {
+func (q Query) headerFilterFn(log mlog.Log, state *msgState) func(m store.Message) bool {
 	if len(q.Filter.Headers) == 0 {
 		return nil
 	}
@@ -1936,7 +1945,7 @@ func (q Query) headerFilterFn(log *mlog.Log, state *msgState) func(m store.Messa
 
 // wordFiltersFn returns a function that applies the word filters of the query. A
 // nil function is returned when query does not contain a word filter.
-func (q Query) wordsFilterFn(log *mlog.Log, state *msgState) func(m store.Message) bool {
+func (q Query) wordsFilterFn(log mlog.Log, state *msgState) func(m store.Message) bool {
 	if len(q.Filter.Words) == 0 && len(q.NotFilter.Words) == 0 {
 		return nil
 	}

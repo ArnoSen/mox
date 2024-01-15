@@ -81,10 +81,10 @@ type SessionHandler struct {
 
 	contextUserKey string
 
-	logger *mlog.Log
+	logger mlog.Log
 }
 
-func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger *mlog.Log) SessionHandler {
+func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger mlog.Log) SessionHandler {
 	return SessionHandler{
 		AccountRepo:    accountRepo,
 		Capabilities:   capabilities,

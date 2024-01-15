@@ -2,7 +2,21 @@
 Command mox is a modern, secure, full-featured, open source mail server for
 low-maintenance self-hosted email.
 
-# Commands
+Mox is started with the "serve" subcommand, but mox also has many other
+subcommands.
+
+Many of those commands talk to a running mox instance, through the ctl file in
+the data directory. Specify the configuration file (that holds the path to the
+data directory) through the -config flag or MOXCONF environment variable.
+
+Commands that don't talk to a running mox instance are often for
+testing/debugging email functionality. For example for parsing an email message,
+or looking up SPF/DKIM/DMARC records.
+
+Below is the usage information as printed by the command when started without
+any parameters. Followed by the help and usage information for each command.
+
+# Usage
 
 	mox [-config config/mox.conf] [-pedantic] ...
 	mox serve
@@ -75,10 +89,6 @@ low-maintenance self-hosted email.
 	mox recalculatemailboxcounts account
 	mox message parse message.eml
 	mox reassignthreads [account]
-
-Many commands talk to a running mox instance, through the ctl file in the data
-directory. Specify the configuration file (that holds the path to the data
-directory) through the -config flag or MOXCONF environment variable.
 
 # mox serve
 
@@ -977,12 +987,13 @@ Ensure messages in the database have a pre-parsed MIME form in the database.
 
 # mox recalculatemailboxcounts
 
-Recalculate message counts for all mailboxes in the account.
+Recalculate message counts for all mailboxes in the account, and total message size for quota.
 
 When a message is added to/removed from a mailbox, or when message flags change,
-the total, unread, unseen and deleted messages are accounted, and the total size
-of the mailbox. In case of a bug in this accounting, the numbers could become
-incorrect. This command will find, fix and print them.
+the total, unread, unseen and deleted messages are accounted, the total size of
+the mailbox, and the total message size for the account. In case of a bug in
+this accounting, the numbers could become incorrect. This command will find, fix
+and print them.
 
 	usage: mox recalculatemailboxcounts account
 
