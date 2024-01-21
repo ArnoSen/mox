@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/store"
@@ -39,9 +38,9 @@ type MailboxRights struct {
 
 func (ja *JAccount) GetMailboxes(ctx context.Context, ids []basetypes.Id) (result []Mailbox, notFound []basetypes.Id, state string, mErr *mlevelerrors.MethodLevelError) {
 
-	q := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB)
+	//q := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB)
 
-	mbs, err := q.List()
+	mbs, err := ja.mailboxRepo.List()
 	if err != nil {
 		mErr = mlevelerrors.NewMethodLevelErrorServerFail()
 		return
@@ -54,14 +53,20 @@ func (ja *JAccount) GetMailboxes(ctx context.Context, ids []basetypes.Id) (resul
 		jmbs.AddMailbox(NewJMailbox(mb))
 	}
 
+loopmailboxes:
 	for i, jmb := range jmbs.Mbs {
 
 		if len(ids) > 0 {
 			//we only need selected mailboxes
+			var mustBeIncluded = false
 			for _, id := range ids {
-				if string(id) != jmb.ID() {
-					continue
+				if string(id) == jmb.ID() {
+					mustBeIncluded = true
+					break
 				}
+			}
+			if !mustBeIncluded {
+				continue loopmailboxes
 			}
 		}
 

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/exp/slog"
+
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -110,13 +112,13 @@ Content-Transfer-Encoding: 7bit
 
 			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
 
-			part, err := message.Parse(mlog.New("test"), true, mReader)
+			part, err := message.Parse(slog.Default(), true, mReader)
 			RequireNoError(t, err)
 
 			msg := store.Message{
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
 			}
-			jem := NewJEmail(msg, part, mlog.New("test"))
+			jem := NewJEmail(msg, part, mlog.New("test", slog.Default()))
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -166,7 +168,7 @@ Content-Transfer-Encoding: 7bit
 			}
 
 			eContentType := "text/plain; charset=UTF-8; format=flowed"
-			ctIface, mErr := jem.HeaderAs("Content-Type", "asText", false)
+			ctIface, mErr := jem.HeaderAs(mlog.New("test", slog.Default()), "Content-Type", "asText", false)
 			RequireNoError(t, mErr)
 			if ct, ok := ctIface.(string); !ok {
 				t.Logf("was expecting ctIface to be string but got %T", ctIface)
@@ -222,7 +224,7 @@ On 18-07-2023 17:59, me wrote:
 
 			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
 
-			part, err := message.Parse(mlog.New("test"), true, mReader)
+			part, err := message.Parse(slog.Default(), true, mReader)
 			RequireNoError(t, err)
 
 			msg := store.Message{
@@ -230,7 +232,7 @@ On 18-07-2023 17:59, me wrote:
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
 			}
 
-			jem := NewJEmail(msg, part, mlog.New("test"))
+			jem := NewJEmail(msg, part, mlog.New("test", slog.Default()))
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -395,19 +397,21 @@ Content-Transfer-Encoding: 7bit
 
 --------------Z8pBLNP8kO35FOYVOKN5cUf4--`
 
+			sLog := slog.Default()
+
 			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
 
-			part, err := message.Parse(mlog.New("test"), true, mReader)
+			part, err := message.Parse(sLog, true, mReader)
 			RequireNoError(t, err)
 
-			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+			RequireNoError(t, part.Walk(sLog, nil))
 
 			msg := store.Message{
 				ID:       1,
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
 			}
 
-			jem := NewJEmail(msg, part, mlog.New("test"))
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -556,17 +560,19 @@ AAAAAElFTkSuQmCC
 
 			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
 
-			part, err := message.Parse(mlog.New("test"), true, mReader)
+			sLog := slog.Default()
+
+			part, err := message.Parse(sLog, true, mReader)
 			RequireNoError(t, err)
 
-			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+			RequireNoError(t, part.Walk(sLog, nil))
 
 			msg := store.Message{
 				ID:       1,
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
 			}
 
-			jem := NewJEmail(msg, part, mlog.New("test"))
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -688,17 +694,19 @@ Sent from mobile
 --Apple-Mail-C592FF4B-B8D0-46D3-BEBB-B8200C3105AA--`
 			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
 
-			part, err := message.Parse(mlog.New("test"), true, mReader)
+			sLog := slog.Default()
+
+			part, err := message.Parse(sLog, true, mReader)
 			RequireNoError(t, err)
 
-			RequireNoError(t, part.Walk(mlog.New("test"), nil))
+			RequireNoError(t, part.Walk(sLog, nil))
 
 			msg := store.Message{
 				ID:       1,
 				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
 			}
 
-			jem := NewJEmail(msg, part, mlog.New("test"))
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)

@@ -28,14 +28,16 @@ type JAccounter interface {
 var _ JAccounter = &JAccount{}
 
 type JAccount struct {
-	mAccount *store.Account
-	mlog     mlog.Log
+	mAccount    *store.Account
+	mailboxRepo MailboxRepo
+	mlog        mlog.Log
 }
 
-func NewJAccount(mAccount *store.Account, mlog mlog.Log) *JAccount {
+func NewJAccount(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *JAccount {
 	return &JAccount{
-		mAccount: mAccount,
-		mlog:     mlog,
+		mAccount:    mAccount,
+		mailboxRepo: repo,
+		mlog:        mlog,
 	}
 }
 

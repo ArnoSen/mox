@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
+	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/datatyper"
@@ -615,7 +616,9 @@ loopUsing:
 				}
 			}
 
-			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), finalAccountId, dedupIDSlice(finalIds), finalProperties, bespokeParams)
+			//AO: passing in a mailbox repo. Maybe this should be dependent on the object for which method this is called?
+			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
+			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), finalAccountId, dedupIDSlice(finalIds), finalProperties, bespokeParams)
 			mAccount.Close()
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
@@ -936,7 +939,8 @@ loopUsing:
 				}
 			}
 
-			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal, bespokeParams)
+			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
+			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal, bespokeParams)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
