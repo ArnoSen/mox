@@ -55,6 +55,10 @@ func (sdt StubDatatype) Name() string {
 	return sdt.name
 }
 
+func (sdt StubDatatype) CustomGetRequestParams() any {
+	return nil
+}
+
 func (sdt StubDatatype) Echo(ctx context.Context, content json.RawMessage) (map[string]interface{}, *mlevelerrors.MethodLevelError) {
 	var resp map[string]interface{}
 
@@ -66,7 +70,7 @@ func (sdt StubDatatype) Echo(ctx context.Context, content json.RawMessage) (map[
 	return resp, nil
 }
 
-func (sdt StubDatatype) Get(ctx context.Context, jac jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (sdt StubDatatype) Get(ctx context.Context, jac jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customProps any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	//just return empty values
 	retAccountId = accountId
 	return

@@ -587,6 +587,15 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 			resultElement.HasAttachment = hasAttachment
 		}
 
+		if HasAny(properties, "headers") {
+			hdrs, mErr := jem.Headers()
+			if mErr != nil {
+				ja.mlog.Error("error getting headers", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
+				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			resultElement.Headers = hdrs
+		}
+
 		result = append(result, resultElement)
 	}
 	return "stubstate", result, notFound, nil
@@ -1246,6 +1255,122 @@ loopMediaFiles:
 	return result, nil
 }
 
+func (jem JEmail) parseBodyParts() (textBody, htmlBody, attachments []EmailBodyPart, mErr *mlevelerrors.MethodLevelError) {
+	jPart, jPartErr := NewJPart(jem.part)
+	if jPartErr != nil {
+		return nil, nil, nil, jPartErr
+	}
+
+	var textBodyParts, htmlBodyParts, attachmentParts []JPart
+
+	if mErr := parseBodyPartsRecursive([]JPart{jPart}, "mixed", false, textBodyParts, htmlBodyParts, attachmentParts); mErr != nil {
+		return nil, nil, nil, mErr
+	}
+	return textBody, htmlBody, attachments, nil
+}
+
+func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments []JPart) *mlevelerrors.MethodLevelError {
+
+	/*
+		getLenghtOrMinus1 := func(bp []JPart) int {
+			if lenBP := len(bp); lenBP == 0 {
+				return -1
+			} else {
+				return lenBP
+			}
+		}
+
+	*/
+	isInlineMediaPart := func(part JPart) bool {
+		return part.Type().IsImage() ||
+			part.Type().IsAudio() ||
+			part.Type().IsVideo()
+	}
+
+	//textLength := getLenghtOrMinus1(textBody)
+	//htmlLength := getLenghtOrMinus1(htmlBody)
+
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		disposition := part.Disposition()
+		isInLine := (disposition != nil && *disposition == "attachment") &&
+			(part.Type().IsTextPlain() ||
+				part.Type().IsTextHTML() ||
+				isInlineMediaPart(part)) && (i == 0 || (!part.Type().IsMultpartRelated() && (isInlineMediaPart(part) || part.Name() == nil)))
+
+		if part.Type().IsMultipart() {
+			_, subMultiType, ok := strings.Cut(part.Type().String(), "/")
+			if !ok {
+				return mlevelerrors.NewMethodLevelErrorServerFail()
+			}
+			subParts, mErr := part.SubParts()
+			if mErr != nil {
+				return mErr
+			}
+			return parseBodyPartsRecursive(subParts, subMultiType, inAlternative || subMultiType == "alternative", htmlBody, textBody, attachments)
+
+		} else if isInLine {
+			if multipartType == "alternative" {
+				switch {
+				case part.Type().IsTextPlain():
+					//push to textbody
+				case part.Type().IsTextHTML():
+					//push to textbody
+				default:
+					//push to attachments
+				}
+				continue
+			} else if inAlternative {
+				if part.Type().IsTextPlain() {
+					htmlBody = nil
+				}
+				if part.Type().IsTextHTML() {
+					textBody = nil
+				}
+			}
+
+			if textBody != nil {
+				textBody = append(textBody, part)
+			}
+
+			if htmlBody != nil {
+				htmlBody = append(htmlBody, part)
+			}
+
+			if (textBody == nil || htmlBody == nil) && isInlineMediaPart(part) {
+				attachments = append(attachments, part)
+			}
+		} else {
+			attachments = append(attachments, part)
+		}
+
+	}
+	/* do this:
+	   if ( multipartType == 'alternative' && textBody && htmlBody ) {
+	       // Found HTML part only
+	       if ( textLength == textBody.length &&
+	               htmlLength != htmlBody.length ) {
+	           for ( let i = htmlLength; i < htmlBody.length; i += 1 ) {
+	               textBody.push( htmlBody[i] );
+	           }
+	       }
+	       // Found plaintext part only
+	       if ( htmlLength == htmlBody.length &&
+	               textLength != textBody.length ) {
+	           for ( let i = textLength; i < textBody.length; i += 1 ) {
+	               htmlBody.push( textBody[i] );
+	           }
+	       }
+	   }
+
+	   Also:
+	   - make the return values of type JPart and then do the conversion to EmailbodyPart at a later stage
+
+	*/
+
+	panic("not implemented")
+}
+
 func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
 	/*
 		This is true if there are one or more parts in the message that a client UI should offer as downloadable. A server SHOULD set hasAttachment to true if the attachments list contains at least one item that does not have Content-Disposition: inline. The server MAY ignore parts in this list that are processed automatically in some way or are referenced as embedded images in one of the text/html parts of the message.
@@ -1262,6 +1387,24 @@ func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
 		}
 	}
 	return false, nil
+}
+
+func (jem JEmail) Headers() ([]EmailHeader, *mlevelerrors.MethodLevelError) {
+
+	headers, err := jem.part.HeaderInOrder()
+	if err != nil {
+		jem.logger.Logger.Error("error getting headers of email", slog.Any("id", jem.Id()), slog.Any("err", err))
+		return nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	var result []EmailHeader
+	for _, hdr := range headers {
+		result = append(result, EmailHeader{
+			Name:  hdr.Name,
+			Value: hdr.Value,
+		})
+	}
+	return result, nil
+
 }
 
 func getPartsNotOfTypeMultipart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string) []EmailBodyPart {
@@ -1386,6 +1529,19 @@ func NewJPart(p message.Part) (JPart, *mlevelerrors.MethodLevelError) {
 	return result, nil
 }
 
+func (jp JPart) SubParts() ([]JPart, *mlevelerrors.MethodLevelError) {
+	var result []JPart
+
+	for _, subPart := range jp.p.Parts {
+		newJPart, mErr := NewJPart(subPart)
+		if mErr != nil {
+			return nil, mErr
+		}
+		result = append(result, newJPart)
+	}
+	return result, nil
+}
+
 func (jp JPart) Size() basetypes.Uint {
 	return basetypes.Uint(jp.p.BodyOffset - jp.p.HeaderOffset)
 }
@@ -1482,6 +1638,10 @@ func (ct ContentType) IsImage() bool {
 
 func (ct ContentType) IsMultpartAlternative() bool {
 	return ct == "multipart/alternative"
+}
+
+func (ct ContentType) IsMultpartRelated() bool {
+	return ct == "multipart/related"
 }
 
 func (ct ContentType) IsTextPlain() bool {
