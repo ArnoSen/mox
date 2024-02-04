@@ -200,6 +200,13 @@ Content-Transfer-Encoding: 7bit
 				//NB: | is an arbitrary token to stringify a string slice to make it comparable
 				AssertEqualString(t, "UTF-8", *bs.CharSet)
 			}
+
+			jPart, mErr := jem.JPart()
+			RequireNoError(t, mErr)
+			ty := jPart.Type()
+			AssertEqualString(t, "text/plain", ty.String())
+
+			AssertEqualString(t, "0", jPart.ID())
 		})
 
 		t.Run("Mail to JEmail. Message with only text body", func(t *testing.T) {
@@ -461,6 +468,15 @@ Content-Transfer-Encoding: 7bit
 			} else {
 				AssertEqualString(t, "<html></html>\r\n", textValue.Value)
 			}
+
+			jPart, mErr := jem.JPart()
+			RequireNoError(t, mErr)
+
+			//we have a multipart so we do not set an id
+			AssertEqualString(t, "", jPart.ID())
+			AssertEqualInt(t, 2, len(jPart.JParts))
+			AssertEqualString(t, "0", jPart.JParts[0].ID())
+			AssertEqualString(t, "1", jPart.JParts[1].ID())
 		})
 
 		t.Run("Mail to JEmail. Inline picture", func(t *testing.T) {
@@ -609,6 +625,18 @@ AAAAAElFTkSuQmCC
 			htmlBody, mErr := jem.HTMLBody(defaultEmailBodyProperties)
 			RequireNoError(t, mErr)
 			AssertEqualInt(t, 2, len(htmlBody))
+
+			jPart, mErr := jem.JPart()
+			RequireNoError(t, mErr)
+
+			//we have a multipart so we do not set an id
+			AssertEqualString(t, "", jPart.ID())
+			AssertEqualInt(t, 2, len(jPart.JParts))
+
+			AssertEqualInt(t, 2, len(jPart.JParts[1].JParts))
+			AssertEqualString(t, "", jPart.JParts[1].ID())
+			AssertEqualString(t, "1", jPart.JParts[1].JParts[0].ID())
+			AssertEqualString(t, "2", jPart.JParts[1].JParts[1].ID())
 		})
 
 		t.Run("Mail to JEmail. Picture as attachemnt. No html available", func(t *testing.T) {

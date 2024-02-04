@@ -1011,7 +1011,7 @@ func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, body
 		properties:               bodyProperties,
 	}
 
-	jPart, headerParseErr := NewJPart(part)
+	jPart, headerParseErr := newJPartLegacy(part, idInt64, *nextPartID)
 	ebd.Size = jPart.Size() //TODO: are these properties here on purpose?
 	ebd.Cid = jPart.Cid()
 
@@ -1255,40 +1255,52 @@ loopMediaFiles:
 	return result, nil
 }
 
-func (jem JEmail) parseBodyParts() (textBody, htmlBody, attachments []EmailBodyPart, mErr *mlevelerrors.MethodLevelError) {
-	jPart, jPartErr := NewJPart(jem.part)
+// parseBodyParts is the implementation of the reference at https://jmap.io/spec-mail.html
+// AAA
+func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attachments []EmailBodyPart, mErr *mlevelerrors.MethodLevelError) {
+	jPart, jPartErr := jem.JPart()
 	if jPartErr != nil {
 		return nil, nil, nil, jPartErr
 	}
 
 	var textBodyParts, htmlBodyParts, attachmentParts []JPart
 
-	if mErr := parseBodyPartsRecursive([]JPart{jPart}, "mixed", false, textBodyParts, htmlBodyParts, attachmentParts); mErr != nil {
+	if mErr := parseBodyPartsRecursive([]JPart{*jPart}, "mixed", false, textBodyParts, htmlBodyParts, attachmentParts); mErr != nil {
 		return nil, nil, nil, mErr
 	}
+
+	for _, tPart := range textBodyParts {
+		textBody = append(textBody, tPart.EmailBodyPart(properties))
+	}
+	for _, hPart := range htmlBodyParts {
+		htmlBody = append(htmlBody, hPart.EmailBodyPart(properties))
+	}
+	for _, att := range attachmentParts {
+		attachments = append(attachments, att.EmailBodyPart(properties))
+	}
+
 	return textBody, htmlBody, attachments, nil
 }
 
+// parseBodyPartsRecursive is the implementation of the reference at https://jmap.io/spec-mail.html
 func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments []JPart) *mlevelerrors.MethodLevelError {
 
-	/*
-		getLenghtOrMinus1 := func(bp []JPart) int {
-			if lenBP := len(bp); lenBP == 0 {
-				return -1
-			} else {
-				return lenBP
-			}
+	lenghtOrMinus1 := func(bp []JPart) int {
+		if lenBP := len(bp); lenBP == 0 {
+			return -1
+		} else {
+			return lenBP
 		}
+	}
 
-	*/
 	isInlineMediaPart := func(part JPart) bool {
 		return part.Type().IsImage() ||
 			part.Type().IsAudio() ||
 			part.Type().IsVideo()
 	}
 
-	//textLength := getLenghtOrMinus1(textBody)
-	//htmlLength := getLenghtOrMinus1(htmlBody)
+	textLength := lenghtOrMinus1(textBody)
+	htmlLength := lenghtOrMinus1(htmlBody)
 
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
@@ -1303,21 +1315,20 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 			if !ok {
 				return mlevelerrors.NewMethodLevelErrorServerFail()
 			}
-			subParts, mErr := part.SubParts()
-			if mErr != nil {
-				return mErr
-			}
-			return parseBodyPartsRecursive(subParts, subMultiType, inAlternative || subMultiType == "alternative", htmlBody, textBody, attachments)
+			return parseBodyPartsRecursive(part.JParts, subMultiType, inAlternative || subMultiType == "alternative", htmlBody, textBody, attachments)
 
 		} else if isInLine {
 			if multipartType == "alternative" {
 				switch {
 				case part.Type().IsTextPlain():
 					//push to textbody
+					textBody = append(textBody, part)
 				case part.Type().IsTextHTML():
 					//push to textbody
+					htmlBody = append(htmlBody, part)
 				default:
 					//push to attachments
+					attachments = append(attachments, part)
 				}
 				continue
 			} else if inAlternative {
@@ -1345,30 +1356,21 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 		}
 
 	}
-	/* do this:
-	   if ( multipartType == 'alternative' && textBody && htmlBody ) {
-	       // Found HTML part only
-	       if ( textLength == textBody.length &&
-	               htmlLength != htmlBody.length ) {
-	           for ( let i = htmlLength; i < htmlBody.length; i += 1 ) {
-	               textBody.push( htmlBody[i] );
-	           }
-	       }
-	       // Found plaintext part only
-	       if ( htmlLength == htmlBody.length &&
-	               textLength != textBody.length ) {
-	           for ( let i = textLength; i < textBody.length; i += 1 ) {
-	               htmlBody.push( textBody[i] );
-	           }
-	       }
-	   }
 
-	   Also:
-	   - make the return values of type JPart and then do the conversion to EmailbodyPart at a later stage
+	if multipartType == "alternative" && textBody != nil && htmlBody != nil {
+		if textLength == len(textBody) && htmlLength != len(htmlBody) {
+			for i := htmlLength; i < len(htmlBody); i++ {
+				textBody = append(textBody, htmlBody[i])
+			}
+		}
+		if htmlLength == len(htmlBody) && textLength != len(textBody) {
+			for i := textLength; i < len(textBody); i++ {
+				htmlBody = append(htmlBody, textBody[i])
+			}
 
-	*/
-
-	panic("not implemented")
+		}
+	}
+	return nil
 }
 
 func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
@@ -1511,13 +1513,73 @@ func flattenPartToEmailBodyPart(part message.Part, messageIDInt64 int64, nextPar
 
 // JPart is a helper to get the BodyPart properties we need
 type JPart struct {
-	p             message.Part
+	p message.Part
+
+	//id is the id of the part. The id identifies the part
+	id string
+
+	//msgID is used for the blobid
+	msgID         int64
 	headerInOrder message.HeaderInOrder
+	JParts        []JPart
 }
 
-func NewJPart(p message.Part) (JPart, *mlevelerrors.MethodLevelError) {
-	result := JPart{
+// JPart returns a JPart representation of a JEmail
+func (jem JEmail) JPart() (*JPart, *mlevelerrors.MethodLevelError) {
+	id := 0
+	result, mErr := newJPart(jem.part, jem.em.ID, &id)
+	if mErr != nil {
+		return nil, mErr
+	}
+
+	if mErr := partToJPartRecurse(result, jem.em.ID, &id); mErr != nil {
+		return nil, mErr
+	}
+	return result, nil
+}
+
+func partToJPartRecurse(p *JPart, messageID int64, id *int) *mlevelerrors.MethodLevelError {
+	for _, part := range p.p.Parts {
+		newJPart, mErr := newJPart(part, messageID, id)
+		if mErr != nil {
+			return mErr
+		}
+
+		if mErr := partToJPartRecurse(newJPart, messageID, id); mErr != nil {
+			return mErr
+		}
+		p.JParts = append(p.JParts, *newJPart)
+	}
+	return nil
+}
+
+func newJPart(p message.Part, messageID int64, nextID *int) (*JPart, *mlevelerrors.MethodLevelError) {
+	result := &JPart{
+		p:     p,
+		msgID: messageID,
+	}
+
+	headers, err := p.HeaderInOrder()
+	if err != nil {
+		return result, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	result.headerInOrder = headers
+
+	//this is weird: the constructor kind of depends on it self
+	if t := result.Type(); t != nil && !t.IsMultipart() {
+		result.id = fmt.Sprintf("%d", *nextID)
+		//if used then increment
+		*nextID += 1
+	}
+
+	return result, nil
+}
+
+func newJPartLegacy(p message.Part, messageID int64, id int) (*JPart, *mlevelerrors.MethodLevelError) {
+	result := &JPart{
 		p: p,
+		//id:    id,
+		msgID: messageID,
 	}
 
 	headers, err := p.HeaderInOrder()
@@ -1529,17 +1591,12 @@ func NewJPart(p message.Part) (JPart, *mlevelerrors.MethodLevelError) {
 	return result, nil
 }
 
-func (jp JPart) SubParts() ([]JPart, *mlevelerrors.MethodLevelError) {
-	var result []JPart
+func (jp JPart) ID() string {
+	return jp.id
+}
 
-	for _, subPart := range jp.p.Parts {
-		newJPart, mErr := NewJPart(subPart)
-		if mErr != nil {
-			return nil, mErr
-		}
-		result = append(result, newJPart)
-	}
-	return result, nil
+func (jp JPart) BlobID() basetypes.Id {
+	return basetypes.Id(fmt.Sprintf("%d-%s", jp.msgID, jp.id))
 }
 
 func (jp JPart) Size() basetypes.Uint {
@@ -1710,4 +1767,31 @@ func (jp JPart) Language() []string {
 		}
 	}
 	return result
+}
+
+func (jp JPart) EmailBodyPart(bodyProperties []string) EmailBodyPart {
+	ebd := EmailBodyPart{
+		EmailBodyPartKnownFields: EmailBodyPartKnownFields{
+			Size:        jp.Size(),
+			Headers:     jp.Headers(),
+			Name:        jp.Name(),
+			Type:        jp.Type(),
+			CharSet:     jp.Charset(),
+			Disposition: jp.Disposition(),
+			Cid:         jp.Cid(),
+			Language:    jp.Language(),
+			Location:    jp.Location(),
+			//FIXE this is trouble some if you ask me when returning textBody/htmlBody/attachments
+			SubParts: []EmailBodyPart{},
+		},
+		properties: bodyProperties,
+	}
+
+	if id := jp.ID(); id != "" {
+		ebd.PartId = &id
+
+		blobID := jp.BlobID()
+		ebd.BlobId = &blobID
+	}
+	return ebd
 }
