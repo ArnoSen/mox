@@ -178,7 +178,7 @@ type EmailBodyPartKnownFields struct {
 	Type *ContentType `json:"type"`
 
 	//The value of the charset parameter of the Content-Type header field, if present, or null if the header field is present but not of type text/*. If there is no Content-Type header field, or it exists and is of type text/* but has no charset parameter, this is the implicit charset as per the MIME standard: us-ascii.
-	CharSet *string `json:"charSet"`
+	CharSet *string `json:"charset"`
 
 	//The value of the charset parameter of the Content-Type header field, if present, or null if the header field is present but not of type text/*. If there is no Content-Type header field, or it exists and is of type text/* but has no charset parameter, this is the implicit charset as per the MIME standard: us-ascii.
 	Disposition *string `json:"disposition"`
@@ -460,7 +460,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
-		resultElement.BCC, mErr = jem.Sender()
+		resultElement.Sender, mErr = jem.Sender()
 		if mErr != nil {
 			ja.mlog.Error("error getting sender", slog.Any("id", idInt64), slog.Any("error", err.Error()))
 			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
@@ -775,10 +775,30 @@ func (jem JEmail) To() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 	var result []EmailAddress
 
 	if env := jem.part.Envelope; env != nil {
-		for _, addr := range env.To {
-			result = append(result, msgAddressToEmailAddress(addr))
+
+		if len(env.To) > 0 {
+			for _, addr := range env.To {
+				result = append(result, msgAddressToEmailAddress(addr))
+			}
+			return result, nil
 		}
-		return result, nil
+
+		//there maillists without a To header. This gives issues in at least two email clients:
+		//maltemi and the reference client at jmap.io
+		//when the "To:" header is not there, then just return "Delivered-To" header content
+		hdrs, mErr := jem.Headers()
+		if mErr != nil {
+			return nil, mErr
+		}
+		for _, hdr := range hdrs {
+			if hdr.Name == "Delivered-To" {
+				return []EmailAddress{
+					{
+						Email: hdr.Value,
+					},
+				}, nil
+			}
+		}
 	}
 	return nil, nil
 }
@@ -992,77 +1012,22 @@ func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
 }
 
 func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
+	jPart, mErr := jem.JPart()
+	if mErr != nil {
+		return EmailBodyPart{}, mErr
+	}
 
-	partID := 0
+	result := jPart.EmailBodyPart(bodyProperties)
 
-	//do the top level part first
-	result := partToEmailBodyPart(jem.part, &partID, jem.em.ID, bodyProperties)
-
-	//recurse over the subparts
-	recursePartToEmailBodyPart(jem.part.Parts, jem.em.ID, bodyProperties, &result, &partID)
-
+	recurseBodyStructure(bodyProperties, jPart.JParts, &result)
 	return result, nil
 }
 
-// partToEmailBodyPart returns the EmailBodyPart for the part (type message.Part)
-func partToEmailBodyPart(part message.Part, nextPartID *int, idInt64 int64, bodyProperties []string) EmailBodyPart {
-	ebd := EmailBodyPart{
-		EmailBodyPartKnownFields: EmailBodyPartKnownFields{},
-		properties:               bodyProperties,
-	}
-
-	jPart, headerParseErr := newJPartLegacy(part, idInt64, *nextPartID)
-	ebd.Size = jPart.Size() //TODO: are these properties here on purpose?
-	ebd.Cid = jPart.Cid()
-
-	if headerParseErr == nil {
-		ebd.Headers = jPart.Headers()
-		ebd.Disposition = jPart.Disposition()
-		ebd.Name = jPart.Name()
-		ebd.Type = jPart.Type()
-		ebd.CharSet = jPart.Charset()
-		ebd.Location = jPart.Location()
-		ebd.Language = jPart.Language()
-
-		if ebd.Type != nil && !ebd.Type.IsMultipart() {
-			//This is null if, and only if, the part is of type multipart/*
-			partIDStr := fmt.Sprintf("%d", *nextPartID)
-			ebd.PartId = &partIDStr
-
-			//increase the partID counter
-
-			//BlobId
-			//FIXME just choosing a way to store things
-			//we have to come up with a way how to generate this
-
-			blobId := basetypes.Id(fmt.Sprintf("%d-%s", idInt64, partIDStr))
-			ebd.BlobId = &blobId
-
-			*nextPartID++
-		}
-	}
-	return ebd
-}
-
-func recursePartToEmailBodyPart(subparts []message.Part, idInt64 int64, bodyProperties []string, result *EmailBodyPart, nextPartId *int) {
-	if len(subparts) == 0 {
-		return
-	} else {
-
-		for _, p := range subparts {
-			subPartBodyPart := partToEmailBodyPart(p, nextPartId, idInt64, bodyProperties)
-
-			if subPartBodyPart.Type != nil {
-				//This is the full MIME structure of the message body, without recursing into message/rfc822 or message/global parts
-				if *subPartBodyPart.Type == "message/rfc822" || *subPartBodyPart.Type == "message/global" {
-					continue
-				}
-			}
-
-			recursePartToEmailBodyPart(p.Parts, idInt64, bodyProperties, &subPartBodyPart, nextPartId)
-
-			result.SubParts = append(result.SubParts, subPartBodyPart)
-		}
+func recurseBodyStructure(properties []string, p []JPart, result *EmailBodyPart) {
+	for _, subPart := range p {
+		newBP := subPart.EmailBodyPart(properties)
+		recurseBodyStructure(properties, subPart.JParts, &newBP)
+		result.SubParts = append(result.SubParts, newBP)
 	}
 }
 
@@ -1116,9 +1081,7 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 
 		for _, bp := range textBodyParts {
-			if bp.Type != nil && bp.Type.IsText() {
-				uniquePartsToGet[*bp.PartId] = nil
-			}
+			uniquePartsToGet[*bp.PartId] = nil
 		}
 	}
 
@@ -1129,13 +1092,12 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 
 		for _, bp := range htmlBodyParts {
-			if bp.Type != nil && bp.Type.IsText() {
-				uniquePartsToGet[*bp.PartId] = nil
-			}
+			uniquePartsToGet[*bp.PartId] = nil
 		}
 	}
 
 	for partId := range uniquePartsToGet {
+		fmt.Printf("bodyValues get partId %s\n", partId)
 		bodyVal, mErr := jem.GetPartBody(partId)
 		if mErr != nil {
 			return nil, mErr
@@ -1162,15 +1124,22 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 func (jem JEmail) TextBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	// A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/plain when alternative versions are available.
 
-	nextPartID := 0
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeText), nil
+	textBody, _, _, mErr := jem.parseBodyParts(bodyProperties)
+	if mErr != nil {
+		return nil, mErr
+	}
+	return textBody, nil
 }
 
 // TextBody returns a list of EmailBodyParts of type text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
 func (jem JEmail) HTMLBody(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	//A list of text/plain, text/html, image/*, audio/*, and/or video/* parts to display (sequentially) as the message body, with a preference for text/html when alternative versions are available.
-	nextPartID := 0
-	return flattenPartToEmailBodyPart(jem.part, jem.em.ID, &nextPartID, bodyProperties, flattenTypeHTML), nil
+
+	_, htmlBody, _, mErr := jem.parseBodyParts(bodyProperties)
+	if mErr != nil {
+		return nil, mErr
+	}
+	return htmlBody, nil
 }
 
 func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
@@ -1178,81 +1147,11 @@ func (jem JEmail) Attachments(bodyProperties []string) ([]EmailBodyPart, *mlevel
 }
 
 func (jem JEmail) attachments(bodyProperties []string) ([]EmailBodyPart, *mlevelerrors.MethodLevelError) {
-	/*
-		A list, traversing depth-first, of all parts in bodyStructure that satisfy either of the following conditions:
-		- not of type multipart/* and not included in textBody or htmlBody
-		- of type image/*, audio/*, or video/* and not in both textBody and htmlBody
-
-
-		FIXME: it should be a lot simpeler defining what the above output is other than implementing the lines literally like below
-	*/
-
-	var result []EmailBodyPart
-
-	textBodyParts, mErr := jem.TextBody(bodyProperties)
+	_, _, attachments, mErr := jem.parseBodyParts(bodyProperties)
 	if mErr != nil {
-		return result, mErr
+		return nil, mErr
 	}
-
-	htmlBodyParts, mErr := jem.HTMLBody(bodyProperties)
-	if mErr != nil {
-		return result, mErr
-	}
-
-	nextPartID := 0
-	nonMultiPartParts, mErr := getPartsNotOfTypeMultipart(jem.part, jem.em.ID, &nextPartID, bodyProperties), nil
-	if mErr != nil {
-		return result, mErr
-	}
-
-loopNonMultipartResultCandidates:
-	for _, resultCandidate := range nonMultiPartParts {
-		for _, textBodyPart := range textBodyParts {
-			if *textBodyPart.PartId == *resultCandidate.PartId {
-				continue loopNonMultipartResultCandidates
-			}
-		}
-		for _, htmlBodyPart := range htmlBodyParts {
-			if *htmlBodyPart.PartId == *resultCandidate.PartId {
-				continue loopNonMultipartResultCandidates
-			}
-		}
-
-		result = append(result, resultCandidate)
-	}
-
-	nextPartID = 0
-	vidAudImgParts := getPartsOfTypeImageAudioVideo(jem.part, jem.em.ID, &nextPartID, bodyProperties)
-
-loopMediaFiles:
-	for _, resultCandidate := range vidAudImgParts {
-		var inTextBodyParts, inHTMLBodyParts bool
-
-		for _, textBodyPart := range textBodyParts {
-			if *textBodyPart.PartId == *resultCandidate.PartId {
-				inTextBodyParts = true
-			}
-		}
-		for _, htmlBodyPart := range htmlBodyParts {
-			if *htmlBodyPart.PartId == *resultCandidate.PartId {
-				inHTMLBodyParts = true
-			}
-		}
-
-		if !inTextBodyParts && !inHTMLBodyParts {
-			//we can potentially include it unless we already have it
-			for _, resultItem := range result {
-				if *resultItem.PartId == *resultCandidate.PartId {
-					continue loopMediaFiles
-				}
-			}
-			result = append(result, resultCandidate)
-		}
-
-	}
-	//FIXME need to sort the result on partID
-
-	return result, nil
+	return attachments, nil
 }
 
 // parseBodyParts is the implementation of the reference at https://jmap.io/spec-mail.html
@@ -1265,9 +1164,11 @@ func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attac
 
 	var textBodyParts, htmlBodyParts, attachmentParts []JPart
 
-	if mErr := parseBodyPartsRecursive([]JPart{*jPart}, "mixed", false, textBodyParts, htmlBodyParts, attachmentParts); mErr != nil {
+	if mErr := parseBodyPartsRecursive([]JPart{*jPart}, "mixed", false, &textBodyParts, &htmlBodyParts, &attachmentParts); mErr != nil {
 		return nil, nil, nil, mErr
 	}
+
+	fmt.Printf("numTextParts %d, numHTMLParts %d, numAttachmentParts %d\n", len(textBodyParts), len(htmlBodyParts), len(attachmentParts))
 
 	for _, tPart := range textBodyParts {
 		textBody = append(textBody, tPart.EmailBodyPart(properties))
@@ -1283,10 +1184,10 @@ func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attac
 }
 
 // parseBodyPartsRecursive is the implementation of the reference at https://jmap.io/spec-mail.html
-func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments []JPart) *mlevelerrors.MethodLevelError {
+func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments *[]JPart) *mlevelerrors.MethodLevelError {
 
-	lenghtOrMinus1 := func(bp []JPart) int {
-		if lenBP := len(bp); lenBP == 0 {
+	lenghtOrMinus1 := func(bp *[]JPart) int {
+		if lenBP := len(*bp); lenBP == 0 {
 			return -1
 		} else {
 			return lenBP
@@ -1305,7 +1206,7 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
 		disposition := part.Disposition()
-		isInLine := (disposition != nil && *disposition == "attachment") &&
+		isInLine := (disposition == nil || disposition != nil && *disposition != "attachment") &&
 			(part.Type().IsTextPlain() ||
 				part.Type().IsTextHTML() ||
 				isInlineMediaPart(part)) && (i == 0 || (!part.Type().IsMultpartRelated() && (isInlineMediaPart(part) || part.Name() == nil)))
@@ -1315,61 +1216,68 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 			if !ok {
 				return mlevelerrors.NewMethodLevelErrorServerFail()
 			}
-			return parseBodyPartsRecursive(part.JParts, subMultiType, inAlternative || subMultiType == "alternative", htmlBody, textBody, attachments)
+			return parseBodyPartsRecursive(part.JParts, subMultiType, inAlternative || subMultiType == "alternative", textBody, htmlBody, attachments)
 
 		} else if isInLine {
 			if multipartType == "alternative" {
 				switch {
 				case part.Type().IsTextPlain():
 					//push to textbody
-					textBody = append(textBody, part)
+					*textBody = append(*textBody, part)
 				case part.Type().IsTextHTML():
 					//push to textbody
-					htmlBody = append(htmlBody, part)
+					fmt.Printf("pushing part ID %s to htmlBody\n", part.ID())
+					*htmlBody = append(*htmlBody, part)
 				default:
 					//push to attachments
-					attachments = append(attachments, part)
+					*attachments = append(*attachments, part)
 				}
 				continue
 			} else if inAlternative {
 				if part.Type().IsTextPlain() {
+					fmt.Println("||| setting html body to nil")
 					htmlBody = nil
 				}
 				if part.Type().IsTextHTML() {
+					fmt.Println("||| setting text body to nil")
 					textBody = nil
 				}
 			}
 
 			if textBody != nil {
-				textBody = append(textBody, part)
+				*textBody = append(*textBody, part)
 			}
 
 			if htmlBody != nil {
-				htmlBody = append(htmlBody, part)
+				*htmlBody = append(*htmlBody, part)
 			}
 
 			if (textBody == nil || htmlBody == nil) && isInlineMediaPart(part) {
-				attachments = append(attachments, part)
+				*attachments = append(*attachments, part)
 			}
 		} else {
-			attachments = append(attachments, part)
+			*attachments = append(*attachments, part)
 		}
 
 	}
 
 	if multipartType == "alternative" && textBody != nil && htmlBody != nil {
-		if textLength == len(textBody) && htmlLength != len(htmlBody) {
-			for i := htmlLength; i < len(htmlBody); i++ {
-				textBody = append(textBody, htmlBody[i])
+		fmt.Println("||| if loop alternative is true")
+		if textLength == len(*textBody) && htmlLength != len(*htmlBody) {
+			for i := htmlLength; i < len(*htmlBody); i++ {
+				fmt.Println("||| only html")
+				*textBody = append(*textBody, (*htmlBody)[i])
 			}
 		}
-		if htmlLength == len(htmlBody) && textLength != len(textBody) {
-			for i := textLength; i < len(textBody); i++ {
-				htmlBody = append(htmlBody, textBody[i])
+		if htmlLength == len(*htmlBody) && textLength != len(*textBody) {
+			for i := textLength; i < len(*textBody); i++ {
+				fmt.Println("||| only text")
+				*htmlBody = append(*htmlBody, (*textBody)[i])
 			}
 
 		}
 	}
+
 	return nil
 }
 
@@ -1409,43 +1317,6 @@ func (jem JEmail) Headers() ([]EmailHeader, *mlevelerrors.MethodLevelError) {
 
 }
 
-func getPartsNotOfTypeMultipart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string) []EmailBodyPart {
-	var result []EmailBodyPart
-
-	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
-	if topLevelPart.Type != nil {
-		if !topLevelPart.Type.IsMultipart() {
-			result = append(result, partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties))
-		}
-	}
-
-	for _, p := range part.Parts {
-		result = append(result, getPartsNotOfTypeMultipart(p, messageIDInt64, nextPartID, bodyProperties)...)
-	}
-
-	return result
-}
-
-func getPartsOfTypeImageAudioVideo(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string) []EmailBodyPart {
-	var result []EmailBodyPart
-
-	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
-	if topLevelPart.Type != nil {
-		if topLevelPart.Type.IsVideo() || topLevelPart.Type.IsAudio() || topLevelPart.Type.IsImage() {
-			result = append(result, partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties))
-		} else if !topLevelPart.Type.IsMultipart() {
-			//we must keep the partIDs correct
-			*nextPartID++
-		}
-	}
-
-	for _, p := range part.Parts {
-		result = append(result, getPartsOfTypeImageAudioVideo(p, messageIDInt64, nextPartID, bodyProperties)...)
-	}
-
-	return result
-}
-
 // includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
 type flattenType int
 
@@ -1453,63 +1324,6 @@ const (
 	flattenTypeText flattenType = iota
 	flattenTypeHTML
 )
-
-func flattenPartToEmailBodyPart(part message.Part, messageIDInt64 int64, nextPartID *int, bodyProperties []string, flattenType flattenType) []EmailBodyPart {
-	//FIXME need to recurse and support flattenTypeAttachments
-
-	var result []EmailBodyPart
-
-	topLevelPart := partToEmailBodyPart(part, nextPartID, messageIDInt64, bodyProperties)
-
-	//FIXME this is far from complete but we need something as a start
-
-	if topLevelPart.Type != nil {
-
-		switch {
-		case topLevelPart.Type.IsMultpartAlternative():
-			for _, p := range part.Parts {
-				partBodyPart := partToEmailBodyPart(p, nextPartID, messageIDInt64, bodyProperties)
-
-				if partBodyPart.Type != nil {
-					switch flattenType {
-					case flattenTypeHTML:
-						if partBodyPart.Type.IsTextHTML() {
-							result = append(result, partBodyPart)
-						}
-					case flattenTypeText:
-						if partBodyPart.Type.IsTextPlain() {
-							result = append(result, partBodyPart)
-						}
-					}
-
-				}
-				for _, pParts := range p.Parts {
-					result = append(result, flattenPartToEmailBodyPart(pParts, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
-				}
-			}
-		default:
-			var include bool
-			switch {
-			case topLevelPart.Type.IsTextHTML() || topLevelPart.Type.IsTextPlain():
-				include = true
-			case topLevelPart.Type.IsImage(), topLevelPart.Type.IsAudio(), topLevelPart.Type.IsVideo():
-				include = true
-			}
-
-			if include {
-				result = append(result, topLevelPart)
-			}
-
-			for _, p := range part.Parts {
-				result = append(result, flattenPartToEmailBodyPart(p, messageIDInt64, nextPartID, bodyProperties, flattenType)...)
-			}
-
-		}
-
-	}
-
-	return result
-}
 
 // JPart is a helper to get the BodyPart properties we need
 type JPart struct {
@@ -1571,22 +1385,6 @@ func newJPart(p message.Part, messageID int64, nextID *int) (*JPart, *mlevelerro
 		//if used then increment
 		*nextID += 1
 	}
-
-	return result, nil
-}
-
-func newJPartLegacy(p message.Part, messageID int64, id int) (*JPart, *mlevelerrors.MethodLevelError) {
-	result := &JPart{
-		p: p,
-		//id:    id,
-		msgID: messageID,
-	}
-
-	headers, err := p.HeaderInOrder()
-	if err != nil {
-		return result, mlevelerrors.NewMethodLevelErrorServerFail()
-	}
-	result.headerInOrder = headers
 
 	return result, nil
 }

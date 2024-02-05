@@ -3,6 +3,7 @@ package jaccount
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -617,7 +618,7 @@ AAAAAElFTkSuQmCC
 
 			bv, mErr := jem.BodyValues(false, true, false, nil)
 			RequireNoError(t, mErr)
-			AssertEqualInt(t, 1, len(bv))
+			AssertEqualInt(t, 2, len(bv))
 			htmlBodyValue, ok := bv["1"]
 			AssertTrue(t, ok)
 			AssertEqualString(t, "<!DOCTYPE html>\r\n<html>\r\n  <head>\r\n\r\n    <meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\r\n  </head>\r\n  <body>\r\n    <p>My first image <img src=\"cid:part1.Nj2N9maO.uVlYYEhk@km42.nl\"\r\n        alt=\"\"></p>\r\n  </body>\r\n</html>", htmlBodyValue.Value)
@@ -763,6 +764,216 @@ Sent from mobile
 			hasAttachment, merr := jem.HasAttachment()
 			RequireNoError(t, merr)
 			AssertTrue(t, !hasAttachment)
+		})
+
+		t.Run("Mail to JEmail. Sender property", func(t *testing.T) {
+			mail := `Received: from ietfa.amsl.com (localhost [IPv6:::1])
+        by ietfa.amsl.com (Postfix) with ESMTP id C3EB8C1654F3
+        for <jmap@km42.nl>; Thu, 18 Jan 2024 15:06:05 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=ietf.org; s=ietf1;
+        t=1705619165; bh=QYyoxUldQB3h1EY8LUsPexgGVB/b361rm2cl6lkG6As=;
+        h=From:In-Reply-To:References:CC:Date:Subject:List-Id:
+         List-Unsubscribe:List-Archive:List-Post:List-Help:List-Subscribe:
+         Reply-To;
+        b=kz2A3wqCn++z9TXVeOqu/gvEfoZCpBL8IxokbutV6v3ffFdtLZsL51+9JjlLb0ocM
+         yw1kNrBfP0XMq6vk6UmG+uOudy/bIa1OLOk/iuD7+bXlsjdTktTY5g7E6PJhvjK38C
+         ecm3id3C9KKXRubPQ34jq5x5iSqOlLzy4PB8IeTs=
+X-Mailbox-Line: From jmap-bounces@ietf.org  Thu Jan 18 15:06:05 2024
+Received: from ietfa.amsl.com (localhost [IPv6:::1])
+        by ietfa.amsl.com (Postfix) with ESMTP id 3178DC14CE3F;
+        Thu, 18 Jan 2024 15:06:05 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=ietf.org; s=ietf1;
+        t=1705619165; bh=QYyoxUldQB3h1EY8LUsPexgGVB/b361rm2cl6lkG6As=;
+        h=From:In-Reply-To:References:CC:Date:Subject:List-Id:
+         List-Unsubscribe:List-Archive:List-Post:List-Help:List-Subscribe:
+         Reply-To;
+        b=kz2A3wqCn++z9TXVeOqu/gvEfoZCpBL8IxokbutV6v3ffFdtLZsL51+9JjlLb0ocM
+         yw1kNrBfP0XMq6vk6UmG+uOudy/bIa1OLOk/iuD7+bXlsjdTktTY5g7E6PJhvjK38C
+         ecm3id3C9KKXRubPQ34jq5x5iSqOlLzy4PB8IeTs=
+X-Original-To: jmap@ietfa.amsl.com
+Delivered-To: jmap@ietfa.amsl.com
+Received: from localhost (localhost [127.0.0.1])
+ by ietfa.amsl.com (Postfix) with ESMTP id 5DE06C14F5FA
+ for <jmap@ietfa.amsl.com>; Thu, 18 Jan 2024 15:06:03 -0800 (PST)
+X-Virus-Scanned: amavisd-new at amsl.com
+X-Spam-Flag: NO
+X-Spam-Score: -5.637
+X-Spam-Level:
+X-Spam-Status: No, score=-5.637 tagged_above=-999 required=5
+ tests=[BAYES_00=-1.9, HEADER_FROM_DIFFERENT_DOMAINS=0.249,
+ MISSING_HEADERS=1.021, RCVD_IN_DNSWL_HI=-5,
+ RCVD_IN_ZEN_BLOCKED_OPENDNS=0.001, SPF_HELO_NONE=0.001,
+ SPF_PASS=-0.001, T_SCC_BODY_TEXT_LINE=-0.01,
+ URIBL_DBL_BLOCKED_OPENDNS=0.001, URIBL_ZEN_BLOCKED_OPENDNS=0.001]
+ autolearn=ham autolearn_force=no
+Received: from mail.ietf.org ([50.223.129.194])
+ by localhost (ietfa.amsl.com [127.0.0.1]) (amavisd-new, port 10024)
+ with ESMTP id HXSNLTkHPu6L for <jmap@ietfa.amsl.com>;
+ Thu, 18 Jan 2024 15:05:59 -0800 (PST)
+Received: from smtp.lax.icann.org (smtp.lax.icann.org
+ [IPv6:2620:0:2d0:201::1:81])
+ (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+ key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+ (No client certificate requested)
+ by ietfa.amsl.com (Postfix) with ESMTPS id 4556EC14F5EF
+ for <jmap@ietf.org>; Thu, 18 Jan 2024 15:05:59 -0800 (PST)
+Received: from request6.lax.icann.org (request1.lax.icann.org [10.32.11.221])
+ by smtp.lax.icann.org (Postfix) with ESMTP id 22DCDE04F4;
+ Thu, 18 Jan 2024 22:56:21 +0000 (UTC)
+Received: by request6.lax.icann.org (Postfix, from userid 48)
+ id 1D362141779; Thu, 18 Jan 2024 22:56:21 +0000 (UTC)
+RT-Owner: david.dong
+From: "David Dong via RT" <drafts-expert-review-comment@iana.org>
+In-Reply-To: <rt-5.0.3-1789590-1705617278-1683.1307866-9-0@icann.org>
+References: <RT-Ticket-1307866@icann.org>
+ <rt-5.0.3-1789590-1705617278-1683.1307866-9-0@icann.org>
+Message-ID: <rt-5.0.3-1789591-1705618581-294.1307866-9-0@icann.org>
+X-RT-Loop-Prevention: IANA
+X-RT-Ticket: IANA #1307866
+X-Managed-BY: RT 5.0.3 (http://www.bestpractical.com/rt/)
+X-RT-Originator: david.dong@iana.org
+CC: murch@fastmail.com, neilj@fastmailteam.com, jmap@ietf.org
+X-RT-Original-Encoding: utf-8
+Precedence: bulk
+Date: Thu, 18 Jan 2024 22:56:21 +0000
+MIME-Version: 1.0
+Archived-At: <https://mailarchive.ietf.org/arch/msg/jmap/pMPxBFp84pXX_f7oF1n2ia-4oAY>
+Subject: [Jmap] [IANA #1307866] expert review for draft-ietf-jmap-sieve-16
+ (JMAP Data Types)
+X-BeenThere: jmap@ietf.org
+X-Mailman-Version: 2.1.39
+List-Id: JSON Message Access Protocol <jmap.ietf.org>
+List-Unsubscribe: <https://www.ietf.org/mailman/options/jmap>,
+ <mailto:jmap-request@ietf.org?subject=unsubscribe>
+List-Archive: <https://mailarchive.ietf.org/arch/browse/jmap/>
+List-Post: <mailto:jmap@ietf.org>
+List-Help: <mailto:jmap-request@ietf.org?subject=help>
+List-Subscribe: <https://www.ietf.org/mailman/listinfo/jmap>,
+ <mailto:jmap-request@ietf.org?subject=subscribe>
+Reply-To: drafts-expert-review-comment@iana.org
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+Errors-To: jmap-bounces@ietf.org
+Sender: "Jmap" <jmap-bounces@ietf.org>
+
+RGVhciBLZW4gTXVyY2hpc29uIGFuZCBOZWlsIEplbmtpbnMgKGNjOiBqbWFwIFdHKSwKCkFzIHRo
+ZSBkZXNpZ25hdGVkIGV4cGVydHMgZm9yIHRoZSBKTUFQIERhdGEgVHlwZXMgcmVnaXN0cnksIGNh
+biB5b3UgcmV2aWV3IHRoZSBwcm9wb3NlZCByZWdpc3RyYXRpb24gaW4gZHJhZnQtaWV0Zi1qbWFw
+LXNpZXZlLTE2IGZvciB1cz8gUGxlYXNlIHNlZQoKaHR0cHM6Ly9kYXRhdHJhY2tlci5pZXRmLm9y
+Zy9kb2MvZHJhZnQtaWV0Zi1qbWFwLXNpZXZlLwoKVGhlIGR1ZSBkYXRlIGlzIEZlYnJ1YXJ5IDFz
+dC4KCklmIHRoaXMgaXMgT0ssIHdoZW4gdGhlIElFU0cgYXBwcm92ZXMgdGhlIGRvY3VtZW50IGZv
+ciBwdWJsaWNhdGlvbiwgd2UnbGwgbWFrZSB0aGUgcmVnaXN0cmF0aW9uIGF0OgoKaHR0cHM6Ly93
+d3cuaWFuYS5vcmcvYXNzaWdubWVudHMvam1hcC8KClVubGVzcyB5b3UgYXNrIHVzIHRvIHdhaXQg
+Zm9yIHRoZSBvdGhlciByZXZpZXdlciwgd2XigJlsbCBhY3Qgb24gdGhlIGZpcnN0IHJlc3BvbnNl
+IHdlIHJlY2VpdmUuCgpXaXRoIHRoYW5rcywKCkRhdmlkIERvbmcKSUFOQSBTZXJ2aWNlcyBTci4g
+U3BlY2lhbGlzdAoKX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19f
+X18KSm1hcCBtYWlsaW5nIGxpc3QKSm1hcEBpZXRmLm9yZwpodHRwczovL3d3dy5pZXRmLm9yZy9t
+YWlsbWFuL2xpc3RpbmZvL2ptYXAK
+`
+			mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+
+			sLog := slog.Default()
+
+			part, err := message.Parse(sLog, true, mReader)
+			RequireNoError(t, err)
+
+			RequireNoError(t, part.Walk(sLog, nil))
+
+			msg := store.Message{
+				ID:       1,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
+
+			sender, mErr := jem.Sender()
+			RequireNoError(t, mErr)
+
+			if len(sender) != 1 {
+				t.Logf("was expecting one to address but got %d", len(sender))
+				t.FailNow()
+			}
+			if sender[0].Email != "jmap-bounces@ietf.org" {
+				t.Logf("unexpected sender. Sender email: %s", sender[0].Email)
+				t.FailNow()
+			}
+			AssertEqualString(t, "Jmap", *sender[0].Name)
+
+			to, mErr := jem.To()
+			RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			if to[0].Email != "jmap@ietfa.amsl.com" {
+				t.Logf("unexpected sender. Sender email: %s", to[0].Email)
+				t.FailNow()
+			}
+			AssertEqualString(t, "Jmap", *sender[0].Name)
+
+			jPart, mErr := jem.JPart()
+			RequireNoError(t, mErr)
+			charSet := jPart.Charset()
+			if AssertNotNil(t, charSet) {
+				AssertEqualString(t, "utf-8", *charSet)
+			}
+
+		})
+		t.Run("Mail to JEmail.  html body part with mixed", func(t *testing.T) {
+
+			testMail, err := os.ReadFile("./testmail75.eml")
+			if err != nil {
+				panic(err)
+			}
+			mail := string(testMail)
+			//mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+			mReader := strings.NewReader(mail)
+
+			sLog := slog.Default()
+
+			part, err := message.Parse(sLog, true, mReader)
+			RequireNoError(t, err)
+
+			RequireNoError(t, part.Walk(sLog, nil))
+
+			msg := store.Message{
+				ID:       1,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
+
+			sender, mErr := jem.Sender()
+			RequireNoError(t, mErr)
+
+			if len(sender) != 1 {
+				t.Logf("was expecting one to address but got %d", len(sender))
+				t.FailNow()
+			}
+			if sender[0].Email != "jmap-bounces@ietf.org" {
+				t.Logf("unexpected sender. Sender email: %s", sender[0].Email)
+				t.FailNow()
+			}
+			AssertEqualString(t, "Jmap", *sender[0].Name)
+
+			to, mErr := jem.To()
+			RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			if to[0].Email != "drafts-expert-review-comment@iana.org" {
+				t.Logf("unexpected sender. Sender email: %s", to[0].Email)
+				t.FailNow()
+			}
+			AssertEqualString(t, "Jmap", *sender[0].Name)
+
+			htmlBody, mErr := jem.HTMLBody(nil)
+			RequireNoError(t, mErr)
+
+			AssertEqualInt(t, 2, len(htmlBody))
 		})
 	})
 }
