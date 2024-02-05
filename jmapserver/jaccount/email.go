@@ -1795,3 +1795,11 @@ func (jp JPart) EmailBodyPart(bodyProperties []string) EmailBodyPart {
 	}
 	return ebd
 }
+
+func (jp JPart) Body() (string, *mlevelerrors.MethodLevelError) {
+	body, err := io.ReadAll(jp.p.Reader())
+	if err != nil {
+		return "", mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return string(body), nil
+}
