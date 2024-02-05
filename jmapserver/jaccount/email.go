@@ -1164,8 +1164,11 @@ func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attac
 
 	var textBodyParts, htmlBodyParts, attachmentParts []JPart
 
-	if mErr := parseBodyPartsRecursive([]JPart{*jPart}, "mixed", false, &textBodyParts, &htmlBodyParts, &attachmentParts); mErr != nil {
-		return nil, nil, nil, mErr
+	var hasErr bool
+
+	parseBodyPartsRecursive([]JPart{*jPart}, "mixed", false, &textBodyParts, &htmlBodyParts, &attachmentParts, &hasErr)
+	if hasErr {
+		return nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
 	fmt.Printf("numTextParts %d, numHTMLParts %d, numAttachmentParts %d\n", len(textBodyParts), len(htmlBodyParts), len(attachmentParts))
@@ -1184,7 +1187,7 @@ func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attac
 }
 
 // parseBodyPartsRecursive is the implementation of the reference at https://jmap.io/spec-mail.html
-func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments *[]JPart) *mlevelerrors.MethodLevelError {
+func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative bool, textBody, htmlBody, attachments *[]JPart, hasErr *bool) {
 
 	lenghtOrMinus1 := func(bp *[]JPart) int {
 		if lenBP := len(*bp); lenBP == 0 {
@@ -1203,8 +1206,10 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 	textLength := lenghtOrMinus1(textBody)
 	htmlLength := lenghtOrMinus1(htmlBody)
 
+	//fmt.Printf("len(parts)=%d\n", len(parts))
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
+		//fmt.Printf("+++ processing part %d with ct %s and id %s\n", i, part.Type().String(), part.ID())
 		disposition := part.Disposition()
 		isInLine := (disposition == nil || disposition != nil && *disposition != "attachment") &&
 			(part.Type().IsTextPlain() ||
@@ -1214,9 +1219,11 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 		if part.Type().IsMultipart() {
 			_, subMultiType, ok := strings.Cut(part.Type().String(), "/")
 			if !ok {
-				return mlevelerrors.NewMethodLevelErrorServerFail()
+				*hasErr = true
+				return
 			}
-			return parseBodyPartsRecursive(part.JParts, subMultiType, inAlternative || subMultiType == "alternative", textBody, htmlBody, attachments)
+			//fmt.Printf("submultiType is %s\n", subMultiType)
+			parseBodyPartsRecursive(part.JParts, subMultiType, inAlternative || subMultiType == "alternative", textBody, htmlBody, attachments, hasErr)
 
 		} else if isInLine {
 			if multipartType == "alternative" {
@@ -1226,20 +1233,22 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 					*textBody = append(*textBody, part)
 				case part.Type().IsTextHTML():
 					//push to textbody
-					fmt.Printf("pushing part ID %s to htmlBody\n", part.ID())
+					//fmt.Printf("pushing part ID %s to htmlBody\n", part.ID())
 					*htmlBody = append(*htmlBody, part)
 				default:
 					//push to attachments
 					*attachments = append(*attachments, part)
 				}
+
+				//fmt.Println("=>following conttinue directive")
 				continue
 			} else if inAlternative {
 				if part.Type().IsTextPlain() {
-					fmt.Println("||| setting html body to nil")
+					//fmt.Println("||| setting html body to nil")
 					htmlBody = nil
 				}
 				if part.Type().IsTextHTML() {
-					fmt.Println("||| setting text body to nil")
+					//fmt.Println("||| setting text body to nil")
 					textBody = nil
 				}
 			}
@@ -1258,27 +1267,25 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 		} else {
 			*attachments = append(*attachments, part)
 		}
-
+		//fmt.Printf("--- end of processing part %d with ct %s and id %s\n", i, part.Type().String(), part.ID())
 	}
 
 	if multipartType == "alternative" && textBody != nil && htmlBody != nil {
-		fmt.Println("||| if loop alternative is true")
+		//fmt.Println("||| if loop alternative is true")
 		if textLength == len(*textBody) && htmlLength != len(*htmlBody) {
 			for i := htmlLength; i < len(*htmlBody); i++ {
-				fmt.Println("||| only html")
+				//fmt.Println("||| only html")
 				*textBody = append(*textBody, (*htmlBody)[i])
 			}
 		}
 		if htmlLength == len(*htmlBody) && textLength != len(*textBody) {
 			for i := textLength; i < len(*textBody); i++ {
-				fmt.Println("||| only text")
+				//fmt.Println("||| only text")
 				*htmlBody = append(*htmlBody, (*textBody)[i])
 			}
 
 		}
 	}
-
-	return nil
 }
 
 func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {

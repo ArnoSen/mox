@@ -970,6 +970,13 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 			}
 			AssertEqualString(t, "Jmap", *sender[0].Name)
 
+			jPart, mErr := jem.JPart()
+			RequireNoError(t, mErr)
+
+			AssertEqualInt(t, 2, len(jPart.JParts))
+			AssertEqualString(t, "text/plain", jPart.JParts[1].Type().String())
+			AssertEqualString(t, "inline", *(jPart.JParts[1].Disposition()))
+
 			htmlBody, mErr := jem.HTMLBody(nil)
 			RequireNoError(t, mErr)
 
