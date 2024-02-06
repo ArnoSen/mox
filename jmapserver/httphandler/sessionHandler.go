@@ -84,14 +84,15 @@ type SessionHandler struct {
 	logger mlog.Log
 }
 
-func NewSessionHandler(accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger mlog.Log) SessionHandler {
+// baseURL must have format scheme://host:port
+func NewSessionHandler(baseURL string, accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger mlog.Log) SessionHandler {
 	return SessionHandler{
 		AccountRepo:    accountRepo,
 		Capabilities:   capabilities,
-		APIURL:         apiURL,
-		DownloadURL:    downloadURL,
-		UploadURL:      uploadURL,
-		EventSourceURL: eventSourceURL,
+		APIURL:         baseURL + apiURL,
+		DownloadURL:    baseURL + downloadURL,
+		UploadURL:      baseURL + uploadURL,
+		EventSourceURL: baseURL + eventSourceURL,
 		stateHashingFunc: func(b []byte) []byte {
 			md5sum := md5.Sum(b)
 			return md5sum[:]
