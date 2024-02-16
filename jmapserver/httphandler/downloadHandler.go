@@ -1,19 +1,111 @@
 package httphandler
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"strings"
 
-type DownloadHandler struct {
-	pathFormat string
+	"github.com/mjl-/bstore"
+	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/user"
+	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/store"
+	"golang.org/x/exp/slog"
+)
+
+func NewInvalidDownloadURL(format string) JSONProblem {
+	return JSONProblem{
+		Title:   "invalid download url",
+		Details: "format is %s ",
+	}
+
 }
 
-func NewDownloadHandler(pathFormat string) *DownloadHandler {
+var BlobNotFound = JSONProblem{
+	Title: "blob not found",
+}
+
+type DownloadHandler struct {
+	pathFormat     string
+	contextUserKey string
+	logger         mlog.Log
+	AccountOpener  AccountOpener
+}
+
+func NewDownloadHandler(ao AccountOpener, contextUserKey, pathFormat string, logger mlog.Log) *DownloadHandler {
 	return &DownloadHandler{
-		pathFormat: pathFormat,
+		contextUserKey: contextUserKey,
+		pathFormat:     pathFormat,
+		logger:         logger,
+		AccountOpener:  ao,
 	}
 }
 
 func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	dh.logger.Debug("download handler called")
 	AddCORSAllowedOriginHeader(w, r)
+
+	//we are authenticated but we need some checks
+	tmplType := r.URL.Query().Get("type")
+	if tmplType == "" {
+		sendUserErr(w, TypeCannotBeEmpty)
+		return
+	}
+
+	//FIXME this is hard coded now and if the format changes this should change as well
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) != 5 {
+		sendUserErr(w, NewInvalidDownloadURL(dh.pathFormat))
+		return
+	}
+
+	if pathParts[2] != "000" {
+		sendUserErr(w, UnknownAccount)
+		return
+	}
+
+	blobID := pathParts[3]
+	name := pathParts[4]
+
+	dh.logger.Debug("parsing download url", slog.Any("blodId", blobID), slog.Any("name", name), slog.Any("type", tmplType))
+
+	//pass in the jaccount
+	userIface := r.Context().Value(dh.contextUserKey)
+	if userIface == nil {
+		dh.logger.Error("no user found in context")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	userObj, ok := userIface.(user.User)
+	if !ok {
+		dh.logger.Error("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	mAccount, err := dh.AccountOpener(dh.logger, userObj.Name)
+	if err != nil {
+		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
+
+	found, bytes, err := jaccount.NewJAccount(mAccount, mailboxRepo, dh.logger).DownloadBlob(blobID, name, tmplType)
+	if err != nil {
+		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
+		w.WriteHeader(http.StatusInternalServerError)
+
+	}
+	if !found {
+		dh.logger.Info("blob not found", slog.Any("blodId", blobID))
+		sendUserErr(w, BlobNotFound)
+		return
+	}
+
+	w.Write(bytes)
 }
 
 /*

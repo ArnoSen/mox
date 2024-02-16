@@ -1042,6 +1042,34 @@ func (jem JEmail) GetPartBody(partIDToLookFor string) (string, *mlevelerrors.Met
 
 }
 
+// GetRawPart returns a raw part in response to a JMAP dowload uri request
+func (jem JEmail) GetRawPart(partIDToLookFor string) (bool, []byte, error) {
+	jPart, mErr := jem.JPart()
+	if mErr != nil {
+		return false, nil, mErr
+	}
+
+	if jPart.ID() == partIDToLookFor {
+		bytes, err := jPart.Raw()
+		return true, bytes, err
+	}
+
+	return getRawPartRecursive(partIDToLookFor, jPart.JParts)
+}
+
+func getRawPartRecursive(needle string, jparts []JPart) (bool, []byte, error) {
+	for _, jpart := range jparts {
+		if jpart.ID() == needle {
+			bytes, err := jpart.Raw()
+			return true, bytes, err
+		}
+		return getRawPartRecursive(needle, jpart.JParts)
+	}
+
+	return false, nil, nil
+
+}
+
 func searchPartRecursive(partID string, part message.Part, nextNum *int) (string, *mlevelerrors.MethodLevelError) {
 	//FIXME need an error to indicate the part was not found
 	if part.MediaType != "MULTIPART" {
@@ -1097,7 +1125,6 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 	}
 
 	for partId := range uniquePartsToGet {
-		fmt.Printf("bodyValues get partId %s\n", partId)
 		bodyVal, mErr := jem.GetPartBody(partId)
 		if mErr != nil {
 			return nil, mErr
@@ -1171,7 +1198,7 @@ func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attac
 		return nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
-	fmt.Printf("numTextParts %d, numHTMLParts %d, numAttachmentParts %d\n", len(textBodyParts), len(htmlBodyParts), len(attachmentParts))
+	//fmt.Printf("numTextParts %d, numHTMLParts %d, numAttachmentParts %d\n", len(textBodyParts), len(htmlBodyParts), len(attachmentParts))
 
 	for _, tPart := range textBodyParts {
 		textBody = append(textBody, tPart.EmailBodyPart(properties))
@@ -1321,7 +1348,10 @@ func (jem JEmail) Headers() ([]EmailHeader, *mlevelerrors.MethodLevelError) {
 		})
 	}
 	return result, nil
+}
 
+func (jem JEmail) Download(blobID, name, Type string) ([]byte, error) {
+	panic("not implemented")
 }
 
 // includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
@@ -1607,4 +1637,8 @@ func (jp JPart) Body() (string, *mlevelerrors.MethodLevelError) {
 		return "", mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 	return string(body), nil
+}
+
+func (jp JPart) Raw() ([]byte, error) {
+	panic("not implemented")
 }

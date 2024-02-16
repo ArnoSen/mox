@@ -2,7 +2,11 @@ package jaccount
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
@@ -48,4 +52,38 @@ func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevel
 		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 	return NewJEmail(em, part, ja.mlog), nil
+}
+
+var MalformedBlodID = fmt.Errorf("malformed blob id")
+
+// DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
+func (ja JAccount) DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error) {
+	msgID, partID, ok := strings.Cut(blobID, "-")
+	if !ok {
+		return false, nil, MalformedBlodID
+	}
+
+	msgIDint, err := strconv.ParseInt(msgID, 10, 64)
+	if err != nil {
+		return false, nil, MalformedBlodID
+	}
+
+	em := store.Message{
+		ID: int64(msgIDint),
+	}
+
+	if err := ja.mAccount.DB.Get(ctx, &em); err != nil {
+		if err == bstore.ErrAbsent {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+
+	jem, merr := ja.NewEmail(em)
+	if merr != nil {
+		ja.mlog.Error("error instantiating new JEmail", slog.Any("id", msgIDint), slog.Any("error", merr.Error()))
+		return false, nil, merr
+	}
+
+	return jem.GetRawPart(partID)
 }

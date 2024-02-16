@@ -1,15 +1,23 @@
 package httphandler
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/mjl-/mox/mlog"
+)
 
 type UploadHandler struct {
+	logger mlog.Log
 }
 
-func NewUploadHandler() UploadHandler {
-	return UploadHandler{}
+func NewUploadHandler(logger mlog.Log) UploadHandler {
+	return UploadHandler{
+		logger: logger,
+	}
 }
 
 func (uh UploadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	uh.logger.Debug("upload handler called")
 	AddCORSAllowedOriginHeader(w, r)
 }
 

@@ -12,7 +12,6 @@ import (
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
-	"golang.org/x/exp/slog"
 )
 
 const (
@@ -20,9 +19,11 @@ const (
 	corsAllowOriginHeader = "Access-Control-Allow-Origin"
 	defaultContextUserKey = "_user"
 
-	downloadPath    = "download/"
-	uploadPath      = "upload/"
-	eventsourcePath = "eventsource/"
+	sessionRoute     = "session"
+	apiRoute         = "api"
+	downloadRoute    = "download/"
+	uploadRoute      = "upload/"
+	eventsourceRoute = "eventsource/"
 
 	//used in download  and upload
 	UrlTemplateAccountID = "{accountId}"
@@ -57,6 +58,8 @@ type JMAPServerHandler struct {
 
 	contextUserKey string
 
+	sessionPath, apiPath, downloadPath, uploadPath, eventsourcePath string
+
 	sessionHandler, apiHandler, downloadHandler, uploadHandler, eventSourceHandler http.Handler
 }
 
@@ -87,9 +90,9 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 		sessionCapabilityInfo[capability.Urn()] = capability.SessionObjectInfo()
 	}
 
-	downloadPath := fmt.Sprintf("%s%s%s/%s/%s?type=%s", path, downloadPath, UrlTemplateAccountID, UrlTemplateBlodId, UrlTemplateName, UrlTemplateType)
-	uploadPath := fmt.Sprintf("%s%s%s", path, uploadPath, UrlTemplateAccountID)
-	eventSourcePath := fmt.Sprintf("%s%s?types=%s&closeafter=%s&ping=%s", path, eventsourcePath, UrlTemplateTypes, UrlTemplateClosedAfter, UrlTemplatePing)
+	downloadPath := fmt.Sprintf("%s%s%s/%s/%s?type=%s", path, downloadRoute, UrlTemplateAccountID, UrlTemplateBlodId, UrlTemplateName, UrlTemplateType)
+	uploadPath := fmt.Sprintf("%s%s%s", path, uploadRoute, UrlTemplateAccountID)
+	eventSourcePath := fmt.Sprintf("%s%s?types=%s&closeafter=%s&ping=%s", path, eventsourceRoute, UrlTemplateTypes, UrlTemplateClosedAfter, UrlTemplatePing)
 
 	result := JMAPServerHandler{
 		Hostname:          hostname,
@@ -112,9 +115,15 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 			logger,
 		),
 		apiHandler:         NewAPIHandler(capability, StubSessionStater{}, defaultContextUserKey, store.OpenAccount, logger),
-		downloadHandler:    NewDownloadHandler(downloadPath),
-		uploadHandler:      NewUploadHandler(),
-		eventSourceHandler: NewEventSourceHandler(),
+		downloadHandler:    NewDownloadHandler(store.OpenAccount, defaultContextUserKey, downloadPath, logger),
+		uploadHandler:      NewUploadHandler(logger),
+		eventSourceHandler: NewEventSourceHandler(logger),
+
+		sessionPath:     path + sessionRoute,
+		apiPath:         path + apiRoute,
+		downloadPath:    downloadPath,
+		uploadPath:      uploadPath,
+		eventsourcePath: eventSourcePath,
 	}
 
 	return result
@@ -221,10 +230,6 @@ func (cm CORSMiddleware) HandleMethodOptions(h http.HandlerFunc) http.HandlerFun
 
 func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
-	// ../../rfc/8620:679
-	sessionPath := jh.Path + "session"
-	apiPath := jh.Path + "api"
-
 	var getRejectUnsupportedMethodsHandler = func(acceptedMethods []string, nextHandler http.Handler) func(resp http.ResponseWriter, req *http.Request) {
 		return func(resp http.ResponseWriter, req *http.Request) {
 			var methodAccepted bool
@@ -248,27 +253,24 @@ func (jh JMAPServerHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	//create a new mux for routing in this path
 	mux := http.NewServeMux()
-	mux.HandleFunc(sessionPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+	mux.HandleFunc(jh.sessionPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
 		corsMR.HandleMethodOptions(
 			authMW.Authenticate(jh.sessionHandler))))
 
-	jh.Logger.Debug("register path", slog.Any("sessionPath", sessionPath))
-
-	mux.HandleFunc(apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
+	mux.HandleFunc(jh.apiPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
 		corsMR.HandleMethodOptions(
 			authMW.Authenticate(jh.apiHandler))))
 
-	mux.HandleFunc(jh.Path+downloadPath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+	mux.HandleFunc(jh.Path+downloadRoute, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
 		corsMR.HandleMethodOptions(
 			authMW.Authenticate(jh.downloadHandler))))
 
-	mux.HandleFunc(jh.Path+uploadPath, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
+	mux.HandleFunc(jh.Path+uploadRoute, getRejectUnsupportedMethodsHandler([]string{http.MethodPost, http.MethodOptions},
 		corsMR.HandleMethodOptions(
 			authMW.Authenticate(jh.uploadHandler))))
 
-	mux.HandleFunc(jh.Path+eventsourcePath, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
-		corsMR.HandleMethodOptions(
-			authMW.Authenticate(jh.eventSourceHandler))))
+	mux.HandleFunc(jh.Path+eventsourceRoute, getRejectUnsupportedMethodsHandler([]string{http.MethodGet, http.MethodOptions},
+		corsMR.HandleMethodOptions(jh.eventSourceHandler.ServeHTTP)))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		//if nothing matches, we exit here

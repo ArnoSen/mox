@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/mjl-/mox/jmapserver/user"
+	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"
@@ -86,7 +87,7 @@ type SessionHandler struct {
 
 // baseURL must have format scheme://host:port
 func NewSessionHandler(baseURL string, accountRepo AccountRepoer, capabilities map[string]interface{}, apiURL, downloadURL, uploadURL, eventSourceURL string, logger mlog.Log) SessionHandler {
-	return SessionHandler{
+	result := SessionHandler{
 		AccountRepo:    accountRepo,
 		Capabilities:   capabilities,
 		APIURL:         baseURL + apiURL,
@@ -100,6 +101,16 @@ func NewSessionHandler(baseURL string, accountRepo AccountRepoer, capabilities m
 		contextUserKey: defaultContextUserKey,
 		logger:         logger,
 	}
+
+	logger.Debug("session handler",
+		slog.Any("apiURL", result.APIURL),
+		slog.Any("downloadURL", result.DownloadURL),
+		slog.Any("uploadURL", result.UploadURL),
+		slog.Any("eventsourceURL", result.EventSourceURL),
+	)
+
+	return result
+
 }
 
 func (sh SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
