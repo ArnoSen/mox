@@ -69,7 +69,7 @@ func (ja JAccount) DownloadBlob(ctx context.Context, blobID, name, Type string) 
 	}
 
 	em := store.Message{
-		ID: int64(msgIDint),
+		ID: msgIDint,
 	}
 
 	if err := ja.mAccount.DB.Get(ctx, &em); err != nil {

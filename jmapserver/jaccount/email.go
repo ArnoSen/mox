@@ -252,34 +252,40 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
 
 	if filter != nil {
-		filterCondition, ok := filter.GetFilter().(basetypes.FilterCondition)
-		if !ok {
+		switch v := filter.GetFilter().(type) {
+		case basetypes.FilterCondition:
 			//let's do only simple filters for now
-			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("only filterconditions are supported for now")
-		}
 
-		switch filterCondition.Property {
-		case "inMailbox":
-			var mailboxIDint int64
-			switch filterCondition.AssertedValue.(type) {
-			case int:
-				mailboxIDint = int64(filterCondition.AssertedValue.(int))
-			case string:
-				var parseErr error
-				mailboxIDint, parseErr = strconv.ParseInt(filterCondition.AssertedValue.(string), 10, 64)
-				if parseErr != nil {
+			switch v.Property {
+			case "inMailbox":
+				var mailboxIDint int64
+				switch v.AssertedValue.(type) {
+				case int:
+					mailboxIDint = int64(v.AssertedValue.(int))
+				case string:
+					var parseErr error
+					mailboxIDint, parseErr = strconv.ParseInt(v.AssertedValue.(string), 10, 64)
+					if parseErr != nil {
+						return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
+					}
+				default:
 					return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
 				}
-			default:
-				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
-			}
 
-			q.FilterNonzero(store.Message{
-				MailboxID: int64(mailboxIDint),
-			})
+				q.FilterNonzero(store.Message{
+					MailboxID: int64(mailboxIDint),
+				})
+
+			default:
+				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+			}
+		case basetypes.FilterOperator:
+			//Need to support below filter because Mailtemi uses it
+			//{\"conditions\":[{\"inMailbox\":\"1\"},{\"inMailbox\":\"2\"},{\"inMailbox\":\"3\"},{\"inMailbox\":\"4\"},{\"inMailbox\":\"5\"},{\"inMailbox\":\"6\"}],\"operator\":\"OR\"}
+			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
 
 		default:
-			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("only filterconditions are supported for now")
 		}
 	}
 
@@ -1640,5 +1646,5 @@ func (jp JPart) Body() (string, *mlevelerrors.MethodLevelError) {
 }
 
 func (jp JPart) Raw() ([]byte, error) {
-	panic("not implemented")
+	return io.ReadAll(jp.p.Reader())
 }

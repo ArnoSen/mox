@@ -46,8 +46,9 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	AddCORSAllowedOriginHeader(w, r)
 
 	//we are authenticated but we need some checks
-	tmplType := r.URL.Query().Get("type")
-	if tmplType == "" {
+	contentType := r.URL.Query().Get("type")
+	if contentType == "" {
+		dh.logger.Error("content type empty")
 		sendUserErr(w, TypeCannotBeEmpty)
 		return
 	}
@@ -55,6 +56,7 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//FIXME this is hard coded now and if the format changes this should change as well
 	pathParts := strings.Split(r.URL.Path, "/")
 	if len(pathParts) != 5 {
+		dh.logger.Error("path must be 5 elements")
 		sendUserErr(w, NewInvalidDownloadURL(dh.pathFormat))
 		return
 	}
@@ -67,7 +69,7 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	blobID := pathParts[3]
 	name := pathParts[4]
 
-	dh.logger.Debug("parsing download url", slog.Any("blodId", blobID), slog.Any("name", name), slog.Any("type", tmplType))
+	dh.logger.Debug("parsing download url", slog.Any("blodId", blobID), slog.Any("name", name), slog.Any("type", contentType))
 
 	//pass in the jaccount
 	userIface := r.Context().Value(dh.contextUserKey)
@@ -93,7 +95,7 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
 
-	found, bytes, err := jaccount.NewJAccount(mAccount, mailboxRepo, dh.logger).DownloadBlob(blobID, name, tmplType)
+	found, bytes, err := jaccount.NewJAccount(mAccount, mailboxRepo, dh.logger).DownloadBlob(r.Context(), blobID, name, contentType)
 	if err != nil {
 		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 		w.WriteHeader(http.StatusInternalServerError)
@@ -105,6 +107,13 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set(HeaderContentType, contentType)
+	//FIXME uncomment below line when this part of the code is stable
+	//w.Header().Set("Cache-Control", "private, immutable, max-age=31536000")
+	if name != "null" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s`, name))
+	}
+	//FIXME need to make this streaming to prevent large memory allocations
 	w.Write(bytes)
 }
 

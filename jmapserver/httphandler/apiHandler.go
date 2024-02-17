@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	HeaderContentType         = "content-type"
+	HeaderContentType         = "Content-Type"
 	HeaderContentTypeJSON     = "application/json"
 	HeaderContentTypeJSONUTF8 = "application/json;charset=utf-8"
 )
@@ -146,11 +146,13 @@ type Response struct {
 }
 
 // getResultByRef resolves the ResultReference
-func (r Response) getResultByRef(resultRef *ResultReference, anchorName string, unmarshalAs any) *mlevelerrors.MethodLevelError {
+func (r Response) getResultByRef(logger mlog.Log, resultRef *ResultReference, anchorName string, unmarshalAs any) *mlevelerrors.MethodLevelError {
 	for _, resp := range r.MethodResponses {
 		if resp.MethodCallID == resultRef.ResultOf {
 			//need to check if the name of the method matches
 			if resp.Name != resultRef.Name {
+				//FIXME this will be triggered when in a chain of references an intermediate method fails
+				logger.Error("method name is not matching with method call id", slog.Any("resp.Name", resp.Name), slog.Any("resultRef.Name", resultRef.Name))
 				return mlevelerrors.NewMethodLevelErrorInvalidResultReference("method name is not matching with method call id")
 			}
 
@@ -536,7 +538,7 @@ loopUsing:
 
 			if requestArgs.AccountIdResultRef != nil {
 				var accId basetypes.Id
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#accountId", &accId)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.AccountIdResultRef, "#accountId", &accId)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -547,7 +549,7 @@ loopUsing:
 			if requestArgs.IdsResultRef != nil {
 				//so we now have the thing that we need to insert
 				var ids []basetypes.Id
-				mlErr := response.getResultByRef(requestArgs.IdsResultRef, "#ids", &ids)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.IdsResultRef, "#ids", &ids)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -557,7 +559,7 @@ loopUsing:
 
 			if requestArgs.PropertiesResultRef != nil {
 				var props []string
-				mlErr := response.getResultByRef(requestArgs.PropertiesResultRef, "#properties", &props)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.PropertiesResultRef, "#properties", &props)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -698,7 +700,7 @@ loopUsing:
 
 			if requestArgs.AccountIdResultRef != nil {
 				var accId basetypes.Id
-				mlErr := response.getResultByRef(requestArgs.AccountIdResultRef, "#accountId", &accId)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.AccountIdResultRef, "#accountId", &accId)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -709,7 +711,7 @@ loopUsing:
 			if requestArgs.SinceStateResultRef != nil {
 				//so we now have the thing that we need to insert
 				var sinceState string
-				mlErr := response.getResultByRef(requestArgs.SinceStateResultRef, "#sinceState", &sinceState)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.SinceStateResultRef, "#sinceState", &sinceState)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
@@ -719,7 +721,7 @@ loopUsing:
 
 			if requestArgs.MaxChangesResultRef != nil {
 				var maxChanges *basetypes.Uint
-				mlErr := response.getResultByRef(requestArgs.MaxChangesResultRef, "#maxChanges", &maxChanges)
+				mlErr := response.getResultByRef(ah.logger, requestArgs.MaxChangesResultRef, "#maxChanges", &maxChanges)
 				if mlErr != nil {
 					response.addMethodResponse(invocationResponse.withArgError(mlErr))
 					continue
