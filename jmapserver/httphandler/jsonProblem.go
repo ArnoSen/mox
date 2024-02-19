@@ -13,7 +13,7 @@ type JSONProblem struct {
 }
 
 func (jp JSONProblem) Error() string {
-	return fmt.Sprint("err %s%s", jp.Title, func(detail string) string {
+	return fmt.Sprintf("err %s%s", jp.Title, func(detail string) string {
 		if detail == "" {
 			return ""
 		}

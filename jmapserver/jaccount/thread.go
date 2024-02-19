@@ -10,11 +10,13 @@ import (
 	"golang.org/x/exp/slog"
 )
 
+// ../../rfc/8621:1142
 type Thread struct {
 	Id       basetypes.Id   `json:"id"`
 	EmailIds []basetypes.Id `json:"emailIds"`
 }
 
+// ../../rfc/8621:1183
 func (ja *JAccount) GetThread(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	for _, id := range ids {
 		idInt64, err := id.Int64()

@@ -169,7 +169,7 @@ Content-Transfer-Encoding: 7bit
 			}
 
 			eContentType := "text/plain; charset=UTF-8; format=flowed"
-			ctIface, mErr := jem.HeaderAs(mlog.New("test", slog.Default()), "Content-Type", "asText", false)
+			ctIface, mErr := jem.HeaderAs("Content-Type", "asText", false)
 			RequireNoError(t, mErr)
 			if ct, ok := ctIface.(string); !ok {
 				t.Logf("was expecting ctIface to be string but got %T", ctIface)
@@ -977,10 +977,28 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 			AssertEqualString(t, "text/plain", jPart.JParts[1].Type().String())
 			AssertEqualString(t, "inline", *(jPart.JParts[1].Disposition()))
 
+			//custom headers for this bodyProperty
+			bespokeProp := "header:Content-Type"
+			bodyPart := jPart.JParts[1].EmailBodyPart([]string{bespokeProp})
+			AssertEqualString(t, `text/plain; charset="us-ascii"`, bodyPart.BespokeProperties[bespokeProp].(string))
+
+			bodyPartBytes, err := json.Marshal(bodyPart)
+			RequireNoError(t, err)
+
+			var myMap map[string]interface{}
+
+			err = json.Unmarshal(bodyPartBytes, &myMap)
+			RequireNoError(t, err)
+
+			AssertEqualString(t, myMap[bespokeProp].(string), `text/plain; charset="us-ascii"`)
+
 			htmlBody, mErr := jem.HTMLBody(nil)
 			RequireNoError(t, mErr)
 
 			AssertEqualInt(t, 2, len(htmlBody))
 		})
 	})
+}
+
+func TestFilter(t *testing.T) {
 }

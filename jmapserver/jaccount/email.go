@@ -23,6 +23,7 @@ import (
 
 const previewNotAvailableText = "<preview not available>"
 
+// ../../rfc/8621:2527
 var validEmailFilters []string = []string{
 	"inMailbox", "inMailboxOtherThan", "before", "after", "minSize",
 	"maxSize", "allInThreadHaveKeyword", "someInThreadHaveKeyword", "noneInThreadHaveKeyword",
@@ -99,14 +100,18 @@ func (e Email) MarshalJSON() ([]byte, error) {
 	return json.Marshal(emailMapStringAny)
 }
 
+// ../../rfc/8621:1916
 type EmailBodyParts struct {
 	BodyStructure EmailBodyPart             `json:"bodyStructure"`
 	BodyValues    map[string]EmailBodyValue `json:"bodyValues"`
-	TextBody      []EmailBodyPart           `json:"textBody"`
-	HTMLBody      []EmailBodyPart           `json:"htmlBody"`
-	Attachments   []EmailBodyPart           `json:"attachments"`
-	HasAttachment bool                      `json:"hasAttachment"`
-	Preview       string                    `json:"preview"`
+	// ../../rfc/8621:1261
+	TextBody []EmailBodyPart `json:"textBody"`
+	HTMLBody []EmailBodyPart `json:"htmlBody"`
+
+	// ../../rfc/8621:1277
+	Attachments   []EmailBodyPart `json:"attachments"`
+	HasAttachment bool            `json:"hasAttachment"`
+	Preview       string          `json:"preview"`
 }
 
 type HeaderFieldsProperties struct {
@@ -132,6 +137,7 @@ type EmailBodyValue struct {
 	IsTruncated       bool   `json:"isTruncated"`
 }
 
+// ../../rfc/8621:1311
 type EmailMetadata struct {
 	Id         basetypes.Id          `json:"id"`
 	BlobId     basetypes.Id          `json:"blobId"`
@@ -245,31 +251,38 @@ func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
 	return json.Marshal(edpMapStringAny)
 }
 
+// ../../rfc/8621:2501
 func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Debug("JAccount QueryEmail", slog.Any("collapseThreads", collapseThreads))
 
 	q := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
 
+	parseMailboxID := func(mID any) (int64, *mlevelerrors.MethodLevelError) {
+		switch v := mID.(type) {
+		case string:
+			var parseErr error
+			mailboxIDint, parseErr := strconv.ParseInt(v, 10, 64)
+			if parseErr != nil {
+				return 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
+			}
+			return mailboxIDint, nil
+		default:
+			return 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
+		}
+	}
+
 	if filter != nil {
+		// ../../rfc/8621:2527
 		switch v := filter.GetFilter().(type) {
 		case basetypes.FilterCondition:
 			//let's do only simple filters for now
 
 			switch v.Property {
 			case "inMailbox":
-				var mailboxIDint int64
-				switch v.AssertedValue.(type) {
-				case int:
-					mailboxIDint = int64(v.AssertedValue.(int))
-				case string:
-					var parseErr error
-					mailboxIDint, parseErr = strconv.ParseInt(v.AssertedValue.(string), 10, 64)
-					if parseErr != nil {
-						return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
-					}
-				default:
-					return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("inMailbox filter value must be a (quoted) integer")
+				mailboxIDint, mErr := parseMailboxID(v.AssertedValue)
+				if mErr != nil {
+					return "", false, 0, nil, 0, mErr
 				}
 
 				q.FilterNonzero(store.Message{
@@ -280,9 +293,45 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
 			}
 		case basetypes.FilterOperator:
-			//Need to support below filter because Mailtemi uses it
-			//{\"conditions\":[{\"inMailbox\":\"1\"},{\"inMailbox\":\"2\"},{\"inMailbox\":\"3\"},{\"inMailbox\":\"4\"},{\"inMailbox\":\"5\"},{\"inMailbox\":\"6\"}],\"operator\":\"OR\"}
-			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+			//FIXME
+			//To advance with Mailtemi, the filter condition {\"conditions\":[{\"inMailbox\":\"1\"},{\"inMailbox\":\"2\"},{\"inMailbox\":\"3\"},{\"inMailbox\":\"4\"},{\"inMailbox\":\"5\"},{\"inMailbox\":\"6\"}],\"operator\":\"OR\"} is supported through various shortcuts. When there is another type of filter, this needs to be implemented
+
+			//check if this is a simpel filter that we can directly map to a bstore query
+			var (
+				hasSubFilterOperator bool
+				propertyMap          = map[string]interface{}{}
+				singleProp           string
+			)
+			for _, condition := range v.Conditions {
+				if c, ok := condition.(basetypes.FilterCondition); !ok {
+					hasSubFilterOperator = true
+					propertyMap[c.Property] = nil
+					singleProp = c.Property
+				}
+			}
+
+			if hasSubFilterOperator && len(propertyMap) != 1 {
+				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+			}
+
+			//so we have a simple filter
+			switch v.Operator {
+			case basetypes.FilterOperatorTypeOR:
+				switch singleProp {
+				case "inMailbox":
+					var values []int64
+					for _, cond := range v.Conditions {
+						mID, mErr := parseMailboxID(cond.(basetypes.FilterCondition).AssertedValue)
+						if mErr != nil {
+							return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+						}
+						values = append(values, mID)
+					}
+					q.FilterEqual(singleProp, values)
+				}
+			default:
+				return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("unsupported filter")
+			}
 
 		default:
 			return "", false, 0, nil, 0, mlevelerrors.NewMethodLevelErrorUnsupportedFilter("only filterconditions are supported for now")
@@ -291,6 +340,7 @@ func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, so
 
 	for _, s := range sort {
 		//FIXME we only support sorting at max one level
+		//../../rfc/8621:2708
 		switch s.Property {
 		case "receivedAt":
 			if s.IsAscending {
@@ -340,6 +390,7 @@ search:
 			}
 			total++
 		} else {
+			//../../rfc/8621:2785
 			msg, err := q.Next()
 			if err == bstore.ErrAbsent {
 				break search
@@ -367,6 +418,7 @@ search:
 	return "stubstate", false, position, ids, total, nil
 }
 
+// ../../rfc/8621:2309
 func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Debug("custom get params", slog.Any("bodyProperties", strings.Join(bodyProperties, ",")), slog.Any("FetchTextBodyValues", FetchTextBodyValues), slog.Any("FetchHTMLBodyValues", FetchHTMLBodyValues), slog.Any("FetchAllBodyValues", FetchAllBodyValues), slog.Any("MaxBodyValueBytes", MaxBodyValueBytes))
@@ -401,6 +453,7 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 
 		if len(properties) == 0 {
 			//no property list found so we return the default set as defined by the standard
+			//../../rfc8621:2359
 			properties = defaultEmailPropertyFields
 		}
 
@@ -529,9 +582,15 @@ func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties
 					resultElement.DynamicProperties = make(map[string]any, 1)
 				}
 
-				resultElement.DynamicProperties[prop], mErr = jem.HeaderAs(ja.mlog, headerName, headerFormat, returnAll)
+				headerInOrder, err := jem.part.HeaderInOrder()
+				if err != nil {
+					ja.mlog.Error("error getting headers", slog.Any("id", idInt64), slog.Any("error", err.Error()))
+					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				}
+
+				resultElement.DynamicProperties[prop], mErr = HeaderAs(headerInOrder, ja.mlog, headerName, headerFormat, returnAll)
 				if mErr != nil {
-					ja.mlog.Error("error getting bespoke header", slog.Any("id", idInt64), slog.Any("prop", prop), slog.Any("error", err.Error()))
+					ja.mlog.Error("error getting bespoke header", slog.Any("id", idInt64), slog.Any("prop", prop), slog.Any("error", mErr.Error()))
 					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 				}
 			}
@@ -687,6 +746,7 @@ func (jem JEmail) ReceivedAt() basetypes.UTCDate {
 	return basetypes.UTCDate(jem.em.Received)
 }
 
+// ../../rfc/8621:1351
 func (jem JEmail) Keywords() map[string]bool {
 	f := jem.em.Flags
 
@@ -725,9 +785,35 @@ func (jem JEmail) Keywords() map[string]bool {
 
 }
 
+func (jem JEmail) headerInOrder() (message.HeaderInOrder, *mlevelerrors.MethodLevelError) {
+	headers, err := jem.part.HeaderInOrder()
+	if err != nil {
+		jem.logger.Logger.Error("error getting headers of email", slog.Any("id", jem.Id()), slog.Any("err", err))
+		return nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return headers, nil
+
+}
+
+// ../../rfc/8621:1799
+func (jem JEmail) HeaderAs(headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
+	headersInOrder, mErr := jem.headerInOrder()
+	if mErr != nil {
+		return nil, mErr
+	}
+
+	return HeaderAs(headersInOrder, jem.logger, headerName, format, retAll)
+
+}
+
 // MessagedId returns the messageId property
+// ../../rfc/8621:1858
 func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
-	msgIDsIface, merr := jem.HeaderAs(jem.logger, "Message-ID", "asMessageIds", false)
+
+	msgIDsIface, merr := jem.HeaderAs("Message-ID", HeaderFormatMessageIds, false)
+	if merr != nil {
+		return nil, merr
+	}
 
 	if msgIDs, ok := msgIDsIface.([]string); ok {
 		return msgIDs, nil
@@ -737,8 +823,12 @@ func (jem JEmail) MessagedId() ([]string, *mlevelerrors.MethodLevelError) {
 }
 
 // InReplyTo returns inReplyTo
+// ../../rfc/8621:1864
 func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
-	msgIDsIface, merr := jem.HeaderAs(jem.logger, "In-Reply-To", "asMessageIds", false)
+	msgIDsIface, merr := jem.HeaderAs("In-Reply-To", HeaderFormatMessageIds, false)
+	if merr != nil {
+		return nil, merr
+	}
 	if msgIDs, ok := msgIDsIface.([]string); ok {
 		return msgIDs, nil
 	}
@@ -747,6 +837,7 @@ func (jem JEmail) InReplyTo() ([]string, *mlevelerrors.MethodLevelError) {
 }
 
 // Date returns date
+// ../../rfc/8621:1911
 func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
 	if env := jem.part.Envelope; env != nil {
 		result := basetypes.Date(env.Date)
@@ -756,6 +847,7 @@ func (jem JEmail) SendAt() (*basetypes.Date, *mlevelerrors.MethodLevelError) {
 }
 
 // Subject returns the subject property
+// ../../rfc/8621:1900
 func (jem JEmail) Subject() (*string, *mlevelerrors.MethodLevelError) {
 	if env := jem.part.Envelope; env != nil {
 		return &env.Subject, nil
@@ -764,6 +856,7 @@ func (jem JEmail) Subject() (*string, *mlevelerrors.MethodLevelError) {
 }
 
 // From returns from
+// ../../rfc/8621:1879
 func (jem JEmail) From() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 	var result []EmailAddress
 
@@ -777,6 +870,7 @@ func (jem JEmail) From() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // To returns to
+// ../../rfc/8621:1883
 func (jem JEmail) To() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 	var result []EmailAddress
 
@@ -810,6 +904,7 @@ func (jem JEmail) To() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // CC returns cc
+// ../../rfc/8621:1887
 func (jem JEmail) CC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 	var result []EmailAddress
 
@@ -823,6 +918,7 @@ func (jem JEmail) CC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // BCC returns bcc
+// ../../rfc/8621:1891
 func (jem JEmail) BCC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 	var result []EmailAddress
 
@@ -836,6 +932,7 @@ func (jem JEmail) BCC() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // Sender returns sender
+// ../../rfc/8621:1874
 func (jem JEmail) Sender() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 	var result []EmailAddress
@@ -850,6 +947,7 @@ func (jem JEmail) Sender() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // ReplyTo returns reply to addresses
+// ../../rfc/8621:1895
 func (jem JEmail) ReplyTo() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 
 	var result []EmailAddress
@@ -864,9 +962,10 @@ func (jem JEmail) ReplyTo() ([]EmailAddress, *mlevelerrors.MethodLevelError) {
 }
 
 // References return the RFC822 header with the same name
+// ../../rfc/8621:1869
 func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 
-	result, merr := jem.HeaderAs(jem.logger, "References", "asMessageIds", false)
+	result, merr := jem.HeaderAs("References", HeaderFormatMessageIds, false)
 	if merr != nil {
 		return nil, merr
 	}
@@ -880,13 +979,18 @@ func (jem JEmail) References() ([]string, *mlevelerrors.MethodLevelError) {
 
 }
 
-// HeaderAs returns a header in a specific format
-func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
-	orderedHeaders, err := jem.part.HeaderInOrder()
-	if err != nil {
-		jem.logger.Error("getting ordered headers failed", slog.Any("err", err.Error()))
-		return "", mlevelerrors.NewMethodLevelErrorServerFail()
-	}
+const (
+	HeaderFormatRaw            = "asRaw"
+	HeaderFormatText           = "asText"
+	HeaderFormatAddresses      = "asAddresses"
+	HeaderFormatGroupAddresses = "asGroupedAddresses"
+	HeaderFormatMessageIds     = "asMessageIds"
+	HeaderFormatDate           = "asDate"
+	HeaderFormatURLs           = "asURLs"
+)
+
+// HeaderAs returns a header in a specific format. This is used from JEmail as well as JPart
+func HeaderAs(orderedHeaders message.HeaderInOrder, mlog mlog.Log, headerName string, format string, retAll bool) (any, *mlevelerrors.MethodLevelError) {
 
 	//return nil if empty header
 	if retAll {
@@ -928,26 +1032,29 @@ func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retA
 	}
 
 	switch format {
-	case "asRaw":
+	case HeaderFormatRaw:
 		//The raw octets of the header field value from the first octet following the header field name terminating colon, up to but excluding the header field terminating CRLF. Any standards-compliant message MUST be either ASCII (RFC 5322) or UTF-8 (RFC 6532); however, other encodings exist in the wild. A server SHOULD replace any octet or octet run with the high bit set that violates UTF-8 syntax with the unicode replacement character (U+FFFD). Any NUL octet MUST be dropped.
 		//FIXME this header is already parsed . I need to find a solution for this
+		//../../rfc/8621:1435
 		if retAll {
 			return orderedHeaders.Values(headerName), nil
 		}
 		return orderedHeaders.Last(headerName), nil
-	case "asText":
+	case HeaderFormatText:
+		//../../rfc/8621:1463
 		if HasAnyCaseInsensitive([]string{"subject", "comments", "keywords", "list-id"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			if retAll {
 				return orderedHeaders.Values(headerName), nil
 			}
 			return orderedHeaders.Last(headerName), nil
 		}
-	case "asAddresses":
+	case HeaderFormatAddresses:
+		//../../rfc/8621:1501
 		if HasAnyCaseInsensitive([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", "resent-bcc"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			var result []EmailAddress
 
 			if !retAll {
-				for _, addr := range message.ParseAddressList(jem.logger, mail.Header(orderedHeaders.MIMEHeader()), headerName) {
+				for _, addr := range message.ParseAddressList(mlog, mail.Header(orderedHeaders.MIMEHeader()), headerName) {
 					result = append(result, msgAddressToEmailAddress(addr))
 				}
 			} else {
@@ -955,12 +1062,14 @@ func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retA
 			}
 			return result, nil
 		}
-	case "asGroupedAddresses":
+	case HeaderFormatGroupAddresses:
 		//same condidtions as asAddresses
 		if HasAnyCaseInsensitive([]string{"from", "sender", "reply-to", "to", "cc", "bcc", "resent-from", "resent-sender", "resent-reply-to", "resent-to", "resent-cc", " resent-bcc"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			//FIXME this is not supported (yet?) in mox
+			//../../rfc/8621:1605
 		}
-	case "asMessageIds":
+	case HeaderFormatMessageIds:
+		//../../rfc/8621:1691
 		//The header field is parsed as a list of msg-id values, as specified in [@!RFC5322], Section 3.6.4, into the String[] type. Comments and/or folding white space (CFWS) and surrounding angle brackets (<>) are removed. If parsing fails, the value is null.
 		if HasAnyCaseInsensitive([]string{"message-id", "in-reply-to", "references", "resent-message-id"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			submatches := regexp.MustCompile("<(\\S+)>").FindStringSubmatch(orderedHeaders.Last(headerName))
@@ -971,7 +1080,8 @@ func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retA
 
 			//FIXME: need to implement retAll
 		}
-	case "asDate":
+	case HeaderFormatDate:
+		//../../rfc/8621:1710
 		if HasAnyCaseInsensitive([]string{"date", "resent-date"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			if val := orderedHeaders.Last(headerName); val != "" {
 				d, err := mail.ParseDate(val)
@@ -981,7 +1091,8 @@ func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retA
 			}
 			//FIXME: need to implement retAll
 		}
-	case "asURLs":
+	case HeaderFormatURLs:
+		//../../rfc/8621:1743
 		if HasAnyCaseInsensitive([]string{"list-help", "list-unsubscribe", "list-post", "list-owner", "list-archive"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
 			var result []string
 			for _, headerVal := range orderedHeaders.Values(headerName) {
@@ -998,25 +1109,42 @@ func (jem JEmail) HeaderAs(mlog mlog.Log, headerName string, format string, retA
 	return nil, nil
 }
 
+// ../../rfc/8621:2135
 func (jem JEmail) Preview() (string, *mlevelerrors.MethodLevelError) {
-	//FIXME this needs to be more specific and take into account that we can have multipart also in the first subpart
-
-	partForPreview := jem.part
-	if len(jem.part.Parts) > 0 {
-		partForPreview = jem.part.Parts[0]
+	//FIXME decided if this should be a lower level API call
+	bvs, mErr := jem.BodyValues(true, false, false, nil)
+	if mErr != nil {
+		return "", mErr
 	}
 
-	//read the whole body and see what we got
-	fullBody, err := io.ReadAll(partForPreview.Reader())
-	if err != nil {
-		return "", mlevelerrors.NewMethodLevelErrorServerFail()
+	if len(bvs) == 0 {
+		//no text body availalbe
+		return "", nil
 	}
-	if len(fullBody) < 100 {
-		return string(fullBody), nil
+
+	var lowestKey string
+	for key := range bvs {
+
+		if lowestKey == "" {
+			lowestKey = key
+		} else {
+
+			if key < lowestKey {
+				lowestKey = key
+			}
+
+		}
 	}
-	return string(fullBody[:100]), nil
+
+	body := bvs[lowestKey].Value
+
+	if len(body) < 100 {
+		return body, nil
+	}
+	return string(body[:100]), nil
 }
 
+// ../../rfc/8621:2026
 func (jem JEmail) BodyStructure(bodyProperties []string) (EmailBodyPart, *mlevelerrors.MethodLevelError) {
 	jPart, mErr := jem.JPart()
 	if mErr != nil {
@@ -1097,6 +1225,7 @@ func searchPartRecursive(partID string, part message.Part, nextNum *int) (string
 	return "", nil
 }
 
+// ../../rfc/8621:2033
 func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllBodyValues bool, maxBodyValueBytes *basetypes.Uint) (map[string]EmailBodyValue, *mlevelerrors.MethodLevelError) {
 	//This is a map of partId to an EmailBodyValue object for none, some, or all text/* parts. Which parts are included and whether the value is truncated is determined by various arguments to Email/get and Email/parse.
 
@@ -1188,7 +1317,7 @@ func (jem JEmail) attachments(bodyProperties []string) ([]EmailBodyPart, *mlevel
 }
 
 // parseBodyParts is the implementation of the reference at https://jmap.io/spec-mail.html
-// AAA
+// ../../rfc/8621:2153
 func (jem JEmail) parseBodyParts(properties []string) (textBody, htmlBody, attachments []EmailBodyPart, mErr *mlevelerrors.MethodLevelError) {
 	jPart, jPartErr := jem.JPart()
 	if jPartErr != nil {
@@ -1321,6 +1450,7 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 	}
 }
 
+// ../../rfc/8621:2112
 func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
 	/*
 		This is true if there are one or more parts in the message that a client UI should offer as downloadable. A server SHOULD set hasAttachment to true if the attachments list contains at least one item that does not have Content-Disposition: inline. The server MAY ignore parts in this list that are processed automatically in some way or are referenced as embedded images in one of the text/html parts of the message.
@@ -1339,6 +1469,7 @@ func (jem JEmail) HasAttachment() (bool, *mlevelerrors.MethodLevelError) {
 	return false, nil
 }
 
+// ../../rfc/8621:1770
 func (jem JEmail) Headers() ([]EmailHeader, *mlevelerrors.MethodLevelError) {
 
 	headers, err := jem.part.HeaderInOrder()
@@ -1379,30 +1510,32 @@ type JPart struct {
 	msgID         int64
 	headerInOrder message.HeaderInOrder
 	JParts        []JPart
+
+	mlog mlog.Log
 }
 
 // JPart returns a JPart representation of a JEmail
 func (jem JEmail) JPart() (*JPart, *mlevelerrors.MethodLevelError) {
 	id := 0
-	result, mErr := newJPart(jem.part, jem.em.ID, &id)
+	result, mErr := newJPart(jem.part, jem.em.ID, &id, jem.logger)
 	if mErr != nil {
 		return nil, mErr
 	}
 
-	if mErr := partToJPartRecurse(result, jem.em.ID, &id); mErr != nil {
+	if mErr := partToJPartRecurse(result, jem.em.ID, &id, jem.logger); mErr != nil {
 		return nil, mErr
 	}
 	return result, nil
 }
 
-func partToJPartRecurse(p *JPart, messageID int64, id *int) *mlevelerrors.MethodLevelError {
+func partToJPartRecurse(p *JPart, messageID int64, id *int, mlog mlog.Log) *mlevelerrors.MethodLevelError {
 	for _, part := range p.p.Parts {
-		newJPart, mErr := newJPart(part, messageID, id)
+		newJPart, mErr := newJPart(part, messageID, id, mlog)
 		if mErr != nil {
 			return mErr
 		}
 
-		if mErr := partToJPartRecurse(newJPart, messageID, id); mErr != nil {
+		if mErr := partToJPartRecurse(newJPart, messageID, id, mlog); mErr != nil {
 			return mErr
 		}
 		p.JParts = append(p.JParts, *newJPart)
@@ -1410,10 +1543,11 @@ func partToJPartRecurse(p *JPart, messageID int64, id *int) *mlevelerrors.Method
 	return nil
 }
 
-func newJPart(p message.Part, messageID int64, nextID *int) (*JPart, *mlevelerrors.MethodLevelError) {
+func newJPart(p message.Part, messageID int64, nextID *int, mlog mlog.Log) (*JPart, *mlevelerrors.MethodLevelError) {
 	result := &JPart{
 		p:     p,
 		msgID: messageID,
+		mlog:  mlog,
 	}
 
 	headers, err := p.HeaderInOrder()
@@ -1423,6 +1557,7 @@ func newJPart(p message.Part, messageID int64, nextID *int) (*JPart, *mlevelerro
 	result.headerInOrder = headers
 
 	//this is weird: the constructor kind of depends on it self
+	//../../rfc/8621:1923
 	if t := result.Type(); t != nil && !t.IsMultipart() {
 		result.id = fmt.Sprintf("%d", *nextID)
 		//if used then increment
@@ -1432,18 +1567,24 @@ func newJPart(p message.Part, messageID int64, nextID *int) (*JPart, *mlevelerro
 	return result, nil
 }
 
+// ../../rfc/8621:1923
 func (jp JPart) ID() string {
+	//FIXME align this correctly with the spec. A null value should be returned if not set
 	return jp.id
 }
 
+// ../../rfc/8621:1930
 func (jp JPart) BlobID() basetypes.Id {
+	//FIXME align this correctly with the spec. This must return null when the partId is null
 	return basetypes.Id(fmt.Sprintf("%d-%s", jp.msgID, jp.id))
 }
 
+// ../../rfc/8621:1941
 func (jp JPart) Size() basetypes.Uint {
 	return basetypes.Uint(jp.p.BodyOffset - jp.p.HeaderOffset)
 }
 
+// ../../rfc/8621:1988
 func (jp JPart) Cid() *string {
 	if jp.p.ContentID == "" {
 		return nil
@@ -1454,6 +1595,7 @@ func (jp JPart) Cid() *string {
 	return &result
 }
 
+// ../../rfc/8621:1947
 func (jp JPart) Headers() []EmailHeader {
 	var result []EmailHeader
 	for _, h := range jp.headerInOrder {
@@ -1465,6 +1607,7 @@ func (jp JPart) Headers() []EmailHeader {
 	return result
 }
 
+// ../../rfc/8621:1982
 func (jp JPart) Disposition() *string {
 	if jp.headerInOrder != nil {
 		val := jp.headerInOrder.Last("Content-Disposition")
@@ -1479,6 +1622,7 @@ func (jp JPart) Disposition() *string {
 	return nil
 }
 
+// ../../rfc/8621:1952
 func (jp JPart) Name() *string {
 	if jp.headerInOrder != nil {
 		val := jp.headerInOrder.Last("Content-Disposition")
@@ -1554,6 +1698,7 @@ func (ct ContentType) String() string {
 	return string(ct)
 }
 
+// ../../rfc/8621:1967
 func (jp JPart) Type() *ContentType {
 	if jp.headerInOrder != nil {
 		if val := jp.headerInOrder.Last("Content-Type"); val != "" {
@@ -1567,6 +1712,7 @@ func (jp JPart) Type() *ContentType {
 	return nil
 }
 
+// ../../rfc/8621:1974
 func (jp JPart) Charset() *string {
 	if jp.headerInOrder != nil {
 		if val := jp.headerInOrder.Last("Content-Type"); val != "" {
@@ -1622,18 +1768,44 @@ func (jp JPart) EmailBodyPart(bodyProperties []string) EmailBodyPart {
 			Cid:         jp.Cid(),
 			Language:    jp.Language(),
 			Location:    jp.Location(),
-			//FIXE this is trouble some if you ask me when returning textBody/htmlBody/attachments
+			//FIXE this is troublesome if you ask me when returning textBody/htmlBody/attachments
 			SubParts: []EmailBodyPart{},
 		},
 		properties: bodyProperties,
 	}
 
 	if id := jp.ID(); id != "" {
+		//../../rfc/8621:1923
+		//../../rfc/8621:1930
+		//assign partId and blobId
 		ebd.PartId = &id
 
 		blobID := jp.BlobID()
 		ebd.BlobId = &blobID
 	}
+
+	//check andy custom properties
+	for _, bodyProp := range bodyProperties {
+		customPropName, headerName, ok := strings.Cut(bodyProp, ":")
+		if !ok {
+			continue
+		}
+		switch customPropName {
+		case "header":
+			//FIXME HeaderAs only returns an error when asDate is used as format. We can safely ignore the error here
+			//however code needs to be refactored to accomodate for this
+			result, _ := HeaderAs(jp.headerInOrder, jp.mlog, headerName, HeaderFormatRaw, false)
+
+			if ebd.BespokeProperties == nil {
+				ebd.BespokeProperties = make(BespokeProperties, 1)
+			}
+			ebd.BespokeProperties[bodyProp] = result
+
+		default:
+			continue
+		}
+	}
+
 	return ebd
 }
 

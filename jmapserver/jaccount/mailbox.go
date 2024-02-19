@@ -10,6 +10,7 @@ import (
 	"github.com/mjl-/mox/store"
 )
 
+// ../../rfc/8621:485
 type Mailbox struct {
 	Id            basetypes.Id   `json:"id"`
 	Name          string         `json:"name"`
@@ -24,6 +25,7 @@ type Mailbox struct {
 	IsSubscribed  bool           `json:"isSubscribed"`
 }
 
+// ../../rfc/8621:623
 type MailboxRights struct {
 	MayReadItems   bool `json:"mayReadItems"`
 	MayAddItems    bool `json:"mayAddItems"`

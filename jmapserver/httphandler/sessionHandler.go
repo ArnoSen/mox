@@ -98,8 +98,9 @@ func NewSessionHandler(baseURL string, accountRepo AccountRepoer, capabilities m
 			md5sum := md5.Sum(b)
 			return md5sum[:]
 		},
-		contextUserKey: defaultContextUserKey,
-		logger:         logger,
+		contextUserKey:     defaultContextUserKey,
+		logger:             logger,
+		CacheControlHeader: [2]string{"Cache-Control", "no-cache, no-store, must-revalidate"},
 	}
 
 	logger.Debug("session handler",

@@ -197,6 +197,7 @@ func (fo *Filter) UnmarshalJSON(b []byte) error {
 	}
 }
 
+// FilterOperator is a filter containing an operator and a set of conditions
 type FilterOperator struct {
 	Operator FilterOperatorType `json:"operator"`
 

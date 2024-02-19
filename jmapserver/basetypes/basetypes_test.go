@@ -17,7 +17,7 @@ func TestFilter(t *testing.T) {
 			EFilter  Filter
 		}{
 			{
-				Testcase: "simple assertion",
+				Testcase: "simple filter operator",
 				JSON:     `{ "operator": "NOT", "conditions": [ { "id_of_inbox":"abc"} ] }`,
 				EFilter: Filter{
 					filter: FilterOperator{
@@ -26,6 +26,30 @@ func TestFilter(t *testing.T) {
 							FilterCondition{
 								Property:      "id_of_inbox",
 								AssertedValue: "abc",
+							},
+						},
+					},
+				},
+			},
+			{
+				Testcase: "nested filter operator",
+				JSON:     `{ "operator": "NOT", "conditions": [ { "conditions": [{ "prop1": "value" }, { "prop2": "value2"}], "operator": "AND"}]}`,
+				EFilter: Filter{
+					filter: FilterOperator{
+						Operator: FilterOperatorTypeNOT,
+						Conditions: []interface{}{
+							FilterOperator{
+								Operator: FilterOperatorTypeAND,
+								Conditions: []interface{}{
+									FilterCondition{
+										Property:      "prop1",
+										AssertedValue: "value",
+									},
+									FilterCondition{
+										Property:      "prop2",
+										AssertedValue: "value2",
+									},
+								},
 							},
 						},
 					},
