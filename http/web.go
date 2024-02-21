@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	golog "log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -21,7 +22,6 @@ import (
 	_ "net/http/pprof"
 
 	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -636,8 +636,8 @@ func Listen() {
 				if dom == mox.Conf.Static.HostnameDomain || dom == mox.Conf.Static.Listeners["public"].HostnameDomain {
 					return true
 				}
-				_, ok := mox.Conf.Domain(dom)
-				return ok
+				dc, ok := mox.Conf.Domain(dom)
+				return ok && !dc.ReportsOnly
 			}
 			srv.Handle("autoconfig", autoconfigMatch, "/mail/config-v1.1.xml", safeHeaders(http.HandlerFunc(autoconfHandle)))
 			srv.Handle("autodiscover", autoconfigMatch, "/autodiscover/autodiscover.xml", safeHeaders(http.HandlerFunc(autodiscoverHandle)))
@@ -717,9 +717,8 @@ func Listen() {
 			for _, name := range mox.Conf.Domains() {
 				if dom, err := dns.ParseDomain(name); err != nil {
 					pkglog.Errorx("parsing domain from config", err)
-				} else if d, _ := mox.Conf.Domain(dom); d.DMARC != nil && d.DMARC.Domain != "" && d.DMARC.DNSDomain != dom {
-					// Do not gather autoconfig name if this domain is configured to process reports
-					// for domains hosted elsewhere.
+				} else if d, _ := mox.Conf.Domain(dom); d.ReportsOnly {
+					// Do not gather autoconfig name if we aren't accepting email for this domain.
 					continue
 				}
 

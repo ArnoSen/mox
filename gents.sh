@@ -1,5 +1,5 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 # generate new typescript client, only install it when it is different, so we
 # don't trigger frontend builds needlessly.

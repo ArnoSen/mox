@@ -9,15 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
-
-	"golang.org/x/exp/slices"
-	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/adns"
 
@@ -235,7 +234,7 @@ func (r ResultJSON) Convert() Result {
 type ResultPolicy struct {
 	Type   PolicyType
 	String []string
-	Domain string
+	Domain string // ASCII/A-labels, ../rfc/8460:704
 	MXHost []string
 }
 

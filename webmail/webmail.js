@@ -286,7 +286,7 @@ var api;
 		"Address": { "Name": "Address", "Docs": "", "Fields": [{ "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "User", "Docs": "", "Typewords": ["string"] }, { "Name": "Host", "Docs": "", "Typewords": ["string"] }] },
 		"MessageAddress": { "Name": "MessageAddress", "Docs": "", "Fields": [{ "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "User", "Docs": "", "Typewords": ["string"] }, { "Name": "Domain", "Docs": "", "Typewords": ["Domain"] }] },
 		"Domain": { "Name": "Domain", "Docs": "", "Fields": [{ "Name": "ASCII", "Docs": "", "Typewords": ["string"] }, { "Name": "Unicode", "Docs": "", "Typewords": ["string"] }] },
-		"SubmitMessage": { "Name": "SubmitMessage", "Docs": "", "Fields": [{ "Name": "From", "Docs": "", "Typewords": ["string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Cc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Bcc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "TextBody", "Docs": "", "Typewords": ["string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "File"] }, { "Name": "ForwardAttachments", "Docs": "", "Typewords": ["ForwardAttachments"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "ResponseMessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "UserAgent", "Docs": "", "Typewords": ["string"] }, { "Name": "RequireTLS", "Docs": "", "Typewords": ["nullable", "bool"] }] },
+		"SubmitMessage": { "Name": "SubmitMessage", "Docs": "", "Fields": [{ "Name": "From", "Docs": "", "Typewords": ["string"] }, { "Name": "To", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Cc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Bcc", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "Subject", "Docs": "", "Typewords": ["string"] }, { "Name": "TextBody", "Docs": "", "Typewords": ["string"] }, { "Name": "Attachments", "Docs": "", "Typewords": ["[]", "File"] }, { "Name": "ForwardAttachments", "Docs": "", "Typewords": ["ForwardAttachments"] }, { "Name": "IsForward", "Docs": "", "Typewords": ["bool"] }, { "Name": "ResponseMessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "ReplyTo", "Docs": "", "Typewords": ["string"] }, { "Name": "UserAgent", "Docs": "", "Typewords": ["string"] }, { "Name": "RequireTLS", "Docs": "", "Typewords": ["nullable", "bool"] }, { "Name": "FutureRelease", "Docs": "", "Typewords": ["nullable", "timestamp"] }] },
 		"File": { "Name": "File", "Docs": "", "Fields": [{ "Name": "Filename", "Docs": "", "Typewords": ["string"] }, { "Name": "DataURI", "Docs": "", "Typewords": ["string"] }] },
 		"ForwardAttachments": { "Name": "ForwardAttachments", "Docs": "", "Fields": [{ "Name": "MessageID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Paths", "Docs": "", "Typewords": ["[]", "[]", "int32"] }] },
 		"Mailbox": { "Name": "Mailbox", "Docs": "", "Fields": [{ "Name": "ID", "Docs": "", "Typewords": ["int64"] }, { "Name": "Name", "Docs": "", "Typewords": ["string"] }, { "Name": "UIDValidity", "Docs": "", "Typewords": ["uint32"] }, { "Name": "UIDNext", "Docs": "", "Typewords": ["UID"] }, { "Name": "Archive", "Docs": "", "Typewords": ["bool"] }, { "Name": "Draft", "Docs": "", "Typewords": ["bool"] }, { "Name": "Junk", "Docs": "", "Typewords": ["bool"] }, { "Name": "Sent", "Docs": "", "Typewords": ["bool"] }, { "Name": "Trash", "Docs": "", "Typewords": ["bool"] }, { "Name": "Keywords", "Docs": "", "Typewords": ["[]", "string"] }, { "Name": "HaveCounts", "Docs": "", "Typewords": ["bool"] }, { "Name": "Total", "Docs": "", "Typewords": ["int64"] }, { "Name": "Deleted", "Docs": "", "Typewords": ["int64"] }, { "Name": "Unread", "Docs": "", "Typewords": ["int64"] }, { "Name": "Unseen", "Docs": "", "Typewords": ["int64"] }, { "Name": "Size", "Docs": "", "Typewords": ["int64"] }] },
@@ -574,6 +574,14 @@ var api;
 			const paramTypes = [["string"]];
 			const returnTypes = [["RecipientSecurity"]];
 			const params = [messageAddressee];
+			return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params);
+		}
+		// DecodeMIMEWords decodes Q/B-encoded words for a mime headers into UTF-8 text.
+		async DecodeMIMEWords(text) {
+			const fn = "DecodeMIMEWords";
+			const paramTypes = [["string"]];
+			const returnTypes = [["string"]];
+			const params = [text];
 			return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params);
 		}
 		// SSETypes exists to ensure the generated API contains the types, for use in SSE events.
@@ -961,7 +969,7 @@ const join = (l, efn) => {
 // interpunction moved to the next string instead.
 const addLinks = (text) => {
 	// todo: look at ../rfc/3986 and fix up regexp. we should probably accept utf-8.
-	const re = RegExp('(http|https):\/\/([:%0-9a-zA-Z._~!$&\'/()*+,;=-]+@)?([\\[\\]0-9a-zA-Z.-]+)(:[0-9]+)?([:@%0-9a-zA-Z._~!$&\'/()*+,;=-]*)(\\?[:@%0-9a-zA-Z._~!$&\'/()*+,;=?-]*)?(#[:@%0-9a-zA-Z._~!$&\'/()*+,;=?-]*)?');
+	const re = RegExp('(?:(http|https):\/\/|mailto:)([:%0-9a-zA-Z._~!$&\'/()*+,;=-]+@)?([\\[\\]0-9a-zA-Z.-]+)(:[0-9]+)?([:@%0-9a-zA-Z._~!$&\'/()*+,;=-]*)(\\?[:@%0-9a-zA-Z._~!$&\'/()*+,;=?-]*)?(#[:@%0-9a-zA-Z._~!$&\'/()*+,;=?-]*)?');
 	const r = [];
 	while (text.length > 0) {
 		const l = re.exec(text);
@@ -985,7 +993,7 @@ const addLinks = (text) => {
 				url = url.substring(0, url.length - 1);
 			}
 		}
-		r.push(dom.a(url, attr.href(url), attr.target('_blank'), attr.rel('noopener noreferrer')));
+		r.push(dom.a(url, attr.href(url), url.startsWith('mailto:') ? [] : [attr.target('_blank'), attr.rel('noopener noreferrer')]));
 	}
 	return r;
 };
@@ -1020,33 +1028,29 @@ const displayName = (s) => {
 	}
 	return s;
 };
+const formatDomain = (dom) => dom.Unicode || dom.ASCII;
 // format an address with both name and email address.
 const formatAddress = (a) => {
-	let s = '<' + a.User + '@' + a.Domain.ASCII + '>';
+	let s = '<' + a.User + '@' + formatDomain(a.Domain) + '>';
 	if (a.Name) {
 		s = displayName(a.Name) + ' ' + s;
 	}
 	return s;
 };
-// returns an address with all available details, including unicode version if
-// available.
-const formatAddressFull = (a) => {
-	let s = '';
-	if (a.Name) {
-		s = a.Name + ' ';
+// Like formatAddress, but returns an element with a title (for hover) with the ASCII domain, in case of IDN.
+const formatAddressElem = (a) => {
+	if (!a.Domain.Unicode) {
+		return formatAddress(a);
 	}
-	s += '<' + a.User + '@' + a.Domain.ASCII + '>';
-	if (a.Domain.Unicode) {
-		s += ' (' + a.User + '@' + a.Domain.Unicode + ')';
-	}
-	return s;
+	return dom.span(a.Name ? [displayName(a.Name), ' '] : '', '<', a.User, '@', dom.span(attr.title(a.Domain.ASCII), formatDomain(a.Domain)), '>');
 };
-// like formatAddressFull, but underline domain with dmarc-like validation if appropriate.
-const formatAddressFullValidated = (a, m, use) => {
-	const domainText = (s) => {
+// like formatAddress, but underline domain with dmarc-like validation if appropriate.
+const formatAddressValidated = (a, m, use) => {
+	const domainText = (domstr, ascii) => {
 		if (!use) {
-			return s;
+			return domstr;
 		}
+		const extra = domstr === ascii ? '' : '; domain ' + ascii;
 		// We want to show how "approved" this message is given the message From's domain.
 		// We have MsgFromValidation available. It's not the greatest, being a mix of
 		// potential strict validations, actual DMARC policy validation, potential relaxed
@@ -1081,21 +1085,18 @@ const formatAddressFullValidated = (a, m, use) => {
 				break;
 			default:
 				// Also for zero value, when unknown. E.g. for sent messages added with IMAP.
-				return dom.span(attr.title('Unknown DMARC verification result.'), s);
+				title = 'Unknown DMARC verification result.';
+				return dom.span(attr.title(title + extra), domstr);
 		}
-		return dom.span(attr.title(title), style({ borderBottom: '1.5px solid ' + color, textDecoration: 'none' }), s);
+		return dom.span(attr.title(title + extra), style({ borderBottom: '1.5px solid ' + color, textDecoration: 'none' }), domstr);
 	};
 	let l = [];
 	if (a.Name) {
 		l.push(a.Name + ' ');
 	}
 	l.push('<' + a.User + '@');
-	l.push(domainText(a.Domain.ASCII));
+	l.push(domainText(formatDomain(a.Domain), a.Domain.ASCII));
 	l.push('>');
-	if (a.Domain.Unicode) {
-		// Not underlining because unicode domain may already cause underlining.
-		l.push(' (' + a.User + '@' + a.Domain.Unicode + ')');
-	}
 	return l;
 };
 // format just the name if present and it doesn't look like an address, or otherwise just the email address.
@@ -1104,21 +1105,19 @@ const formatAddressShort = (a) => {
 	if (n && !n.includes('<') && !n.includes('@') && !n.includes('>')) {
 		return n;
 	}
-	return '<' + a.User + '@' + a.Domain.ASCII + '>';
+	return '<' + a.User + '@' + formatDomain(a.Domain) + '>';
 };
 // return just the email address.
-const formatEmailASCII = (a) => {
-	return a.User + '@' + a.Domain.ASCII;
-};
+const formatEmail = (a) => a.User + '@' + formatDomain(a.Domain);
 const equalAddress = (a, b) => {
 	return (!a.User || !b.User || a.User === b.User) && a.Domain.ASCII === b.Domain.ASCII;
 };
 const addressList = (allAddrs, l) => {
 	if (l.length <= 5 || allAddrs) {
-		return dom.span(join(l.map(a => formatAddressFull(a)), () => ', '));
+		return dom.span(join(l.map(a => formatAddressElem(a)), () => ', '));
 	}
-	let elem = dom.span(join(l.slice(0, 4).map(a => formatAddressFull(a)), () => ', '), ' ', dom.clickbutton('More...', attr.title('More addresses:\n' + l.slice(4).map(a => formatAddressFull(a)).join(',\n')), function click() {
-		const nelem = dom.span(join(l.map(a => formatAddressFull(a)), () => ', '), ' ', dom.clickbutton('Less...', function click() {
+	let elem = dom.span(join(l.slice(0, 4).map(a => formatAddressElem(a)), () => ', '), ' ', dom.clickbutton('More...', attr.title('More addresses:\n' + l.slice(4).map(a => formatAddress(a)).join(',\n')), function click() {
+		const nelem = dom.span(join(l.map(a => formatAddressElem(a)), () => ', '), ' ', dom.clickbutton('Less...', function click() {
 			elem.replaceWith(addressList(allAddrs, l));
 		}));
 		elem.replaceWith(nelem);
@@ -1135,7 +1134,7 @@ const loadMsgheaderView = (msgheaderelem, mi, moreHeaders, refineKeyword, allAdd
 	const receivedlocal = new Date(received.getTime());
 	dom._kids(msgheaderelem, 
 	// todo: make addresses clickable, start search (keep current mailbox if any)
-	dom.tr(dom.td('From:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(style({ width: '100%' }), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(join((msgenv.From || []).map(a => formatAddressFullValidated(a, mi.Message, !!msgenv.From && msgenv.From.length === 1)), () => ', ')), dom.div(attr.title('Received: ' + received.toString() + ';\nDate header in message: ' + (msgenv.Date ? msgenv.Date.toString() : '(missing/invalid)')), receivedlocal.toDateString() + ' ' + receivedlocal.toTimeString().split(' ')[0])))), (msgenv.ReplyTo || []).length === 0 ? [] : dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.ReplyTo || []).map(a => formatAddressFull(a)), () => ', '))), dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.To || []))), (msgenv.CC || []).length === 0 ? [] : dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.CC || []))), (msgenv.BCC || []).length === 0 ? [] : dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.BCC || []))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(msgenv.Subject || ''), dom.div(mi.Message.IsForward ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Forwarded', attr.title('Message came in from a forwarded address. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.IsMailingList ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Mailing list', attr.title('Message was received from a mailing list. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.ReceivedTLSVersion === 1 ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #e15d1c' }), 'Without TLS', attr.title('Message received (last hop) without TLS.')) : [], mi.Message.ReceivedTLSVersion > 1 && !mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #50c40f' }), 'With TLS', attr.title('Message received (last hop) with TLS.')) : [], mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '.1em .3em', fontSize: '.9em', backgroundColor: '#d2f791', border: '1px solid #ccc', borderRadius: '3px' }), 'With RequireTLS', attr.title('Transported with RequireTLS, ensuring TLS along the entire delivery path from sender to recipient, with TLS certificate verification through MTA-STS and/or DANE.')) : [], mi.IsSigned ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message has a signature') : [], mi.IsEncrypted ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message is encrypted') : [], refineKeyword ? (mi.Message.Keywords || []).map(kw => dom.clickbutton(dom._class('keyword'), kw, async function click() {
+	dom.tr(dom.td('From:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(style({ width: '100%' }), dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(join((msgenv.From || []).map(a => formatAddressValidated(a, mi.Message, !!msgenv.From && msgenv.From.length === 1)), () => ', ')), dom.div(attr.title('Received: ' + received.toString() + ';\nDate header in message: ' + (msgenv.Date ? msgenv.Date.toString() : '(missing/invalid)')), receivedlocal.toDateString() + ' ' + receivedlocal.toTimeString().split(' ')[0])))), (msgenv.ReplyTo || []).length === 0 ? [] : dom.tr(dom.td('Reply-To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(join((msgenv.ReplyTo || []).map(a => formatAddressElem(a)), () => ', '))), dom.tr(dom.td('To:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.To || []))), (msgenv.CC || []).length === 0 ? [] : dom.tr(dom.td('Cc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.CC || []))), (msgenv.BCC || []).length === 0 ? [] : dom.tr(dom.td('Bcc:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(addressList(allAddrs, msgenv.BCC || []))), dom.tr(dom.td('Subject:', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td(dom.div(style({ display: 'flex', justifyContent: 'space-between' }), dom.div(msgenv.Subject || ''), dom.div(mi.Message.IsForward ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Forwarded', attr.title('Message came in from a forwarded address. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.IsMailingList ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em' }), 'Mailing list', attr.title('Message was received from a mailing list. Some message authentication policies, like DMARC, were not evaluated.')) : [], mi.Message.ReceivedTLSVersion === 1 ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #e15d1c' }), 'Without TLS', attr.title('Message received (last hop) without TLS.')) : [], mi.Message.ReceivedTLSVersion > 1 && !mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '0px 0.15em', fontSize: '.9em', borderBottom: '1.5px solid #50c40f' }), 'With TLS', attr.title('Message received (last hop) with TLS.')) : [], mi.Message.ReceivedRequireTLS ? dom.span(style({ padding: '.1em .3em', fontSize: '.9em', backgroundColor: '#d2f791', border: '1px solid #ccc', borderRadius: '3px' }), 'With RequireTLS', attr.title('Transported with RequireTLS, ensuring TLS along the entire delivery path from sender to recipient, with TLS certificate verification through MTA-STS and/or DANE.')) : [], mi.IsSigned ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message has a signature') : [], mi.IsEncrypted ? dom.span(style({ backgroundColor: '#666', padding: '0px 0.15em', fontSize: '.9em', color: 'white', borderRadius: '.15em' }), 'Message is encrypted') : [], refineKeyword ? (mi.Message.Keywords || []).map(kw => dom.clickbutton(dom._class('keyword'), kw, async function click() {
 		await refineKeyword(kw);
 	})) : [])))), moreHeaders.map(k => dom.tr(dom.td(k + ':', style({ textAlign: 'right', color: '#555', whiteSpace: 'nowrap' })), dom.td())));
 };
@@ -1884,10 +1883,15 @@ const focusPlaceholder = (s) => {
 		},
 	];
 };
-// Parse a location hash into search terms (if any), selected message id (if
-// any) and filters.
-// Optional message id at the end, with ",<num>".
-// Otherwise mailbox or 'search '-prefix search string: #Inbox or #Inbox,1 or "#search mb:Inbox" or "#search mb:Inbox,1"
+// Parse a location hash, with either mailbox or search terms, and optional
+// selected message id. The special "#compose " hash, used for handling
+// "mailto:"-links, must be handled before calling this function.
+//
+// Examples:
+// #Inbox
+// #Inbox,1
+// #search mb:Inbox
+// #search mb:Inbox,1
 const parseLocationHash = (mailboxlistView) => {
 	let hash = decodeURIComponent((window.location.hash || '#').substring(1));
 	const m = hash.match(/,([0-9]+)$/);
@@ -2153,7 +2157,32 @@ const cmdHelp = async () => {
 			settingsPut({ ...settings, showShortcuts: true });
 			remove();
 			cmdHelp();
-		})), dom.div(style({ marginTop: '2ex' }), 'Mox is open source email server software, this is version ' + moxversion + '. Feedback, including bug reports, is appreciated! ', link('https://github.com/mjl-/mox/issues/new'), '.'))));
+		})), dom.div(style({ marginTop: '2ex' }), 'To start composing a message when opening a "mailto:" link, register this application with your browser/system. ', dom.clickbutton('Register', attr.title('In most browsers, registering is only allowed on HTTPS URLs. Your browser may ask for confirmation. If nothing appears to happen, the registration may already have been present.'), function click() {
+		if (!window.navigator.registerProtocolHandler) {
+			window.alert('Registering a protocol handler ("mailto:") is not supported by your browser.');
+			return;
+		}
+		try {
+			window.navigator.registerProtocolHandler('mailto', '#compose %s');
+		}
+		catch (err) {
+			window.alert('Error registering "mailto:" protocol handler: ' + errmsg(err));
+		}
+	}), ' ', dom.clickbutton('Unregister', attr.title('Not all browsers implement unregistering via JavaScript.'), function click() {
+		// Not supported on firefox at the time of writing, and the signature is not in the types.
+		if (!window.navigator.unregisterProtocolHandler) {
+			window.alert('Unregistering a protocol handler ("mailto:") via JavaScript is not supported by your browser. See your browser settings to unregister.');
+			return;
+		}
+		try {
+			window.navigator.unregisterProtocolHandler('mailto', '#compose %s');
+		}
+		catch (err) {
+			window.alert('Error unregistering "mailto:" protocol handler: ' + errmsg(err));
+			return;
+		}
+		window.alert('"mailto:" protocol handler unregistered.');
+	})), dom.div(style({ marginTop: '2ex' }), 'Mox is open source email server software, this is version ' + moxversion + '. Feedback, including bug reports, is appreciated! ', link('https://github.com/mjl-/mox/issues/new'), '.'))));
 };
 // Show tooltips for either the focused element, or otherwise for all elements
 // that aren't reachable with tabindex and aren't marked specially to prevent
@@ -2258,6 +2287,7 @@ const compose = (opts) => {
 			IsForward: opts.isForward || false,
 			ResponseMessageID: opts.responseMessageID || 0,
 			RequireTLS: requiretls.value === '' ? null : requiretls.value === 'yes',
+			FutureRelease: scheduleTime.value ? new Date(scheduleTime.value) : null,
 		};
 		await client.MessageSubmit(message);
 		cmdCancel();
@@ -2470,7 +2500,7 @@ const compose = (opts) => {
 	let haveFrom = false;
 	const fromOptions = accountAddresses.map(a => {
 		const selected = opts.from && opts.from.length === 1 && equalAddress(a, opts.from[0]) || loginAddress && equalAddress(a, loginAddress) && (!opts.from || envelopeIdentity(opts.from));
-		const o = dom.option(formatAddressFull(a), selected ? attr.selected('') : []);
+		const o = dom.option(formatAddress(a), selected ? attr.selected('') : []);
 		if (selected) {
 			haveFrom = true;
 		}
@@ -2480,10 +2510,22 @@ const compose = (opts) => {
 		const a = addressSelf(opts.from[0]);
 		if (a) {
 			const fromAddr = { Name: a.Name, User: opts.from[0].User, Domain: a.Domain };
-			const o = dom.option(formatAddressFull(fromAddr), attr.selected(''));
+			const o = dom.option(formatAddress(fromAddr), attr.selected(''));
 			fromOptions.unshift(o);
 		}
 	}
+	let scheduleLink;
+	let scheduleElem;
+	let scheduleTime;
+	let scheduleWeekday;
+	const pad0 = (v) => v >= 10 ? '' + v : '0' + v;
+	const localdate = (d) => [d.getFullYear(), pad0(d.getMonth() + 1), pad0(d.getDate())].join('-');
+	const localdatetime = (d) => localdate(d) + 'T' + pad0(d.getHours()) + ':' + pad0(d.getMinutes()) + ':00';
+	const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+	const scheduleTimeChanged = () => {
+		console.log('datetime change', scheduleTime.value);
+		dom._kids(scheduleWeekday, weekdays[new Date(scheduleTime.value).getDay()]);
+	};
 	const composeElem = dom.div(style({
 		position: 'fixed',
 		bottom: '1ex',
@@ -2519,7 +2561,42 @@ const compose = (opts) => {
 		return v;
 	}), dom.label(style({ color: '#666' }), dom.input(attr.type('checkbox'), function change(e) {
 		forwardAttachmentViews.forEach(v => v.checkbox.checked = e.target.checked);
-	}), ' (Toggle all)')), noAttachmentsWarning = dom.div(style({ display: 'none', backgroundColor: '#fcd284', padding: '0.15em .25em', margin: '.5em 0' }), 'Message mentions attachments, but no files are attached.'), dom.label(style({ margin: '1ex 0', display: 'block' }), 'Attachments ', attachments = dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments(); })), dom.label(style({ margin: '1ex 0', display: 'block' }), attr.title('How to use TLS for message delivery over SMTP:\n\nDefault: Delivery attempts follow the policies published by the recipient domain: Verification with MTA-STS and/or DANE, or optional opportunistic unverified STARTTLS if the domain does not specify a policy.\n\nWith RequireTLS: For sensitive messages, you may want to require verified TLS. The recipient destination domain SMTP server must support the REQUIRETLS SMTP extension for delivery to succeed. It is automatically chosen when the destination domain mail servers of all recipients are known to support it.\n\nFallback to insecure: If delivery fails due to MTA-STS and/or DANE policies specified by the recipient domain, and the content is not sensitive, you may choose to ignore the recipient domain TLS policies so delivery can succeed.'), 'TLS ', requiretls = dom.select(dom.option(attr.value(''), 'Default'), dom.option(attr.value('yes'), 'With RequireTLS'), dom.option(attr.value('no'), 'Fallback to insecure'))), dom.div(style({ margin: '3ex 0 1ex 0', display: 'block' }), dom.submitbutton('Send'))), async function submit(e) {
+	}), ' (Toggle all)')), noAttachmentsWarning = dom.div(style({ display: 'none', backgroundColor: '#fcd284', padding: '0.15em .25em', margin: '.5em 0' }), 'Message mentions attachments, but no files are attached.'), dom.label(style({ margin: '1ex 0', display: 'block' }), 'Attachments ', attachments = dom.input(attr.type('file'), attr.multiple(''), function change() { checkAttachments(); })), dom.label(style({ margin: '1ex 0', display: 'block' }), attr.title('How to use TLS for message delivery over SMTP:\n\nDefault: Delivery attempts follow the policies published by the recipient domain: Verification with MTA-STS and/or DANE, or optional opportunistic unverified STARTTLS if the domain does not specify a policy.\n\nWith RequireTLS: For sensitive messages, you may want to require verified TLS. The recipient destination domain SMTP server must support the REQUIRETLS SMTP extension for delivery to succeed. It is automatically chosen when the destination domain mail servers of all recipients are known to support it.\n\nFallback to insecure: If delivery fails due to MTA-STS and/or DANE policies specified by the recipient domain, and the content is not sensitive, you may choose to ignore the recipient domain TLS policies so delivery can succeed.'), 'TLS ', requiretls = dom.select(dom.option(attr.value(''), 'Default'), dom.option(attr.value('yes'), 'With RequireTLS'), dom.option(attr.value('no'), 'Fallback to insecure'))), dom.div(scheduleLink = dom.a(attr.href(''), 'Schedule', function click(e) {
+		e.preventDefault();
+		scheduleTime.value = localdatetime(new Date());
+		scheduleTimeChanged();
+		scheduleLink.style.display = 'none';
+		scheduleElem.style.display = '';
+		scheduleTime.setAttribute('required', '');
+	}), scheduleElem = dom.div(style({ display: 'none' }), dom.clickbutton('Start of next day', function click(e) {
+		e.preventDefault();
+		const d = new Date(scheduleTime.value);
+		const nextday = new Date(d.getTime() + 24 * 3600 * 1000);
+		scheduleTime.value = localdate(nextday) + 'T09:00:00';
+		scheduleTimeChanged();
+	}), ' ', dom.clickbutton('+1 hour', function click(e) {
+		e.preventDefault();
+		const d = new Date(scheduleTime.value);
+		scheduleTime.value = localdatetime(new Date(d.getTime() + 3600 * 1000));
+		scheduleTimeChanged();
+	}), ' ', dom.clickbutton('+1 day', function click(e) {
+		e.preventDefault();
+		const d = new Date(scheduleTime.value);
+		scheduleTime.value = localdatetime(new Date(d.getTime() + 24 * 3600 * 1000));
+		scheduleTimeChanged();
+	}), ' ', dom.clickbutton('Now', function click(e) {
+		e.preventDefault();
+		scheduleTime.value = localdatetime(new Date());
+		scheduleTimeChanged();
+	}), ' ', dom.clickbutton('Cancel', function click(e) {
+		e.preventDefault();
+		scheduleLink.style.display = '';
+		scheduleElem.style.display = 'none';
+		scheduleTime.removeAttribute('required');
+		scheduleTime.value = '';
+	}), dom.div(style({ marginTop: '1ex' }), scheduleTime = dom.input(attr.type('datetime-local'), function change() {
+		scheduleTimeChanged();
+	}), ' in local timezone ' + (Intl.DateTimeFormat().resolvedOptions().timeZone || '') + ', ', scheduleWeekday = dom.span()))), dom.div(style({ margin: '3ex 0 1ex 0', display: 'block' }), dom.submitbutton('Send'))), async function submit(e) {
 		e.preventDefault();
 		shortcutCmd(cmdSend, shortcuts);
 	}));
@@ -2648,6 +2725,8 @@ const newMsgitemView = (mi, msglistView, otherMailbox, listMailboxes, receivedTi
 			if (t < 60) {
 				s = '<1min';
 				nextSecs = 60 - t;
+				// Prevent showing '-<1min' when browser and server have relatively small time drift of max 1 minute.
+				negative = '';
 			}
 			dom._kids(r, negative + s);
 			// note: Cannot have delays longer than 24.8 days due to storage as 32 bit in
@@ -2821,12 +2900,12 @@ const newMsgitemView = (mi, msglistView, otherMailbox, listMailboxes, receivedTi
 					ta.push(a);
 				}
 			}
-			let title = fa.map(a => formatAddressFull(a)).join(', ');
+			let title = fa.map(a => formatAddress(a)).join(', ');
 			if (ta.length > 0) {
 				if (title) {
 					title += ',\n';
 				}
-				title += 'addressed: ' + ta.map(a => formatAddressFull(a)).join(', ');
+				title += 'addressed: ' + ta.map(a => formatAddress(a)).join(', ');
 			}
 			return [
 				attr.title(title),
@@ -2964,8 +3043,7 @@ let attachmentView = null;
 const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoaded, refineKeyword, parsedMessageOpt) => {
 	const mi = miv.messageitem;
 	const m = mi.Message;
-	const formatEmailAddress = (a) => a.User + '@' + a.Domain.ASCII;
-	const fromAddress = mi.Envelope.From && mi.Envelope.From.length === 1 ? formatEmailAddress(mi.Envelope.From[0]) : '';
+	const fromAddress = mi.Envelope.From && mi.Envelope.From.length === 1 ? formatEmail(mi.Envelope.From[0]) : '';
 	// Some operations below, including those that can be reached through shortcuts,
 	// need a parsed message. So we keep a promise around for having that parsed
 	// message. Operations always await it. Once we have the parsed message, the await
@@ -3004,7 +3082,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 				let onWroteLine = '';
 				if (mi.Envelope.Date && mi.Envelope.From && mi.Envelope.From.length === 1) {
 					const from = mi.Envelope.From[0];
-					const name = from.Name || formatEmailAddress(from);
+					const name = from.Name || formatEmail(from);
 					const datetime = mi.Envelope.Date.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" }) + ' at ' + mi.Envelope.Date.toLocaleTimeString();
 					onWroteLine = 'On ' + datetime + ', ' + name + ' wrote:\n';
 				}
@@ -3157,7 +3235,7 @@ const newMsgView = (miv, msglistView, listMailboxes, possibleLabels, messageLoad
 	const trashMailboxID = listMailboxes().find(mb => mb.Trash)?.ID;
 	// Initially called with potentially null pm, once loaded called again with pm set.
 	const loadButtons = (pm) => {
-		dom._kids(msgbuttonElem, dom.div(dom._class('pad'), (!pm || !pm.ListReplyAddress) ? [] : dom.clickbutton('Reply to list', attr.title('Compose a reply to this mailing list.'), clickCmd(cmdReplyList, shortcuts)), ' ', (pm && pm.ListReplyAddress && formatEmailAddress(pm.ListReplyAddress) === fromAddress) ? [] : dom.clickbutton('Reply', attr.title('Compose a reply to the sender of this message.'), clickCmd(cmdReply, shortcuts)), ' ', (mi.Envelope.To || []).length <= 1 && (mi.Envelope.CC || []).length === 0 && (mi.Envelope.BCC || []).length === 0 ? [] :
+		dom._kids(msgbuttonElem, dom.div(dom._class('pad'), (!pm || !pm.ListReplyAddress) ? [] : dom.clickbutton('Reply to list', attr.title('Compose a reply to this mailing list.'), clickCmd(cmdReplyList, shortcuts)), ' ', (pm && pm.ListReplyAddress && formatEmail(pm.ListReplyAddress) === fromAddress) ? [] : dom.clickbutton('Reply', attr.title('Compose a reply to the sender of this message.'), clickCmd(cmdReply, shortcuts)), ' ', (mi.Envelope.To || []).length <= 1 && (mi.Envelope.CC || []).length === 0 && (mi.Envelope.BCC || []).length === 0 ? [] :
 			dom.clickbutton('Reply all', attr.title('Compose a reply to all participants of this message.'), clickCmd(cmdReplyAll, shortcuts)), ' ', dom.clickbutton('Forward', attr.title('Compose a forwarding message, optionally including attachments.'), clickCmd(cmdForward, shortcuts)), ' ', dom.clickbutton('Archive', attr.title('Move to the Archive mailbox.'), clickCmd(msglistView.cmdArchive, shortcuts)), ' ', m.MailboxID === trashMailboxID ?
 			dom.clickbutton('Delete', attr.title('Permanently delete message.'), clickCmd(msglistView.cmdDelete, shortcuts)) :
 			dom.clickbutton('Trash', attr.title('Move to the Trash mailbox.'), clickCmd(msglistView.cmdTrash, shortcuts)), ' ', dom.clickbutton('Junk', attr.title('Move to Junk mailbox, marking as junk and causing this message to be used in spam classification of new incoming messages.'), clickCmd(msglistView.cmdJunk, shortcuts)), ' ', dom.clickbutton('Move to...', function click(e) {
@@ -5407,6 +5485,35 @@ const newSearchView = (searchbarElem, mailboxlistView, startSearch, searchViewCl
 	};
 	return searchView;
 };
+// parse the "mailto:..." part (already decoded) of a "#compose mailto:..." url hash.
+const parseComposeMailto = (mailto) => {
+	const u = new URL(mailto);
+	const addresses = (s) => s.split(',').filter(s => !!s);
+	const opts = {};
+	opts.to = addresses(u.pathname).map(s => decodeURIComponent(s));
+	for (const [xk, v] of new URLSearchParams(u.search)) {
+		const k = xk.toLowerCase();
+		if (k === 'to') {
+			opts.to = [...opts.to, ...addresses(v)];
+		}
+		else if (k === 'cc') {
+			opts.cc = [...(opts.cc || []), ...addresses(v)];
+		}
+		else if (k === 'bcc') {
+			opts.bcc = [...(opts.bcc || []), ...addresses(v)];
+		}
+		else if (k === 'subject') {
+			// q/b-word encoding is allowed, we let the server decode when we start composoing,
+			// only if needed. ../rfc/6068:267
+			opts.subject = v;
+		}
+		else if (k === 'body') {
+			opts.body = v;
+		}
+		// todo: we ignore other headers for now. we should handle in-reply-to and references at some point. but we don't allow any custom headers at the time of writing.
+	}
+	return opts;
+};
 const init = async () => {
 	let connectionElem; // SSE connection status/error. Empty when connected.
 	let layoutElem; // Select dropdown for layout.
@@ -5433,7 +5540,7 @@ const init = async () => {
 	let requestMsgID = 0; // If > 0, we are still expecting a parsed message for the view, coming from the query. Either we get it and set msgitemViewActive and clear this, or we get to the end of the data and clear it.
 	const updatePageTitle = () => {
 		const mb = mailboxlistView && mailboxlistView.activeMailbox();
-		const addr = loginAddress ? loginAddress.User + '@' + (loginAddress.Domain.Unicode || loginAddress.Domain.ASCII) : '';
+		const addr = loginAddress ? loginAddress.User + '@' + formatDomain(loginAddress.Domain) : '';
 		if (!mb) {
 			document.title = [addr, 'Mox Webmail'].join(' - ');
 		}
@@ -5976,7 +6083,33 @@ const init = async () => {
 		}
 		checkMsglistWidth();
 	});
-	window.addEventListener('hashchange', async () => {
+	window.addEventListener('hashchange', async (e) => {
+		const hash = decodeURIComponent(window.location.hash);
+		if (hash.startsWith('#compose ')) {
+			try {
+				const opts = parseComposeMailto(hash.substring('#compose '.length));
+				// Restore previous hash.
+				if (e.oldURL) {
+					const ou = new URL(e.oldURL);
+					window.location.hash = ou.hash;
+				}
+				else {
+					window.location.hash = '';
+				}
+				(async () => {
+					// Resolve Q/B-word mime encoding for subject. ../rfc/6068:267 ../rfc/2047:180
+					if (opts.subject && opts.subject.includes('=?')) {
+						opts.subject = await withStatus('Decoding MIME words for subject', client.DecodeMIMEWords(opts.subject));
+					}
+					compose(opts);
+				})();
+			}
+			catch (err) {
+				window.alert('Error parsing compose mailto URL: ' + errmsg(err));
+				window.location.hash = '';
+			}
+			return;
+		}
 		const [search, msgid, f, notf] = parseLocationHash(mailboxlistView);
 		requestMsgID = msgid;
 		if (search) {
@@ -6027,6 +6160,9 @@ const init = async () => {
 		}));
 	};
 	const capitalizeFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+	// Set to compose options when we were opened with a mailto URL. We open the
+	// compose window after we received the "start" message with our addresses.
+	let openComposeOptions;
 	const connect = async (isreconnect) => {
 		connectionElem.classList.toggle('loading', true);
 		dom._kids(connectionElem);
@@ -6044,6 +6180,18 @@ const init = async () => {
 			dom._kids(statusElem, (capitalizeFirst(err.message || 'Error fetching connection token')) + ', not automatically retrying. ');
 			showNotConnected();
 			return;
+		}
+		const h = decodeURIComponent(window.location.hash);
+		if (h.startsWith('#compose ')) {
+			try {
+				// The compose window is opened when we get the "start" event, which gives us our
+				// configuration.
+				openComposeOptions = parseComposeMailto(h.substring('#compose '.length));
+			}
+			catch (err) {
+				window.alert('Error parsing mailto URL: ' + errmsg(err));
+			}
+			window.location.hash = '';
 		}
 		let [searchQuery, msgid, f, notf] = parseLocationHash(mailboxlistView);
 		requestMsgID = msgid;
@@ -6115,7 +6263,7 @@ const init = async () => {
 				window.clearTimeout(eventID);
 				eventID = 0;
 			}
-			document.title = ['(not connected)', loginAddress ? (loginAddress.User + '@' + (loginAddress.Domain.Unicode || loginAddress.Domain.ASCII)) : '', 'Mox Webmail'].filter(s => s).join(' - ');
+			document.title = ['(not connected)', loginAddress ? (loginAddress.User + '@' + formatDomain(loginAddress.Domain)) : '', 'Mox Webmail'].filter(s => s).join(' - ');
 			dom._kids(connectionElem);
 			if (noreconnect) {
 				dom._kids(statusElem, capitalizeFirst(errmsg) + ', not automatically retrying. ');
@@ -6160,14 +6308,14 @@ const init = async () => {
 			connecting = false;
 			sseID = start.SSEID;
 			loginAddress = start.LoginAddress;
-			dom._kids(loginAddressElem, loginAddress.User + '@' + (loginAddress.Domain.Unicode || loginAddress.Domain.ASCII));
-			const loginAddr = formatEmailASCII(loginAddress);
+			dom._kids(loginAddressElem, formatEmail(loginAddress));
+			const loginAddr = formatEmail(loginAddress);
 			accountAddresses = start.Addresses || [];
 			accountAddresses.sort((a, b) => {
-				if (formatEmailASCII(a) === loginAddr) {
+				if (formatEmail(a) === loginAddr) {
 					return -1;
 				}
-				if (formatEmailASCII(b) === loginAddr) {
+				if (formatEmail(b) === loginAddr) {
 					return 1;
 				}
 				if (a.Domain.ASCII !== b.Domain.ASCII) {
@@ -6178,6 +6326,17 @@ const init = async () => {
 			domainAddressConfigs = start.DomainAddressConfigs || {};
 			rejectsMailbox = start.RejectsMailbox;
 			clearList();
+			// If we were opened through a mailto: link, it's time to open the compose window.
+			if (openComposeOptions) {
+				(async () => {
+					// Resolve Q/B-word mime encoding for subject. ../rfc/6068:267 ../rfc/2047:180
+					if (openComposeOptions.subject && openComposeOptions.subject.includes('=?')) {
+						openComposeOptions.subject = await withStatus('Decoding MIME words for subject', client.DecodeMIMEWords(openComposeOptions.subject));
+					}
+					compose(openComposeOptions);
+					openComposeOptions = undefined;
+				})();
+			}
 			let mailboxName = start.MailboxName;
 			let mb = (start.Mailboxes || []).find(mb => mb.Name === start.MailboxName);
 			if (mb) {

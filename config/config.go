@@ -267,7 +267,7 @@ type TransportSocks struct {
 
 type Domain struct {
 	Description                string  `sconf:"optional" sconf-doc:"Free-form description of domain."`
-	ClientSettingsDomain       string  `sconf:"optional" sconf-doc:"Hostname for client settings instead of the mail server hostname. E.g. mail.<domain>. For future migration to another mail operator without requiring all clients to update their settings, it is convenient to have client settings that reference a subdomain of the hosted domain instead of the hostname of the server where the mail is currently hosted. If empty, the hostname of the mail server is used for client configurations."`
+	ClientSettingsDomain       string  `sconf:"optional" sconf-doc:"Hostname for client settings instead of the mail server hostname. E.g. mail.<domain>. For future migration to another mail operator without requiring all clients to update their settings, it is convenient to have client settings that reference a subdomain of the hosted domain instead of the hostname of the server where the mail is currently hosted. If empty, the hostname of the mail server is used for client configurations. Unicode name."`
 	LocalpartCatchallSeparator string  `sconf:"optional" sconf-doc:"If not empty, only the string before the separator is used to for email delivery decisions. For example, if set to \"+\", you+anything@example.com will be delivered to you@example.com."`
 	LocalpartCaseSensitive     bool    `sconf:"optional" sconf-doc:"If set, upper/lower case is relevant for email delivery."`
 	DKIM                       DKIM    `sconf:"optional" sconf-doc:"With DKIM signing, a domain is taking responsibility for (content of) emails it sends, letting receiving mail servers build up a (hopefully positive) reputation of the domain, which can help with mail delivery."`
@@ -278,6 +278,11 @@ type Domain struct {
 
 	Domain                  dns.Domain `sconf:"-" json:"-"`
 	ClientSettingsDNSDomain dns.Domain `sconf:"-" json:"-"`
+
+	// Set when DMARC and TLSRPT (when set) has an address with different domain (we're
+	// hosting the reporting), and there are no destination addresses configured for
+	// the domain. Disables some functionality related to hosting a domain.
+	ReportsOnly bool `sconf:"-" json:"-"`
 }
 
 type DMARC struct {
@@ -409,7 +414,7 @@ type Ruleset struct {
 	// todo: add a SMTPRcptTo check, and MessageFrom that works on a properly parsed From header.
 
 	// todo: once we implement ARC, we can use dkim domains that we cannot verify but that the arc-verified forwarding mail server was able to verify.
-	IsForward              bool   `sconf:"optional" sconf-doc:"Influences spam filtering only, this option does not change whether a message matches this ruleset. Can only be used together with SMTPMailFromRegexp and VerifiedDomain. SMTPMailFromRegexp must be set to the address used to deliver the forwarded message, e.g. '^user(|\\+.*)@forward\\.example$'. Changes to junk analysis: 1. Messages are not rejects for failing a DMARC policy, because a legitimate forwarded message without valid/intact/aligned DKIM signature would be rejected because any verified SPF domain will be 'unaligned', of the forwarding mail server. 2. The sending mail server IP address, and sending EHLO and MAIL FROM domains and matching DKIM domain aren't used in future reputation-based spam classifications (but other verified DKIM domains are) because the forwarding server is not a useful spam signal for future messages."`
+	IsForward              bool   `sconf:"optional" sconf-doc:"Influences spam filtering only, this option does not change whether a message matches this ruleset. Can only be used together with SMTPMailFromRegexp and VerifiedDomain. SMTPMailFromRegexp must be set to the address used to deliver the forwarded message, e.g. '^user(|\\+.*)@forward\\.example$'. Changes to junk analysis: 1. Messages are not rejected for failing a DMARC policy, because a legitimate forwarded message without valid/intact/aligned DKIM signature would be rejected because any verified SPF domain will be 'unaligned', of the forwarding mail server. 2. The sending mail server IP address, and sending EHLO and MAIL FROM domains and matching DKIM domain aren't used in future reputation-based spam classifications (but other verified DKIM domains are) because the forwarding server is not a useful spam signal for future messages."`
 	ListAllowDomain        string `sconf:"optional" sconf-doc:"Influences spam filtering only, this option does not change whether a message matches this ruleset. If this domain matches an SPF- and/or DKIM-verified (sub)domain, the message is accepted without further spam checks, such as a junk filter or DMARC reject evaluation. DMARC rejects should not apply for mailing lists that are not configured to rewrite the From-header of messages that don't have a passing DKIM signature of the From-domain. Otherwise, by rejecting messages, you may be automatically unsubscribed from the mailing list. The assumption is that mailing lists do their own spam filtering/moderation."`
 	AcceptRejectsToMailbox string `sconf:"optional" sconf-doc:"Influences spam filtering only, this option does not change whether a message matches this ruleset. If a message is classified as spam, it isn't rejected during the SMTP transaction (the normal behaviour), but accepted during the SMTP transaction and delivered to the specified mailbox. The specified mailbox is not automatically cleaned up like the account global Rejects mailbox, unless set to that Rejects mailbox."`
 

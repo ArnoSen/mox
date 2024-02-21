@@ -19,18 +19,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/textproto"
 	"net/url"
 	"os"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/exp/slices"
-	"golang.org/x/exp/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -441,11 +440,15 @@ func sendReportDomain(ctx context.Context, log mlog.Log, resolver dns.Resolver, 
 			if slices.Equal(rcptDomAddresses[tlsResult.RecipientDomain], recipientStrs) {
 				continue
 			}
+			rcptDom, err := dns.ParseDomain(tlsResult.RecipientDomain)
+			if err != nil {
+				return true, fmt.Errorf("parsing recipient domain %q from result: %v", tlsResult.RecipientDomain, err)
+			}
 			for j, r := range tlsResult.Results {
 				if tlsResult.IsHost {
 					tlsResults[i].Results[j].Policy.MXHost = []string{r.Policy.Domain}
 				}
-				tlsResults[i].Results[j].Policy.Domain = tlsResult.RecipientDomain
+				tlsResults[i].Results[j].Policy.Domain = rcptDom.ASCII
 			}
 		}
 
