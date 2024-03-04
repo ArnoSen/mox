@@ -4,12 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"log/slog"
+
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slog"
 )
 
 func TestGetMailboxes(t *testing.T) {

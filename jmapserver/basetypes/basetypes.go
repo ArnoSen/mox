@@ -302,3 +302,5 @@ type Comparator struct {
 	//The identifier, as registered in the collation registry defined in [RFC4790]
 	Collation string
 }
+
+type PatchObject map[string]interface{}

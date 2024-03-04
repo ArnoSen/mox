@@ -81,6 +81,15 @@ func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountI
 
 }
 
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
+func (m EmailDT) Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
+
+	_, newState, _, updated, _, _, _, _, _ = jaccount.SetEmail(ctx, ifInState, create, update, destroy)
+
+	retAccountId = accountId
+	return
+}
+
 type CustomGetRequestParams struct {
 	BodyProperties      []string        `json:"bodyProperties"`
 	FetchTextBodyValues bool            `json:"fetchTextBodyValues"`

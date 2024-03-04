@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"strings"
 
+	"log/slog"
+
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
-	"golang.org/x/exp/slog"
 )
 
 func NewInvalidDownloadURL(format string) JSONProblem {
@@ -54,20 +55,22 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//FIXME this is hard coded now and if the format changes this should change as well
+	dh.logger.Logger.Debug("url", slog.String("path", r.URL.Path))
 	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) != 5 {
+	if len(pathParts) != 6 {
+		//NB: the first element is an empty string because path starts with a '/'
 		dh.logger.Error("path must be 5 elements")
 		sendUserErr(w, NewInvalidDownloadURL(dh.pathFormat))
 		return
 	}
 
-	if pathParts[2] != "000" {
+	if pathParts[3] != "000" {
 		sendUserErr(w, UnknownAccount)
 		return
 	}
 
-	blobID := pathParts[3]
-	name := pathParts[4]
+	blobID := pathParts[4]
+	name := pathParts[5]
 
 	dh.logger.Debug("parsing download url", slog.Any("blodId", blobID), slog.Any("name", name), slog.Any("type", contentType))
 

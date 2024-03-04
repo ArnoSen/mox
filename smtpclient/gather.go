@@ -90,29 +90,32 @@ func GatherDestinations(ctx context.Context, elog *slog.Logger, resolver dns.Res
 		// know the final name, and we're interested in learning if the first vs later
 		// results were DNSSEC-(in)secure.
 		// ../rfc/5321:3838 ../rfc/3974:197
-		cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
-		defer ccancel()
-		cname, cnameResult, err := resolver.LookupCNAME(cctx, expandedNextHop.ASCII+".")
-		ccancel()
-		if i == 0 {
-			origNextHopAuthentic = origNextHopAuthentic && cnameResult.Authentic
-		}
-		expandedNextHopAuthentic = expandedNextHopAuthentic && cnameResult.Authentic
-		if err != nil && !dns.IsNotFound(err) {
-			err = fmt.Errorf("%w: cname lookup for %s: %v", errDNS, expandedNextHop, err)
-			return false, origNextHopAuthentic, expandedNextHopAuthentic, expandedNextHop, nil, false, err
-		}
-		if err == nil && cname != expandedNextHop.ASCII+"." {
-			d, err := dns.ParseDomain(strings.TrimSuffix(cname, "."))
-			if err != nil {
-				// todo: only mark as permanent failure if TTLs for all records are beyond latest possibly delivery retry we would do.
-				err = fmt.Errorf("%w: parsing cname domain %s: %v", errDNS, expandedNextHop, err)
-				return false, origNextHopAuthentic, expandedNextHopAuthentic, expandedNextHop, nil, false, err
-			}
-			expandedNextHop = d
-			// Start again with new domain.
-			continue
-		}
+		/*
+			AO: disable cname lookups because it breaks certain deliveries
+				cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
+				defer ccancel()
+				cname, cnameResult, err := resolver.LookupCNAME(cctx, expandedNextHop.ASCII+".")
+				ccancel()
+				if i == 0 {
+					origNextHopAuthentic = origNextHopAuthentic && cnameResult.Authentic
+				}
+				expandedNextHopAuthentic = expandedNextHopAuthentic && cnameResult.Authentic
+				if err != nil && !dns.IsNotFound(err) {
+					err = fmt.Errorf("%w: cname lookup for %s: %v", errDNS, expandedNextHop, err)
+					return false, origNextHopAuthentic, expandedNextHopAuthentic, expandedNextHop, nil, false, err
+				}
+				if err == nil && cname != expandedNextHop.ASCII+"." {
+					d, err := dns.ParseDomain(strings.TrimSuffix(cname, "."))
+					if err != nil {
+						// todo: only mark as permanent failure if TTLs for all records are beyond latest possibly delivery retry we would do.
+						err = fmt.Errorf("%w: parsing cname domain %s: %v", errDNS, expandedNextHop, err)
+						return false, origNextHopAuthentic, expandedNextHopAuthentic, expandedNextHop, nil, false, err
+					}
+					expandedNextHop = d
+					// Start again with new domain.
+					continue
+				}
+		*/
 
 		// Not a CNAME, so lookup MX record.
 		mctx, mcancel := context.WithTimeout(ctx, 30*time.Second)

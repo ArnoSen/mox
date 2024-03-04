@@ -13,8 +13,6 @@ type Datatyper interface {
 	Name() string
 }
 
-type PatchObject map[string]interface{}
-
 type AddedItem struct {
 	Id    basetypes.Id
 	Index basetypes.Uint
@@ -37,7 +35,7 @@ type Changeser interface {
 
 type Setter interface {
 	//https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
-	Set(ctx context.Context, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created, updated, destroyed map[basetypes.Id]interface{}, notCreated, notUpdated, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
+	Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created, updated, destroyed map[basetypes.Id]interface{}, notCreated, notUpdated, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
 }
 
 type Copier interface {

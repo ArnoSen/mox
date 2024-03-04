@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"log/slog"
+
 	"github.com/mjl-/mox/jmapserver/user"
-	"golang.org/x/exp/slog"
 
 	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/mlog"

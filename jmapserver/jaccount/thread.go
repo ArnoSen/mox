@@ -3,11 +3,12 @@ package jaccount
 import (
 	"context"
 
+	"log/slog"
+
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/store"
-	"golang.org/x/exp/slog"
 )
 
 // ../../rfc/8621:1142

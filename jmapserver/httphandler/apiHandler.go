@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
@@ -757,7 +757,7 @@ loopUsing:
 				AccountId basetypes.Id                             `json:"accountId"`
 				IfInState *string                                  `json:"ifInState"`
 				Create    map[basetypes.Id]interface{}             `json:"create"`
-				Update    map[basetypes.Id][]datatyper.PatchObject `json:"update"`
+				Update    map[basetypes.Id][]basetypes.PatchObject `json:"update"`
 				Destroy   []basetypes.Id                           `json:"destroy"`
 
 				AccountIdResultRef *ResultReference `json:"#accountId"`
@@ -784,7 +784,31 @@ loopUsing:
 				continue
 			}
 
-			retAccountId, oldState, newState, created, updated, destroyed, notCreated, notUpdated, notDestroyed, mErr := dtSet.Set(r.Context(), requestArgs.AccountId, requestArgs.IfInState, requestArgs.Create, requestArgs.Update, requestArgs.Destroy)
+			//pass in the jaccount
+			userIface := r.Context().Value(ah.contextUserKey)
+			if userIface == nil {
+				ah.logger.Debug("no user found in context")
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			userObj, ok := userIface.(user.User)
+			if !ok {
+				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
+			if err != nil {
+				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
+				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
+				continue
+			}
+
+			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
+
+			retAccountId, oldState, newState, created, updated, destroyed, notCreated, notUpdated, notDestroyed, mErr := dtSet.Set(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), requestArgs.AccountId, requestArgs.IfInState, requestArgs.Create, requestArgs.Update, requestArgs.Destroy)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue

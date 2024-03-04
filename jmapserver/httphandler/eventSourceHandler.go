@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 
+	"log/slog"
+
 	"github.com/mjl-/mox/mlog"
-	"golang.org/x/exp/slog"
 )
 
 type EventSourceHandler struct {

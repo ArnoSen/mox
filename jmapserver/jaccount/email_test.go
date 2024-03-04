@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/message"

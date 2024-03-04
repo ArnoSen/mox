@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
@@ -1819,4 +1819,14 @@ func (jp JPart) Body() (string, *mlevelerrors.MethodLevelError) {
 
 func (jp JPart) Raw() ([]byte, error) {
 	return io.ReadAll(jp.p.Reader())
+}
+
+func (ja *JAccount) SetEmail(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
+
+	ja.mlog.Error("SetEmail has not been implemented yet. we just pretend updating went fine")
+
+	for updatedId := range update {
+		updated[updatedId] = nil
+	}
+	return
 }
