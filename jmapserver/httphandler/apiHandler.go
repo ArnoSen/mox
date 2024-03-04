@@ -754,11 +754,11 @@ loopUsing:
 			}
 
 			type setRequest struct {
-				AccountId basetypes.Id                             `json:"accountId"`
-				IfInState *string                                  `json:"ifInState"`
-				Create    map[basetypes.Id]interface{}             `json:"create"`
-				Update    map[basetypes.Id][]basetypes.PatchObject `json:"update"`
-				Destroy   []basetypes.Id                           `json:"destroy"`
+				AccountId basetypes.Id                           `json:"accountId"`
+				IfInState *string                                `json:"ifInState"`
+				Create    map[basetypes.Id]interface{}           `json:"create"`
+				Update    map[basetypes.Id]basetypes.PatchObject `json:"update"`
+				Destroy   []basetypes.Id                         `json:"destroy"`
 
 				AccountIdResultRef *ResultReference `json:"#accountId"`
 				IfInStateResultRef *ResultReference `json:"#ifInState"`
@@ -774,6 +774,8 @@ loopUsing:
 					response.addMethodResponse(invocationResponse.withArgError(mle))
 					continue
 				}
+				ah.logger.Error("unmarshal error", slog.Any("method", "set"), slog.Any("err", err))
+
 				//FIXME handle datatype conversion errors properly
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
 				continue

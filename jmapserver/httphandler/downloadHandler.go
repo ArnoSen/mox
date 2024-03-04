@@ -117,7 +117,11 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s`, name))
 	}
 	//FIXME need to make this streaming to prevent large memory allocations
+
+	dh.logger.Info("writing bytes", slog.Any("size", len(bytes)))
 	w.Write(bytes)
+
+	dh.logger.Debug("download response", slog.Any("bytes", string(bytes)))
 }
 
 /*
