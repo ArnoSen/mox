@@ -7,6 +7,7 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
 
@@ -38,7 +39,21 @@ type MailboxRights struct {
 	MaySubmit      bool `json:"maySubmit"`
 }
 
-func (ja *JAccount) GetMailboxes(ctx context.Context, ids []basetypes.Id) (result []Mailbox, notFound []basetypes.Id, state string, mErr *mlevelerrors.MethodLevelError) {
+type AccountMailbox struct {
+	mAccount    *store.Account
+	mailboxRepo MailboxRepo
+	mlog        mlog.Log
+}
+
+func NewAccountMailbox(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *AccountMailbox {
+	return &AccountMailbox{
+		mAccount:    mAccount,
+		mailboxRepo: repo,
+		mlog:        mlog,
+	}
+}
+
+func (ja *AccountMailbox) Get(ctx context.Context, ids []basetypes.Id) (result []Mailbox, notFound []basetypes.Id, state string, mErr *mlevelerrors.MethodLevelError) {
 
 	//q := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB)
 

@@ -2,13 +2,7 @@ package jaccount
 
 import (
 	"context"
-	"fmt"
-	"strconv"
-	"strings"
 
-	"log/slog"
-
-	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
@@ -19,79 +13,69 @@ import (
 // Ideally this package should be removed over time and all logic should be moved to the mox core packages
 // that have knowlegde about what properties are stored in persistent storage and what properties are calculated
 type JAccounter interface {
-	//Mailbox
-	GetMailboxes(ctx context.Context, ids []basetypes.Id) ([]Mailbox, []basetypes.Id, string, *mlevelerrors.MethodLevelError)
-
-	//Email
-	GetEmail(ctx context.Context, ids []basetypes.Id, properties, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
-	QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError)
-	SetEmail(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
-
-	//Thread
-	GetThread(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
-
+	Mailbox() AccountMailboxer
+	Email() AccountEmailer
+	Thread() AccountThreader
 	Close() error
+}
+
+type AccountMailboxer interface {
+	Get(ctx context.Context, ids []basetypes.Id) ([]Mailbox, []basetypes.Id, string, *mlevelerrors.MethodLevelError)
+}
+
+type AccountEmailer interface {
+	Get(ctx context.Context, ids []basetypes.Id, properties, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
+	Query(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError)
+	Set(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
+	State(ctx context.Context) (string, *mlevelerrors.MethodLevelError)
+	DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error)
+}
+
+type AccountThreader interface {
+	Get(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
 }
 
 var _ JAccounter = &JAccount{}
 
 type JAccount struct {
-	mAccount    *store.Account
-	mailboxRepo MailboxRepo
-	mlog        mlog.Log
+	mAccount       *store.Account
+	mailboxRepo    MailboxRepo
+	mlog           mlog.Log
+	AccountEmail   AccountEmailer
+	AccountMailbox AccountMailboxer
+	AccountThread  AccountThreader
 }
 
 func NewJAccount(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *JAccount {
 	return &JAccount{
-		mAccount:    mAccount,
-		mailboxRepo: repo,
-		mlog:        mlog,
+		mAccount:       mAccount,
+		mailboxRepo:    repo,
+		mlog:           mlog,
+		AccountEmail:   NewAccountEmail(mAccount, mlog),
+		AccountMailbox: NewAccountMailbox(mAccount, repo, mlog),
+		AccountThread:  NewAccountThread(mAccount, mlog),
 	}
+}
+
+func (ja *JAccount) Email() AccountEmailer {
+	return ja.AccountEmail
+}
+
+func (ja *JAccount) Mailbox() AccountMailboxer {
+	return ja.AccountMailbox
+}
+
+func (ja *JAccount) Thread() AccountThreader {
+	return ja.AccountThread
 }
 
 func (ja JAccount) Close() error {
 	return ja.mAccount.Close()
 }
 
-func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
-	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
-	if err != nil {
-		ja.mlog.Error("error loading part", slog.Any("err", err.Error()))
-		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
-	}
-	return NewJEmail(em, part, ja.mlog), nil
-}
-
-var MalformedBlodID = fmt.Errorf("malformed blob id")
-
 // DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
 func (ja JAccount) DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error) {
-	msgID, partID, ok := strings.Cut(blobID, "-")
-	if !ok {
-		return false, nil, MalformedBlodID
-	}
-
-	msgIDint, err := strconv.ParseInt(msgID, 10, 64)
-	if err != nil {
-		return false, nil, MalformedBlodID
-	}
-
-	em := store.Message{
-		ID: msgIDint,
-	}
-
-	if err := ja.mAccount.DB.Get(ctx, &em); err != nil {
-		if err == bstore.ErrAbsent {
-			return false, nil, nil
-		}
-		return false, nil, err
-	}
-
-	jem, merr := ja.NewEmail(em)
-	if merr != nil {
-		ja.mlog.Error("error instantiating new JEmail", slog.Any("id", msgIDint), slog.Any("error", merr.Error()))
-		return false, nil, merr
-	}
-
-	return jem.GetRawPart(partID)
+	//TODO download is in the global namespace so we should determine here to what capability this request should go to
+	// for now only email is supported
+	return ja.Email().DownloadBlob(ctx, blobID, name, Type)
 }

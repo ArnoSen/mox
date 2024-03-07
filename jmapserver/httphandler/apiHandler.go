@@ -371,12 +371,6 @@ func (ah *APIHandler) WithOverrideJAccountFactory(f JAccountFactoryFunc) *APIHan
 	return ah
 }
 
-/*
-func (ah APIHandler) String() string {
-	return "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-}
-*/
-
 // ServeHTTP implements http.Handler
 func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
@@ -390,6 +384,7 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.ContentLength > int64(coreSettings.MaxSizeRequest) {
+		//../../rfc/8620:1099
 		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", coreSettings.MaxSizeRequest)), w, ah.logger)
 		return
 	}
@@ -414,10 +409,13 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeOutput(http.StatusInternalServerError, nil, w, ah.logger)
 			return
 		case *json.SyntaxError:
+			//../../rfc/8620:1091
 			//SyntaxError means the JSON is invalid
 			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotJSON(err.Error()), w, ah.logger)
 			return
 		case *json.UnmarshalTypeError:
+			//../../rfc/8620:1095
+			//SyntaxError means the JSON is invalid
 			writeOutput(http.StatusBadRequest, NewRequestLevelErrorNotRequest(fmt.Sprintf("error in %s", e.Field)), w, ah.logger)
 			return
 		default:
@@ -440,12 +438,13 @@ loopUsing:
 				continue loopUsing
 			}
 		}
+		//../../rfc/8620:1087
 		writeOutput(http.StatusBadRequest, NewRequestLevelErrorUnknownCapability(fmt.Sprintf("%s is not a known capability", capabilityURN)), w, ah.logger)
 		return
 	}
 
-	//getJAccount instantiates a JAccount
-	getJAccount := func() (*jaccount.JAccount, string, *mlevelerrors.MethodLevelError) {
+	//defaultJAccountFactory instantiates a JAccount
+	defaultJAccountFactory := func() (*jaccount.JAccount, string, *mlevelerrors.MethodLevelError) {
 		//pass in the jaccount
 		userIface := r.Context().Value(ah.contextUserKey)
 		if userIface == nil {
@@ -478,7 +477,7 @@ loopUsing:
 	//the echo method does not require this but instantiating this here makes closing the account way simpeler. Otherwise repititive blocks were needed
 	if ah.jaccountFactory == nil {
 		//bespoke factory is used for testing
-		jAccount, email, accountOpenErr = getJAccount()
+		jAccount, email, accountOpenErr = defaultJAccountFactory()
 		if accountOpenErr == nil {
 			defer jAccount.Close()
 		}
@@ -493,6 +492,7 @@ loopUsing:
 
 		var invocationResponse InvocationResponse = newInvocationResponse(invocation.MethodCallID)
 
+		//TODO there are more methods than these. Maybe methods should be registered?
 		methodCallRegexp := regexp.MustCompile("^[a-zA-Z]+/(echo|get|changes|set|copy|query|queryChanges)$")
 
 		if !methodCallRegexp.MatchString(invocation.Name) {

@@ -23,6 +23,8 @@ import (
 
 const previewNotAvailableText = "<preview not available>"
 
+var MalformedBlodID = fmt.Errorf("malformed blob id")
+
 // ../../rfc/8621:2527
 var validEmailFilters []string = []string{
 	"inMailbox", "inMailboxOtherThan", "before", "after", "minSize",
@@ -252,7 +254,7 @@ func (ebp EmailBodyPart) MarshalJSON() ([]byte, error) {
 }
 
 // ../../rfc/8621:2501
-func (ja *JAccount) QueryEmail(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
+func (ja *AccountEmail) Query(ctx context.Context, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit int, calculateTotal bool, collapseThreads bool) (queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Debug("JAccount QueryEmail", slog.Any("collapseThreads", collapseThreads))
 
@@ -418,8 +420,29 @@ search:
 	return "stubstate", false, position, ids, total, nil
 }
 
+type AccountEmail struct {
+	mAccount *store.Account
+	mlog     mlog.Log
+}
+
+func NewAccountEmail(mAccount *store.Account, mlog mlog.Log) *AccountEmail {
+	return &AccountEmail{
+		mAccount: mAccount,
+		mlog:     mlog,
+	}
+}
+
+func (ja AccountEmail) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
+	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
+	if err != nil {
+		ja.mlog.Error("error loading part", slog.Any("err", err.Error()))
+		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return NewJEmail(em, part, ja.mlog), nil
+}
+
 // ../../rfc/8621:2309
-func (ja *JAccount) GetEmail(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Debug("custom get params", slog.Any("bodyProperties", strings.Join(bodyProperties, ",")), slog.Any("FetchTextBodyValues", FetchTextBodyValues), slog.Any("FetchHTMLBodyValues", FetchHTMLBodyValues), slog.Any("FetchAllBodyValues", FetchAllBodyValues), slog.Any("MaxBodyValueBytes", MaxBodyValueBytes))
 
@@ -1821,7 +1844,7 @@ func (jp JPart) Raw() ([]byte, error) {
 	return io.ReadAll(jp.p.Reader())
 }
 
-func (ja *JAccount) SetEmail(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
+func (ja *AccountEmail) Set(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Error("SetEmail has not been implemented yet. we just pretend updating went fine")
 
@@ -1831,4 +1854,41 @@ func (ja *JAccount) SetEmail(ctx context.Context, ifInState *string, create map[
 		updated[updatedId] = nil
 	}
 	return
+}
+
+func (ja *AccountEmail) State(ctx context.Context) (string, *mlevelerrors.MethodLevelError) {
+	//need to get the repo in that contains this information
+	panic("not implemented")
+}
+
+// DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
+func (ja AccountEmail) DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error) {
+	msgID, partID, ok := strings.Cut(blobID, "-")
+	if !ok {
+		return false, nil, MalformedBlodID
+	}
+
+	msgIDint, err := strconv.ParseInt(msgID, 10, 64)
+	if err != nil {
+		return false, nil, MalformedBlodID
+	}
+
+	em := store.Message{
+		ID: msgIDint,
+	}
+
+	if err := ja.mAccount.DB.Get(ctx, &em); err != nil {
+		if err == bstore.ErrAbsent {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+
+	jem, merr := ja.NewEmail(em)
+	if merr != nil {
+		ja.mlog.Error("error instantiating new JEmail", slog.Any("id", msgIDint), slog.Any("error", merr.Error()))
+		return false, nil, merr
+	}
+
+	return jem.GetRawPart(partID)
 }

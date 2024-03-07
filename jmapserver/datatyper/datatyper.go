@@ -19,12 +19,12 @@ type AddedItem struct {
 }
 
 type Echoer interface {
-	Echo(ctx context.Context, content json.RawMessage) (resp map[string]interface{}, mErr *mlevelerrors.MethodLevelError)
+	Echo(ctx context.Context, content json.RawMessage) (resp map[string]any, mErr *mlevelerrors.MethodLevelError)
 }
 
 type Getter interface {
 	//https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
-	Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
+	Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []any, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
 	CustomGetRequestParams() any
 }
 
@@ -35,12 +35,12 @@ type Changeser interface {
 
 type Setter interface {
 	//https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
-	Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created, updated, destroyed map[basetypes.Id]interface{}, notCreated, notUpdated, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
+	Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]any, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created, updated, destroyed map[basetypes.Id]any, notCreated, notUpdated, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
 }
 
 type Copier interface {
 	//https://datatracker.ietf.org/doc/html/rfc8620#section-5.4
-	Copy(ctx context.Context, fromAccountId basetypes.Id, ifFromState *string, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, onSuccessDestroyOriginal bool, destroyFromIfInState *string) (retFromAccountId, retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
+	Copy(ctx context.Context, fromAccountId basetypes.Id, ifFromState *string, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, onSuccessDestroyOriginal bool, destroyFromIfInState *string) (retFromAccountId, retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]any, notCreated map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError)
 }
 
 type Querier interface {

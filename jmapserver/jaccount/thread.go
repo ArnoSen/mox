@@ -8,6 +8,7 @@ import (
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
 )
 
@@ -17,8 +18,20 @@ type Thread struct {
 	EmailIds []basetypes.Id `json:"emailIds"`
 }
 
+type AccountThread struct {
+	mAccount *store.Account
+	mlog     mlog.Log
+}
+
+func NewAccountThread(mAccount *store.Account, mlog mlog.Log) *AccountThread {
+	return &AccountThread{
+		mAccount: mAccount,
+		mlog:     mlog,
+	}
+}
+
 // ../../rfc/8621:1183
-func (ja *JAccount) GetThread(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (ja *AccountThread) Get(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	for _, id := range ids {
 		idInt64, err := id.Int64()
 		if err != nil {

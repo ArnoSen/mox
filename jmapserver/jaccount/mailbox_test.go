@@ -32,7 +32,7 @@ func TestGetMailboxes(t *testing.T) {
 
 		ja := NewJAccount(nil, mbr, mlog.New("test", slog.Default()))
 
-		result, _, _, mErr := ja.GetMailboxes(context.Background(), []basetypes.Id{"1", "2"})
+		result, _, _, mErr := ja.Mailbox().Get(context.Background(), []basetypes.Id{"1", "2"})
 		require.Nil(t, mErr)
 
 		assert.Equal(t, 2, len(result))

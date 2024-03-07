@@ -101,3 +101,11 @@ func NewMethodLevelErrorAnchorNotFound(msg string) *MethodLevelError {
 		Description: msg,
 	}
 }
+
+// Changes errors
+func NewMethodLevelErrorCannotCalculateChanges() *MethodLevelError {
+	return &MethodLevelError{
+		Type:        "cannotCalculateChanges",
+		Description: "cannot calculate changes",
+	}
+}

@@ -37,7 +37,7 @@ func (m EmailDT) Query(ctx context.Context, jaccount jaccount.JAccounter, accoun
 
 	cust := customParams.(*CustomQueryRequestParams)
 
-	state, canCalculateChanges, retPosition, ids, total, mErr := jaccount.QueryEmail(ctx, filter, sort, position, anchor, anchorOffset, adjustedLimit, calculateTotal, cust.CollapseThreads)
+	state, canCalculateChanges, retPosition, ids, total, mErr := jaccount.Email().Query(ctx, filter, sort, position, anchor, anchorOffset, adjustedLimit, calculateTotal, cust.CollapseThreads)
 
 	if ids == nil {
 		//send an empty array instead of a null value to not break the current way of resolving request references
@@ -61,7 +61,7 @@ func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountI
 	cust := customParams.(*CustomGetRequestParams)
 
 	//property filtering is done at the handler level. It is included here so we can check if some fields are needed in the result
-	state, result, notFound, mErr := jaccount.GetEmail(ctx, ids, properties, cust.BodyProperties, cust.FetchTextBodyValues, cust.FetchHTMLBodyValues, cust.FetchAllBodyValues, cust.MaxBodyValueBytes)
+	state, result, notFound, mErr := jaccount.Email().Get(ctx, ids, properties, cust.BodyProperties, cust.FetchTextBodyValues, cust.FetchHTMLBodyValues, cust.FetchAllBodyValues, cust.MaxBodyValueBytes)
 
 	for _, r := range result {
 		list = append(list, r)
@@ -84,7 +84,7 @@ func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountI
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
 func (m EmailDT) Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 
-	_, newState, _, updated, _, _, _, _, _ = jaccount.SetEmail(ctx, ifInState, create, update, destroy)
+	_, newState, _, updated, _, _, _, _, _ = jaccount.Email().Set(ctx, ifInState, create, update, destroy)
 
 	retAccountId = accountId
 	return
