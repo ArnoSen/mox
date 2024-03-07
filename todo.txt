@@ -1,2 +1,0 @@
-- fix CORS headers for all the other endpoint
-- find out why API is missing as endpoint
