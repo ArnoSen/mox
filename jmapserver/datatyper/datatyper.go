@@ -30,7 +30,7 @@ type Getter interface {
 
 type Changeser interface {
 	//https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
-	Changes(ctx context.Context, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
+	Changes(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
 }
 
 type Setter interface {

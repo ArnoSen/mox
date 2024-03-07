@@ -1,6 +1,7 @@
 package httphandler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -138,7 +139,7 @@ func (inv InvocationResponse) withArgOK(methodCall string, args map[string]inter
 	return inv
 }
 
-// Response is the top level reponse that is sent by the API handler
+// Response is the top level response that is sent by the API handler
 type Response struct {
 	MethodResponses []InvocationResponse `json:"methodResponses"`
 	CreatedIds      []basetypes.Id       `json:"createdIds,omitempty"`
@@ -333,27 +334,24 @@ type ResultReference struct {
 	Path string `json:"path"`
 }
 
-// FIXME this needs an implentation
+// SessionStater is implement by objects that can return the state of the session object
 type SessionStater interface {
-	SessionState() string
-}
-
-type StubSessionStater struct {
-}
-
-func (sss StubSessionStater) SessionState() string {
-	return "stubstate"
+	SessionState(ctx context.Context, email string) (string, error)
 }
 
 type AccountOpener func(log mlog.Log, name string) (*store.Account, error)
 
+// JAccountFactoryFunc allows injecting a factory for creating a MailboxRepo. This is used for testing
+type JAccountFactoryFunc func() (jaccount.JAccounter, string, *mlevelerrors.MethodLevelError)
+
 // APIHandler implements http.Handler
 type APIHandler struct {
-	Capabilities   capabilitier.Capabilitiers
-	SessionStater  SessionStater
-	AccountOpener  AccountOpener
-	contextUserKey string
-	logger         mlog.Log
+	Capabilities    capabilitier.Capabilitiers
+	SessionStater   SessionStater
+	AccountOpener   AccountOpener
+	contextUserKey  string
+	logger          mlog.Log
+	jaccountFactory JAccountFactoryFunc
 }
 
 func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger mlog.Log) *APIHandler {
@@ -366,6 +364,11 @@ func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater Session
 	}
 	//logger.Debug("test", slog.Any("a", (&spew.ConfigState{DisableMethods: true, DisablePointerMethods: true}).Sdump(result)))
 	return result
+}
+
+func (ah *APIHandler) WithOverrideJAccountFactory(f JAccountFactoryFunc) *APIHandler {
+	ah.jaccountFactory = f
+	return ah
 }
 
 /*
@@ -441,6 +444,48 @@ loopUsing:
 		return
 	}
 
+	//getJAccount instantiates a JAccount
+	getJAccount := func() (*jaccount.JAccount, string, *mlevelerrors.MethodLevelError) {
+		//pass in the jaccount
+		userIface := r.Context().Value(ah.contextUserKey)
+		if userIface == nil {
+			ah.logger.Debug("no user found in context")
+			return nil, "", mlevelerrors.NewMethodLevelErrorAccountForFound()
+		}
+
+		userObj, ok := userIface.(user.User)
+		if !ok {
+			ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
+			return nil, "", mlevelerrors.NewMethodLevelErrorAccountForFound()
+		}
+
+		mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
+		if err != nil {
+			ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
+			return nil, "", mlevelerrors.NewMethodLevelErrorAccountForFound()
+		}
+
+		mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
+		return jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), userObj.Email, nil
+	}
+
+	var (
+		jAccount       jaccount.JAccounter
+		email          string
+		accountOpenErr *mlevelerrors.MethodLevelError
+	)
+
+	//the echo method does not require this but instantiating this here makes closing the account way simpeler. Otherwise repititive blocks were needed
+	if ah.jaccountFactory == nil {
+		//bespoke factory is used for testing
+		jAccount, email, accountOpenErr = getJAccount()
+		if accountOpenErr == nil {
+			defer jAccount.Close()
+		}
+	} else {
+		jAccount, email, accountOpenErr = ah.jaccountFactory()
+	}
+
 	response := new(Response)
 
 	//all request level checks are done now so start with the processing of the invocations
@@ -452,6 +497,12 @@ loopUsing:
 
 		if !methodCallRegexp.MatchString(invocation.Name) {
 			response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
+			continue
+		}
+
+		if accountOpenErr != nil {
+			//if there is an issue with opening the account, all methods return the same error
+			response.addMethodResponse(invocationResponse.withArgError(accountOpenErr))
 			continue
 		}
 
@@ -577,28 +628,6 @@ loopUsing:
 				continue
 			}
 
-			//pass in the jaccount
-			userIface := r.Context().Value(ah.contextUserKey)
-			if userIface == nil {
-				ah.logger.Debug("no user found in context")
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			userObj, ok := userIface.(user.User)
-			if !ok {
-				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
-			if err != nil {
-				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
 			//unmarshal the bespoke parts
 			bespokeParams := dtGetter.CustomGetRequestParams()
 			if bespokeParams != nil {
@@ -618,10 +647,7 @@ loopUsing:
 				}
 			}
 
-			//AO: passing in a mailbox repo. Maybe this should be dependent on the object for which method this is called?
-			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
-			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), finalAccountId, dedupIDSlice(finalIds), finalProperties, bespokeParams)
-			mAccount.Close()
+			retAccountId, state, list, notFound, mErr := dtGetter.Get(r.Context(), jAccount, finalAccountId, dedupIDSlice(finalIds), finalProperties, bespokeParams)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -729,7 +755,7 @@ loopUsing:
 				finalMaxChanges = maxChanges
 			}
 
-			retAccountId, oldState, newState, hasMoreChanges, created, updated, destroyed, mErr := dtChanges.Changes(r.Context(), finalAccountId, finalSinceState, finalMaxChanges)
+			retAccountId, oldState, newState, hasMoreChanges, created, updated, destroyed, mErr := dtChanges.Changes(r.Context(), jAccount, finalAccountId, finalSinceState, finalMaxChanges)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -786,31 +812,7 @@ loopUsing:
 				continue
 			}
 
-			//pass in the jaccount
-			userIface := r.Context().Value(ah.contextUserKey)
-			if userIface == nil {
-				ah.logger.Debug("no user found in context")
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			userObj, ok := userIface.(user.User)
-			if !ok {
-				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
-			if err != nil {
-				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
-
-			retAccountId, oldState, newState, created, updated, destroyed, notCreated, notUpdated, notDestroyed, mErr := dtSet.Set(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), requestArgs.AccountId, requestArgs.IfInState, requestArgs.Create, requestArgs.Update, requestArgs.Destroy)
+			retAccountId, oldState, newState, created, updated, destroyed, notCreated, notUpdated, notDestroyed, mErr := dtSet.Set(r.Context(), jAccount, requestArgs.AccountId, requestArgs.IfInState, requestArgs.Create, requestArgs.Update, requestArgs.Destroy)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -924,30 +926,6 @@ loopUsing:
 				continue
 			}
 
-			//pass in the jaccount
-			userIface := r.Context().Value(ah.contextUserKey)
-			if userIface == nil {
-				ah.logger.Debug("no user found in context")
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			userObj, ok := userIface.(user.User)
-			if !ok {
-				ah.logger.Debug("user is not of type user.User", slog.Any("unexpectedtype", fmt.Sprintf("%T", userIface)))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-
-			mAccount, err := ah.AccountOpener(ah.logger, userObj.Name)
-			if err != nil {
-				ah.logger.Debug("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
-				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorAccountForFound()))
-				continue
-			}
-			//FIXME need to decide when/how to close accounts. Probably I should have some map with open accounts so multi queries run more efficient
-			defer mAccount.Close()
-
 			//unmarshal the bespoke parts
 			bespokeParams := dtQuery.CustomQueryRequestParams()
 			if bespokeParams != nil {
@@ -967,8 +945,7 @@ loopUsing:
 				}
 			}
 
-			mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
-			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal, bespokeParams)
+			retAccountId, queryState, canCalculateChanges, retPosition, ids, total, retLimit, mErr := dtQuery.Query(r.Context(), jAccount, requestArgs.AccountId, requestArgs.Filter, requestArgs.Sort, requestArgs.Position, requestArgs.Anchor, requestArgs.AnchorOffset, requestArgs.Limit, requestArgs.CalculateTotal, bespokeParams)
 			if mErr != nil {
 				response.addMethodResponse(invocationResponse.withArgError(mErr))
 				continue
@@ -1063,7 +1040,13 @@ loopUsing:
 		}
 	}
 
-	response.SessionState = ah.SessionStater.SessionState()
+	//FIXME need to check if I need a separate var for email or that i can use the name property of Account
+	if sessionState, err := ah.SessionStater.SessionState(r.Context(), email); err == nil {
+		response.SessionState = sessionState
+	} else {
+		ah.logger.Error("error getting state", slog.Any("err", err))
+		response.SessionState = "session_err_state"
+	}
 	writeOutput(200, response, w, ah.logger)
 }
 
@@ -1096,6 +1079,7 @@ func isContentTypeJSON(ct string) bool {
 	return false
 }
 
+// filterProperties removes any top level elements from list that are not in properties except for elements in alwaysInclude
 func filterProperties(list []any, properties []string, alwaysInclude []string) ([]any, error) {
 	if len(properties) == 0 {
 		//nothing to do
@@ -1140,10 +1124,10 @@ func filterProperties(list []any, properties []string, alwaysInclude []string) (
 		result = append(result, myMap)
 
 	}
-
 	return result, nil
 }
 
+// dedupIDSlice deduplicates a basetype.Id slice
 func dedupIDSlice(in []basetypes.Id) []basetypes.Id {
 	var result []basetypes.Id
 

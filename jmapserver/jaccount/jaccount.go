@@ -29,6 +29,8 @@ type JAccounter interface {
 
 	//Thread
 	GetThread(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
+
+	Close() error
 }
 
 var _ JAccounter = &JAccount{}
@@ -45,6 +47,10 @@ func NewJAccount(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *JAcc
 		mailboxRepo: repo,
 		mlog:        mlog,
 	}
+}
+
+func (ja JAccount) Close() error {
+	return ja.mAccount.Close()
 }
 
 func (ja JAccount) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {

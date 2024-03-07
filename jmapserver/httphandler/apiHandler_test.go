@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,7 +12,10 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
+	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/mox/store"
 )
 
 type SessionStateStub struct {
@@ -24,17 +28,20 @@ func NewSessionStateStub(stubState string) SessionStateStub {
 	}
 }
 
-func (sss SessionStateStub) SessionState() string {
-	return sss.stubstate
+func (sss SessionStateStub) SessionState(ctx context.Context, email string) (string, error) {
+	return sss.stubstate, nil
 }
 
 func TestAPIHandler(t *testing.T) {
+
 	t.Run("WrongContentType", func(t *testing.T) {
 
 		stubDataType := NewStubDatatype("Test")
 		stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
-		srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, core.NewCore(core.CoreCapabilitySettings{})}, NewSessionStateStub("abc"), "key", nil, mlog.New("test", nil)))
+		apiH := NewAPIHandler([]capabilitier.Capabilitier{stubCapability, core.NewCore(core.CoreCapabilitySettings{})}, NewSessionStateStub("abc"), "key", nil, mlog.New("test", nil))
+
+		srv := httptest.NewServer(apiH)
 
 		resp, err := srv.Client().Post(srv.URL, "text/html", nil)
 		if err != nil {
@@ -145,7 +152,9 @@ func TestAPIHandler(t *testing.T) {
 				MaxSizeRequest: 100,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ttt"), "key", nil, mlog.New("test", nil)))
+			apiH := NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ttt"), "key", nil, mlog.New("test", nil))
+
+			srv := httptest.NewServer(apiH)
 
 			b := strings.NewReader("{}")
 			resp, err := srv.Client().Post(srv.URL, "application/json", b)
@@ -248,8 +257,17 @@ func TestAPIHandler(t *testing.T) {
 		}
 	})
 
+	stubJaccounter := func() (jaccount.JAccounter, string, *mlevelerrors.MethodLevelError) {
+		return NewJAccountStub(), "email", nil
+	}
+
 	t.Run("GetMethod", func(t *testing.T) {
-		t.Run("EmtpyAccountID", func(t *testing.T) {
+
+		stubAccountOpener := func(log mlog.Log, name string) (*store.Account, error) {
+			return &store.Account{}, nil
+		}
+
+		t.Run("EmptyAccountID", func(t *testing.T) {
 			stubDataType := NewStubDatatype("Test")
 			stubCapability := NewStubCapacility("urn:test", nil, stubDataType)
 
@@ -258,7 +276,10 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test", nil)))
+			apiH := NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", stubAccountOpener, mlog.New("test", nil)).
+				WithOverrideJAccountFactory(stubJaccounter)
+
+			srv := httptest.NewServer(apiH)
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -298,7 +319,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("lll"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("lll"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": 123,"ids": ["id1", "id2"]}, "c1"] ]
@@ -337,7 +358,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zzz"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zzz"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
 				"methodCalls": [ ["Test/get", { "accountId": "abc", "#accountId":{ "resultOf":"c1", "name":"Test/get", "path":"/ids" }, "ids": ["id1", "id2"]}, "c1"] ]
@@ -377,7 +398,7 @@ func TestAPIHandler(t *testing.T) {
 					MaxObjectsInGet: 2,
 				})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("qqq"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("qqq"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -417,7 +438,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("hhh"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("hhh"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -457,7 +478,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ppp"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("ppp"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -497,7 +518,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 2,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("aaa"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("aaa"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{
 				"using": ["urn:test"],
@@ -537,7 +558,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInGet: 1,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("bbb"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 
@@ -579,7 +600,7 @@ func TestAPIHandler(t *testing.T) {
 				MaxObjectsInSet: 1,
 			})
 
-			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zyx"), "key", nil, mlog.New("test", nil)))
+			srv := httptest.NewServer(NewAPIHandler([]capabilitier.Capabilitier{stubCapability, coreCapability}, NewSessionStateStub("zyx"), "key", nil, mlog.New("test", nil)).WithOverrideJAccountFactory(stubJaccounter))
 
 			b := strings.NewReader(`{ 
 "using": ["urn:test"], 

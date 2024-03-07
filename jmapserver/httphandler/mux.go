@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"net/http"
 	"strings"
@@ -94,6 +95,21 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 	uploadPath := fmt.Sprintf("%s%s%s", path, uploadRoute, UrlTemplateAccountID)
 	eventSourcePath := fmt.Sprintf("%s%s?types=%s&closeafter=%s&ping=%s", path, eventsourceRoute, UrlTemplateTypes, UrlTemplateClosedAfter, UrlTemplatePing)
 
+	sessionApp := NewSessionApp(
+		fmt.Sprintf("https://%s:%d", hostname, port),
+		NewAccountRepo(),
+		sessionCapabilityInfo,
+		path+"api",
+		downloadPath,
+		uploadPath,
+		eventSourcePath,
+		func(b []byte) []byte {
+			md5sum := md5.Sum(b)
+			return md5sum[:]
+		},
+		logger,
+	)
+
 	result := JMAPServerHandler{
 		Hostname:          hostname,
 		Port:              port,
@@ -104,17 +120,8 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 		Logger:            logger,
 		contextUserKey:    defaultContextUserKey,
 		// ../../rfc/8620:679
-		sessionHandler: NewSessionHandler(
-			fmt.Sprintf("https://%s:%d", hostname, port),
-			NewAccountRepo(),
-			sessionCapabilityInfo,
-			path+"api",
-			downloadPath,
-			uploadPath,
-			eventSourcePath,
-			logger,
-		),
-		apiHandler:         NewAPIHandler(capability, StubSessionStater{}, defaultContextUserKey, store.OpenAccount, logger),
+		sessionHandler:     NewSessionHandler(sessionApp, defaultContextUserKey, logger),
+		apiHandler:         NewAPIHandler(capability, sessionApp, defaultContextUserKey, store.OpenAccount, logger),
 		downloadHandler:    NewDownloadHandler(store.OpenAccount, defaultContextUserKey, downloadPath, logger),
 		uploadHandler:      NewUploadHandler(logger),
 		eventSourceHandler: NewEventSourceHandler(logger),

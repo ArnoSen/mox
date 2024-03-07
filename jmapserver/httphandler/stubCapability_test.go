@@ -76,7 +76,7 @@ func (sdt StubDatatype) Get(ctx context.Context, jac jaccount.JAccounter, accoun
 	return
 }
 
-func (sdt StubDatatype) Set(ctx context.Context, jac jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id][]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created, updated, destroyed map[basetypes.Id]interface{}, notCreated, notUpdated, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
-	//just return empty values
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
+func (sdt StubDatatype) Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 	return
 }
