@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/mail"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -417,18 +418,69 @@ search:
 		}
 	}
 
-	return "stubstate", false, position, ids, total, nil
+	var highestModSeq int64
+
+	//we need the highest modseq of the ids as value for state of this query
+	for _, id := range ids {
+		idInt, err := id.Int64()
+		if err != nil {
+			//should not happen
+			continue
+		}
+		em := store.Message{
+			ID: idInt,
+		}
+
+		if err := ja.mAccount.DB.Get(ctx, &em); err == nil {
+			if highestModSeq == 0 || em.ModSeq.Client() > highestModSeq {
+				highestModSeq = em.ModSeq.Client()
+			}
+		}
+	}
+
+	return strconv.FormatInt(highestModSeq, 10), false, position, ids, total, nil
+}
+
+// StateRepoer is implemented by objects that return the email state
+type StateRepoer interface {
+	State(context.Context) (string, error)
+}
+
+func NewStateRepo(db *bstore.DB) StateRepo {
+	return StateRepo{
+		db: db,
+	}
+}
+
+type StateRepo struct {
+	db *bstore.DB
+}
+
+func (sr StateRepo) State(ctx context.Context) (string, error) {
+	ss := store.SyncState{
+		ID: 1,
+	}
+
+	if err := sr.db.Get(ctx, &ss); err != nil {
+		if err == bstore.ErrAbsent {
+			//Email modseqs start at 2 for first assignment so return 1 here is safe
+			return "1", nil
+		}
+	}
+	return strconv.FormatInt(ss.LastModSeq.Client(), 10), nil
 }
 
 type AccountEmail struct {
-	mAccount *store.Account
-	mlog     mlog.Log
+	mAccount  *store.Account
+	mlog      mlog.Log
+	stateRepo StateRepoer
 }
 
 func NewAccountEmail(mAccount *store.Account, mlog mlog.Log) *AccountEmail {
 	return &AccountEmail{
-		mAccount: mAccount,
-		mlog:     mlog,
+		mAccount:  mAccount,
+		mlog:      mlog,
+		stateRepo: NewStateRepo(mAccount.DB),
 	}
 }
 
@@ -442,7 +494,7 @@ func (ja AccountEmail) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodL
 }
 
 // ../../rfc/8621:2309
-func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (result []Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Debug("custom get params", slog.Any("bodyProperties", strings.Join(bodyProperties, ",")), slog.Any("FetchTextBodyValues", FetchTextBodyValues), slog.Any("FetchHTMLBodyValues", FetchHTMLBodyValues), slog.Any("FetchAllBodyValues", FetchAllBodyValues), slog.Any("MaxBodyValueBytes", MaxBodyValueBytes))
 
@@ -465,13 +517,13 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 				continue
 			}
 			ja.mlog.Error("error getting message from db", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		jem, merr := ja.NewEmail(em)
 		if merr != nil {
 			ja.mlog.Error("error instantiating new JEmail", slog.Any("id", idInt64), slog.Any("error", merr.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		if len(properties) == 0 {
@@ -503,73 +555,73 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 		resultElement.MessageId, mErr = jem.MessagedId()
 		if mErr != nil {
 			ja.mlog.Error("error getting messageId", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.SentAt, mErr = jem.SendAt()
 		if mErr != nil {
 			ja.mlog.Error("error getting date", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.Subject, mErr = jem.Subject()
 		if mErr != nil {
 			ja.mlog.Error("error getting subject", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.From, mErr = jem.From()
 		if mErr != nil {
 			ja.mlog.Error("error getting from", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.To, mErr = jem.To()
 		if mErr != nil {
 			ja.mlog.Error("error getting to", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.CC, mErr = jem.CC()
 		if mErr != nil {
 			ja.mlog.Error("error getting cc", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.BCC, mErr = jem.BCC()
 		if mErr != nil {
 			ja.mlog.Error("error getting bcc", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.Sender, mErr = jem.Sender()
 		if mErr != nil {
 			ja.mlog.Error("error getting sender", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.ReplyTo, mErr = jem.ReplyTo()
 		if mErr != nil {
 			ja.mlog.Error("error getting replyTo", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.InReplyTo, mErr = jem.InReplyTo()
 		if mErr != nil {
 			ja.mlog.Error("error getting inReplyTo", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.Preview, mErr = jem.Preview()
 		if mErr != nil {
 			ja.mlog.Error("error getting preview", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		resultElement.References, mErr = jem.References()
 		if mErr != nil {
 			ja.mlog.Error("error getting references", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-			return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		for _, prop := range properties {
@@ -608,13 +660,13 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 				headerInOrder, err := jem.part.HeaderInOrder()
 				if err != nil {
 					ja.mlog.Error("error getting headers", slog.Any("id", idInt64), slog.Any("error", err.Error()))
-					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+					return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 				}
 
 				resultElement.DynamicProperties[prop], mErr = HeaderAs(headerInOrder, ja.mlog, headerName, headerFormat, returnAll)
 				if mErr != nil {
 					ja.mlog.Error("error getting bespoke header", slog.Any("id", idInt64), slog.Any("prop", prop), slog.Any("error", mErr.Error()))
-					return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+					return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 				}
 			}
 		}
@@ -624,7 +676,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			bs, mErr := jem.BodyStructure(bodyProperties)
 			if mErr != nil {
 				ja.mlog.Error("error getting body structure", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 
 			}
 			resultElement.BodyStructure = bs
@@ -634,7 +686,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			bvs, mErr := jem.BodyValues(FetchTextBodyValues, FetchHTMLBodyValues, FetchAllBodyValues, MaxBodyValueBytes)
 			if mErr != nil {
 				ja.mlog.Error("error getting body values", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.BodyValues = bvs
 		}
@@ -643,7 +695,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			textBody, mErr := jem.HTMLBody(bodyProperties)
 			if mErr != nil {
 				ja.mlog.Error("error getting textBody", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.TextBody = textBody
 		}
@@ -652,7 +704,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			htmlBody, mErr := jem.HTMLBody(bodyProperties)
 			if mErr != nil {
 				ja.mlog.Error("error getting htmlBody", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.HTMLBody = htmlBody
 		}
@@ -661,7 +713,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			attachments, mErr := jem.Attachments(bodyProperties)
 			if mErr != nil {
 				ja.mlog.Error("error getting attachments", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.Attachments = attachments
 		}
@@ -670,7 +722,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			hasAttachment, mErr := jem.HasAttachment()
 			if mErr != nil {
 				ja.mlog.Error("error getting hasAttachment", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.HasAttachment = hasAttachment
 		}
@@ -679,14 +731,14 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			hdrs, mErr := jem.Headers()
 			if mErr != nil {
 				ja.mlog.Error("error getting headers", slog.Any("id", idInt64), slog.Any("error", mErr.Error()))
-				return "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+				return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 			}
 			resultElement.Headers = hdrs
 		}
 
 		result = append(result, resultElement)
 	}
-	return "stubstate", result, notFound, nil
+	return result, notFound, nil
 }
 
 func msgAddressToEmailAddress(m message.Address) EmailAddress {
@@ -1891,4 +1943,135 @@ func (ja AccountEmail) DownloadBlob(ctx context.Context, blobID, name, Type stri
 	}
 
 	return jem.GetRawPart(partID)
+}
+
+func (ja AccountEmail) Changes(ctx context.Context, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+
+	sinceStateInt64, err := strconv.ParseInt(sinceState, 10, 64)
+	if err != nil {
+		ja.mlog.Error("invalid sinceState: not an int64", slog.Any("err", err.Error()))
+		return accountId, sinceState, "", false, nil, nil, nil, mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
+	}
+
+	updatedOrDeletedQ := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
+	defer updatedOrDeletedQ.Close()
+	updatedOrDeletedQ.FilterGreater("ModSeq", store.ModSeqFromClient(sinceStateInt64))
+	updatedOrDeletedQ.SortAsc("ModSeq")
+
+	changeBuilder := NewChangeResultBuilder()
+
+	for {
+		msg, err := updatedOrDeletedQ.Next()
+		if err == bstore.ErrAbsent || (maxChanges != nil && (len(destroyed)+len(updated) > int(*maxChanges.ToPUint()))) {
+			//do not get more changes then we need
+			break
+		}
+
+		if msg.Expunged {
+			changeBuilder.AddDestroyed(msg.ID, msg.ModSeq.Client())
+		} else {
+			changeBuilder.AddUpdated(msg.ID, msg.ModSeq.Client())
+		}
+	}
+
+	newQ := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
+	defer newQ.Close()
+	newQ.FilterGreater("CreateSeq", store.ModSeqFromClient(sinceStateInt64))
+	for {
+		msg, err := newQ.Next()
+		if err == bstore.ErrAbsent || (maxChanges != nil && (len(created) > int(*maxChanges.ToPUint()))) {
+			//do not get more changes then we need
+			break
+		}
+		changeBuilder.AddCreated(msg.ID, msg.ModSeq.Client())
+
+	}
+
+	if len(changeBuilder.Elements) == 0 {
+		//no changes so newState = oldState
+		return accountId, sinceState, sinceState, false, nil, nil, nil, nil
+	}
+
+	hasMoreChanges = maxChanges != nil && len(changeBuilder.Elements) > int(*maxChanges.ToPUint())
+
+	//newState can be the 'final' state or an intermediate state
+	created, updated, destroyed, newState = changeBuilder.Final(maxChanges.ToPUint())
+
+	return accountId, sinceState, newState, hasMoreChanges, created, updated, destroyed, nil
+}
+
+type ChangeType int
+
+const (
+	ChangeTypeCreated ChangeType = iota
+	ChangeTypeUpdated
+	ChangeTypeDestroyed
+)
+
+type ChangeElement struct {
+	ID     int64
+	ModSeq int64
+	Type   ChangeType
+}
+
+type ChangeResultBuilder struct {
+	Elements []ChangeElement
+}
+
+func NewChangeResultBuilder() *ChangeResultBuilder {
+	return &ChangeResultBuilder{}
+}
+
+func (crb *ChangeResultBuilder) AddCreated(id, modSeq int64) {
+	crb.Elements = append(crb.Elements, ChangeElement{
+		ID:     id,
+		ModSeq: modSeq,
+		Type:   ChangeTypeCreated,
+	})
+}
+
+func (crb *ChangeResultBuilder) AddUpdated(id, modSeq int64) {
+	crb.Elements = append(crb.Elements, ChangeElement{
+		ID:     id,
+		ModSeq: modSeq,
+		Type:   ChangeTypeUpdated,
+	})
+}
+
+func (crb *ChangeResultBuilder) AddDestroyed(id, modSeq int64) {
+	crb.Elements = append(crb.Elements, ChangeElement{
+		ID:     id,
+		ModSeq: modSeq,
+		Type:   ChangeTypeDestroyed,
+	})
+}
+
+func (cr ChangeResultBuilder) Final(maxResults *uint64) (created, updated, destroyed []basetypes.Id, state string) {
+
+	//FIXME  this can be optimized to make sure that recent changes are returned first
+	slices.SortFunc(cr.Elements, func(cr1, cr2 ChangeElement) int {
+		if cr1.ModSeq == cr2.ModSeq {
+			return 0
+		}
+		if cr1.ModSeq > cr2.ModSeq {
+			return -1
+		}
+		return 1
+	})
+
+	var lastID int64
+	for i := 0; i < int(*maxResults); i++ {
+		id := basetypes.NewIdFromInt64(cr.Elements[i].ID)
+		switch cr.Elements[i].Type {
+		case ChangeTypeCreated:
+			created = append(created, id)
+		case ChangeTypeDestroyed:
+			destroyed = append(destroyed, id)
+		case ChangeTypeUpdated:
+			updated = append(updated, id)
+		}
+		lastID = cr.Elements[i].ModSeq
+	}
+	return created, updated, destroyed, strconv.FormatInt(lastID, 10)
+
 }

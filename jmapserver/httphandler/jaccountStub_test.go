@@ -39,7 +39,7 @@ type AccountEmailStub struct {
 }
 
 // Email
-func (jas AccountEmailStub) Get(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues bool, FetchHTMLBodyValues bool, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (state string, result []jaccount.Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (jas AccountEmailStub) Get(ctx context.Context, ids []basetypes.Id, properties []string, bodyProperties []string, FetchTextBodyValues bool, FetchHTMLBodyValues bool, FetchAllBodyValues bool, MaxBodyValueBytes *basetypes.Uint) (result []jaccount.Email, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	panic("not implemented") // TODO: Implement
 }
 

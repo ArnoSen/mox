@@ -75,6 +75,14 @@ func (ui *Uint) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (u *Uint) ToPUint() *uint64 {
+	if u == nil {
+		return nil
+	}
+	result := uint64(*u)
+	return &result
+}
+
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.3
 type Int int64
 

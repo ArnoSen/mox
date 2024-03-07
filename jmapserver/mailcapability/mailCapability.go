@@ -3,6 +3,7 @@ package mailcapability
 import (
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/mlog"
 )
 
 // verify Mailbox fulfills getter
@@ -39,13 +40,13 @@ type MailCapability struct {
 	datatypes []datatyper.Datatyper
 }
 
-func NewMailCapability(settings MailCapabilitySettings, contextUserKey string) *MailCapability {
+func NewMailCapability(settings MailCapabilitySettings, contextUserKey string, logger mlog.Log) *MailCapability {
 	return &MailCapability{
 		settings: settings,
 		datatypes: []datatyper.Datatyper{
 			NewMailBox(),
 			NewThread(),
-			NewEmail(maxEmailQueryLimit),
+			NewEmail(maxEmailQueryLimit, logger),
 		},
 	}
 }

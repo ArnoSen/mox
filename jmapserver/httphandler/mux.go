@@ -83,7 +83,7 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 				"i;ascii-casemap",
 			},
 		}),
-		mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey),
+		mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey, logger),
 	}
 
 	sessionCapabilityInfo := make(map[string]interface{})

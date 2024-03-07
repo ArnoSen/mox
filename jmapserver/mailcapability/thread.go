@@ -34,7 +34,14 @@ func (tDT ThreadDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 	}
 
 	return accountId, state, list, notFound, mErr
+}
 
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
+func (tDT ThreadDT) Changes(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created []basetypes.Id, updated []basetypes.Id, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+	//TODO need to add modseq for threads or find a way to get this behavior from emails
+	//AO: not sure what to send back with regards to oldstate/newstate
+	mErr = mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
+	return
 }
 
 func (tDT ThreadDT) CustomGetRequestParams() any {
