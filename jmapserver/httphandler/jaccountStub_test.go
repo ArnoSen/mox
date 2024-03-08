@@ -20,10 +20,6 @@ func (jas JAccountStub) Email() jaccount.AccountEmailer {
 	return AccountEmailStub{}
 }
 
-func (jas JAccountStub) Thread() jaccount.AccountThreader {
-	return AccountThreadStub{}
-}
-
 func (jas JAccountStub) DB() *bstore.DB {
 	panic("not implmented")
 }
@@ -61,11 +57,6 @@ func (jas AccountEmailStub) Changes(ctx context.Context, accountId basetypes.Id,
 }
 
 type AccountThreadStub struct {
-}
-
-// Thread
-func (jas AccountThreadStub) Get(ctx context.Context, ids []basetypes.Id) (state string, result []jaccount.Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
-	panic("not implemented") // TODO: Implement
 }
 
 func (jas JAccountStub) Close() error {

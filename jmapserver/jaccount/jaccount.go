@@ -15,7 +15,6 @@ import (
 // that have knowlegde about what properties are stored in persistent storage and what properties are calculated
 type JAccounter interface {
 	Email() AccountEmailer
-	Thread() AccountThreader
 	Close() error
 	DB() *bstore.DB
 }
@@ -29,34 +28,24 @@ type AccountEmailer interface {
 	DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error)
 }
 
-type AccountThreader interface {
-	Get(ctx context.Context, ids []basetypes.Id) (state string, result []Thread, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError)
-}
-
 var _ JAccounter = &JAccount{}
 
 type JAccount struct {
-	mAccount      *store.Account
-	mlog          mlog.Log
-	AccountEmail  AccountEmailer
-	AccountThread AccountThreader
+	mAccount     *store.Account
+	mlog         mlog.Log
+	AccountEmail AccountEmailer
 }
 
 func NewJAccount(mAccount *store.Account, mlog mlog.Log) *JAccount {
 	return &JAccount{
-		mAccount:      mAccount,
-		mlog:          mlog,
-		AccountEmail:  NewAccountEmail(mAccount, mlog),
-		AccountThread: NewAccountThread(mAccount, mlog),
+		mAccount:     mAccount,
+		mlog:         mlog,
+		AccountEmail: NewAccountEmail(mAccount, mlog),
 	}
 }
 
 func (ja *JAccount) Email() AccountEmailer {
 	return ja.AccountEmail
-}
-
-func (ja *JAccount) Thread() AccountThreader {
-	return ja.AccountThread
 }
 
 func (ja JAccount) Close() error {

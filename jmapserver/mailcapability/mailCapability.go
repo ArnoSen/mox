@@ -45,7 +45,7 @@ func NewMailCapability(settings MailCapabilitySettings, contextUserKey string, l
 		settings: settings,
 		datatypes: []capabilitier.Datatyper{
 			NewMailBox(logger),
-			NewThread(),
+			NewThread(logger),
 			NewEmailDT(maxEmailQueryLimit, logger),
 		},
 	}
