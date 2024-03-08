@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
@@ -13,10 +13,10 @@ import (
 type StubCapability struct {
 	urn         string
 	sessioninfo interface{}
-	datatypes   []datatyper.Datatyper
+	datatypes   []capabilitier.Datatyper
 }
 
-func NewStubCapacility(urn string, sessionInfo interface{}, datatypes ...datatyper.Datatyper) *StubCapability {
+func NewStubCapacility(urn string, sessionInfo interface{}, datatypes ...capabilitier.Datatyper) *StubCapability {
 	return &StubCapability{
 		urn:         urn,
 		sessioninfo: sessionInfo,
@@ -32,7 +32,7 @@ func (sc *StubCapability) SessionObjectInfo() interface{} {
 	return sc.sessioninfo
 }
 
-func (sc *StubCapability) Datatypes() []datatyper.Datatyper {
+func (sc *StubCapability) Datatypes() []capabilitier.Datatyper {
 	return sc.datatypes
 }
 
@@ -47,8 +47,8 @@ func NewStubDatatype(name string) StubDatatype {
 }
 
 var (
-	_ datatyper.Getter = StubDatatype{}
-	_ datatyper.Setter = StubDatatype{}
+	_ capabilitier.Getter = StubDatatype{}
+	_ capabilitier.Setter = StubDatatype{}
 )
 
 func (sdt StubDatatype) Name() string {

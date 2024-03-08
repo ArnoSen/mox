@@ -66,23 +66,24 @@ type JMAPServerHandler struct {
 
 func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuthFunc, accountOpener AccountOpener, corsAllowFrom []string, logger mlog.Log) JMAPServerHandler {
 
+	coreCap := core.NewCore(core.CoreCapabilitySettings{
+		// ../../rfc/8620:517
+		//use the minimum recommended values for now. Maybe move some to settings later on
+		MaxSizeUpload:         50000000,
+		MaxConcurrentUpload:   4,
+		MaxSizeRequest:        10000000,
+		MaxConcurrentRequests: 4,
+		MaxCallsInRequest:     16,
+		MaxObjectsInGet:       500,
+		MaxObjectsInSet:       500,
+		CollationAlgorithms: []string{
+			// ../../rfc/4790:1127
+			//not sure yet how this works out later on but let's put in some basic value
+			"i;ascii-casemap",
+		},
+	})
+
 	capability := []capabilitier.Capabilitier{
-		core.NewCore(core.CoreCapabilitySettings{
-			// ../../rfc/8620:517
-			//use the minimum recommended values for now. Maybe move some to settings later on
-			MaxSizeUpload:         50000000,
-			MaxConcurrentUpload:   4,
-			MaxSizeRequest:        10000000,
-			MaxConcurrentRequests: 4,
-			MaxCallsInRequest:     16,
-			MaxObjectsInGet:       500,
-			MaxObjectsInSet:       500,
-			CollationAlgorithms: []string{
-				// ../../rfc/4790:1127
-				//not sure yet how this works out later on but let's put in some basic value
-				"i;ascii-casemap",
-			},
-		}),
 		mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey, logger),
 	}
 
@@ -121,7 +122,7 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 		contextUserKey:    defaultContextUserKey,
 		// ../../rfc/8620:679
 		sessionHandler:     NewSessionHandler(sessionApp, defaultContextUserKey, logger),
-		apiHandler:         NewAPIHandler(capability, sessionApp, defaultContextUserKey, store.OpenAccount, logger),
+		apiHandler:         NewAPIHandler(coreCap, capability, sessionApp, defaultContextUserKey, store.OpenAccount, logger),
 		downloadHandler:    NewDownloadHandler(store.OpenAccount, defaultContextUserKey, downloadPath, logger),
 		uploadHandler:      NewUploadHandler(logger),
 		eventSourceHandler: NewEventSourceHandler(logger),

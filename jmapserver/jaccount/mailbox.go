@@ -40,16 +40,14 @@ type MailboxRights struct {
 }
 
 type AccountMailbox struct {
-	mAccount    *store.Account
-	mailboxRepo MailboxRepo
-	mlog        mlog.Log
+	mAccount *store.Account
+	mlog     mlog.Log
 }
 
-func NewAccountMailbox(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *AccountMailbox {
+func NewAccountMailbox(mAccount *store.Account, mlog mlog.Log) *AccountMailbox {
 	return &AccountMailbox{
-		mAccount:    mAccount,
-		mailboxRepo: repo,
-		mlog:        mlog,
+		mAccount: mAccount,
+		mlog:     mlog,
 	}
 }
 
@@ -57,11 +55,8 @@ func (ja *AccountMailbox) Get(ctx context.Context, ids []basetypes.Id) (result [
 
 	//q := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB)
 
-	mbs, err := ja.mailboxRepo.List()
-	if err != nil {
-		mErr = mlevelerrors.NewMethodLevelErrorServerFail()
-		return
-	}
+	var mbs []store.Mailbox
+	panic("not implemented")
 
 	//put in a structure so we can do sorting
 	jmbs := NewJMailboxes(store.MailboxHierarchyDelimiter)

@@ -2,14 +2,18 @@ package jaccount
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"log/slog"
 
+	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -129,7 +133,7 @@ Content-Transfer-Encoding: 7bit
 				t.FailNow()
 			}
 			AssertNotNil(t, to[0].Name)
-			AssertEqualString(t, "jmap@km42.nl", to[0].Email)
+			AssertEqual(t, "jmap@km42.nl", to[0].Email)
 
 			from, mErr := jem.From()
 			RequireNoError(t, mErr)
@@ -165,7 +169,7 @@ Content-Transfer-Encoding: 7bit
 			sendAt, mErr := jem.SendAt()
 			RequireNoError(t, mErr)
 			if AssertNotNil(t, sendAt) {
-				AssertEqualString(t, eSendAt, time.Time(*sendAt).String())
+				AssertEqual(t, eSendAt, time.Time(*sendAt).String())
 			}
 
 			eContentType := "text/plain; charset=UTF-8; format=flowed"
@@ -175,39 +179,39 @@ Content-Transfer-Encoding: 7bit
 				t.Logf("was expecting ctIface to be string but got %T", ctIface)
 				t.FailNow()
 			} else {
-				AssertEqualString(t, eContentType, ct)
+				AssertEqual(t, eContentType, ct)
 			}
 
 			eReceived := msg.Received
-			AssertEqualString(t, eReceived.String(), time.Time(jem.ReceivedAt()).String())
+			AssertEqual(t, eReceived.String(), time.Time(jem.ReceivedAt()).String())
 
 			//this an email with no msg body so preview is empty
 			ePreview := ""
 			preview, mErr := jem.Preview()
 			RequireNoError(t, mErr)
-			AssertEqualString(t, ePreview, preview)
+			AssertEqual(t, ePreview, preview)
 
 			bs, mErr := jem.BodyStructure(nil)
 			RequireNoError(t, mErr)
 
 			if AssertNotNil(t, bs.Type) {
-				AssertEqualString(t, "text/plain", bs.Type.String())
+				AssertEqual(t, "text/plain", bs.Type.String())
 			}
 			if AssertNotNil(t, bs.Language) {
 				//NB: | is an arbitrary token to stringify a string slice to make it comparable
-				AssertEqualString(t, strings.Join([]string{"en-US"}, "|"), strings.Join(bs.Language, "|"))
+				AssertEqual(t, strings.Join([]string{"en-US"}, "|"), strings.Join(bs.Language, "|"))
 			}
 			if AssertNotNil(t, bs.CharSet) {
 				//NB: | is an arbitrary token to stringify a string slice to make it comparable
-				AssertEqualString(t, "UTF-8", *bs.CharSet)
+				AssertEqual(t, "UTF-8", *bs.CharSet)
 			}
 
 			jPart, mErr := jem.JPart()
 			RequireNoError(t, mErr)
 			ty := jPart.Type()
-			AssertEqualString(t, "text/plain", ty.String())
+			AssertEqual(t, "text/plain", ty.String())
 
-			AssertEqualString(t, "0", jPart.ID())
+			AssertEqual(t, "0", jPart.ID())
 		})
 
 		t.Run("Mail to JEmail. Message with only text body", func(t *testing.T) {
@@ -261,7 +265,7 @@ On 18-07-2023 17:59, me wrote:
 				t.Logf("unexpected in reply to. Expected an slice of length 1 but got length %d", len(inReplyTo))
 				t.FailNow()
 			}
-			AssertEqualString(t, "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl", inReplyTo[0])
+			AssertEqual(t, "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl", inReplyTo[0])
 
 			references, mErr := jem.References()
 			RequireNoError(t, mErr)
@@ -269,7 +273,7 @@ On 18-07-2023 17:59, me wrote:
 				t.Logf("unexpected in references. Expected an slice of length 1 but got length %d", len(inReplyTo))
 				t.FailNow()
 			}
-			AssertEqualString(t, "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl", references[0])
+			AssertEqual(t, "5a51ce56-387a-1b2e-26bf-133f93c918c1@km42.nl", references[0])
 
 			//Body value no truncating
 			bv, mErr := jem.BodyValues(true, false, false, nil)
@@ -283,7 +287,7 @@ On 18-07-2023 17:59, me wrote:
 				t.Log("Expected key 0 in bodyvalues map")
 				t.FailNow()
 			} else {
-				AssertEqualString(t, "need a mail for testing\r\n\r\nOn 18-07-2023 17:59, me wrote:\r\n>", body.Value)
+				AssertEqual(t, "need a mail for testing\r\n\r\nOn 18-07-2023 17:59, me wrote:\r\n>", body.Value)
 			}
 
 			//Body value with truncating
@@ -299,7 +303,7 @@ On 18-07-2023 17:59, me wrote:
 				t.Log("Expected key 0 in bodyvalues map")
 				t.FailNow()
 			} else {
-				AssertEqualString(t, "need", body.Value)
+				AssertEqual(t, "need", body.Value)
 				AssertTrue(t, body.IsTruncated)
 			}
 
@@ -315,7 +319,7 @@ On 18-07-2023 17:59, me wrote:
 				t.Log("Expected key 0 in bodyvalues map")
 				t.FailNow()
 			} else {
-				AssertEqualString(t, "need", body.Value)
+				AssertEqual(t, "need", body.Value)
 				AssertTrue(t, body.IsTruncated)
 			}
 
@@ -324,11 +328,11 @@ On 18-07-2023 17:59, me wrote:
 			RequireNoError(t, mErr)
 
 			if AssertNotNil(t, bs.PartId) {
-				AssertEqualString(t, "0", *bs.PartId)
+				AssertEqual(t, "0", *bs.PartId)
 			}
 
 			if AssertNotNil(t, bs.BlobId) {
-				AssertEqualString(t, "1-0", string(*bs.BlobId))
+				AssertEqual(t, "1-0", string(*bs.BlobId))
 			}
 
 			if uint(bs.Size) != uint(471) {
@@ -344,17 +348,17 @@ On 18-07-2023 17:59, me wrote:
 			AssertNil(t, bs.Name)
 
 			if AssertNotNil(t, bs.Type) {
-				AssertEqualString(t, "text/plain", bs.Type.String())
+				AssertEqual(t, "text/plain", bs.Type.String())
 			}
 
 			if AssertNotNil(t, bs.CharSet) {
-				AssertEqualString(t, "UTF-8", *bs.CharSet)
+				AssertEqual(t, "UTF-8", *bs.CharSet)
 			}
 
 			AssertNil(t, bs.Disposition)
 			AssertNil(t, bs.Cid)
 
-			AssertEqualString(t, "en-US", strings.Join(bs.Language, ","))
+			AssertEqual(t, "en-US", strings.Join(bs.Language, ","))
 
 			AssertNil(t, bs.Location)
 			if len(bs.SubParts) != 0 {
@@ -436,14 +440,14 @@ Content-Transfer-Encoding: 7bit
 			bodyStructure, mErr := jem.BodyStructure(defaultEmailBodyProperties)
 			RequireNoError(t, mErr)
 
-			AssertEqualInt(t, 2, len(bodyStructure.SubParts))
+			AssertEqual(t, 2, len(bodyStructure.SubParts))
 
 			if AssertNotNil(t, bodyStructure.SubParts[0].Type) {
-				AssertEqualString(t, "text/plain", bodyStructure.SubParts[0].Type.String())
+				AssertEqual(t, "text/plain", bodyStructure.SubParts[0].Type.String())
 			}
 
 			if AssertNotNil(t, bodyStructure.SubParts[1].Type) {
-				AssertEqualString(t, "text/html", bodyStructure.SubParts[1].Type.String())
+				AssertEqual(t, "text/html", bodyStructure.SubParts[1].Type.String())
 			}
 
 			/*
@@ -455,29 +459,29 @@ Content-Transfer-Encoding: 7bit
 						t.Logf("was expecting partId 0 in body values map")
 						t.FailNow()
 					} else {
-						AssertEqualString(t, "Hi,\r\n\r\nA.\r\n", textValue.Value)
+						AssertEqual(t, "Hi,\r\n\r\nA.\r\n", textValue.Value)
 					}
 			*/
 
 			bvHTML, mErr := jem.BodyValues(false, true, false, nil)
 			RequireNoError(t, mErr)
-			AssertEqualInt(t, 1, len(bvHTML))
+			AssertEqual(t, 1, len(bvHTML))
 
 			if textValue, ok := bvHTML["1"]; !ok {
 				t.Logf("was expecting partId 1 in body values map")
 				t.FailNow()
 			} else {
-				AssertEqualString(t, "<html></html>\r\n", textValue.Value)
+				AssertEqual(t, "<html></html>\r\n", textValue.Value)
 			}
 
 			jPart, mErr := jem.JPart()
 			RequireNoError(t, mErr)
 
 			//we have a multipart so we do not set an id
-			AssertEqualString(t, "", jPart.ID())
-			AssertEqualInt(t, 2, len(jPart.JParts))
-			AssertEqualString(t, "0", jPart.JParts[0].ID())
-			AssertEqualString(t, "1", jPart.JParts[1].ID())
+			AssertEqual(t, "", jPart.ID())
+			AssertEqual(t, 2, len(jPart.JParts))
+			AssertEqual(t, "0", jPart.JParts[0].ID())
+			AssertEqual(t, "1", jPart.JParts[1].ID())
 		})
 
 		t.Run("Mail to JEmail. Inline picture", func(t *testing.T) {
@@ -606,38 +610,38 @@ AAAAAElFTkSuQmCC
 			bs, merr := jem.BodyStructure(defaultEmailBodyProperties)
 			RequireNoError(t, merr)
 
-			AssertEqualInt(t, 2, len(bs.SubParts))
+			AssertEqual(t, 2, len(bs.SubParts))
 
-			AssertEqualInt(t, 2, len(bs.SubParts[1].SubParts))
+			AssertEqual(t, 2, len(bs.SubParts[1].SubParts))
 
 			imgPart := bs.SubParts[1].SubParts[1]
-			AssertEqualString(t, "image/png", imgPart.Type.String())
-			AssertEqualString(t, "part1.Nj2N9maO.uVlYYEhk@km42.nl", *imgPart.Cid)
-			AssertEqualString(t, "kOp2KOEom97WsgRN.png", *imgPart.Name)
-			AssertEqualString(t, "2", *imgPart.PartId)
+			AssertEqual(t, "image/png", imgPart.Type.String())
+			AssertEqual(t, "part1.Nj2N9maO.uVlYYEhk@km42.nl", *imgPart.Cid)
+			AssertEqual(t, "kOp2KOEom97WsgRN.png", *imgPart.Name)
+			AssertEqual(t, "2", *imgPart.PartId)
 
 			bv, mErr := jem.BodyValues(false, true, false, nil)
 			RequireNoError(t, mErr)
-			AssertEqualInt(t, 2, len(bv))
+			AssertEqual(t, 2, len(bv))
 			htmlBodyValue, ok := bv["1"]
 			AssertTrue(t, ok)
-			AssertEqualString(t, "<!DOCTYPE html>\r\n<html>\r\n  <head>\r\n\r\n    <meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\r\n  </head>\r\n  <body>\r\n    <p>My first image <img src=\"cid:part1.Nj2N9maO.uVlYYEhk@km42.nl\"\r\n        alt=\"\"></p>\r\n  </body>\r\n</html>", htmlBodyValue.Value)
+			AssertEqual(t, "<!DOCTYPE html>\r\n<html>\r\n  <head>\r\n\r\n    <meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\">\r\n  </head>\r\n  <body>\r\n    <p>My first image <img src=\"cid:part1.Nj2N9maO.uVlYYEhk@km42.nl\"\r\n        alt=\"\"></p>\r\n  </body>\r\n</html>", htmlBodyValue.Value)
 
 			htmlBody, mErr := jem.HTMLBody(defaultEmailBodyProperties)
 			RequireNoError(t, mErr)
-			AssertEqualInt(t, 2, len(htmlBody))
+			AssertEqual(t, 2, len(htmlBody))
 
 			jPart, mErr := jem.JPart()
 			RequireNoError(t, mErr)
 
 			//we have a multipart so we do not set an id
-			AssertEqualString(t, "", jPart.ID())
-			AssertEqualInt(t, 2, len(jPart.JParts))
+			AssertEqual(t, "", jPart.ID())
+			AssertEqual(t, 2, len(jPart.JParts))
 
-			AssertEqualInt(t, 2, len(jPart.JParts[1].JParts))
-			AssertEqualString(t, "", jPart.JParts[1].ID())
-			AssertEqualString(t, "1", jPart.JParts[1].JParts[0].ID())
-			AssertEqualString(t, "2", jPart.JParts[1].JParts[1].ID())
+			AssertEqual(t, 2, len(jPart.JParts[1].JParts))
+			AssertEqual(t, "", jPart.JParts[1].ID())
+			AssertEqual(t, "1", jPart.JParts[1].JParts[0].ID())
+			AssertEqual(t, "2", jPart.JParts[1].JParts[1].ID())
 		})
 
 		t.Run("Mail to JEmail. Picture as attachemnt. No html available", func(t *testing.T) {
@@ -752,14 +756,14 @@ Sent from mobile
 			bs, merr := jem.BodyStructure(defaultEmailBodyProperties)
 			RequireNoError(t, merr)
 
-			AssertEqualInt(t, 3, len(bs.SubParts))
+			AssertEqual(t, 3, len(bs.SubParts))
 
 			textBodyParts, merr := jem.TextBody(defaultEmailBodyProperties)
 			RequireNoError(t, merr)
-			AssertEqualInt(t, 3, len(textBodyParts))
-			AssertEqualString(t, "0", *textBodyParts[0].PartId)
-			AssertEqualString(t, "1", *textBodyParts[1].PartId)
-			AssertEqualString(t, "2", *textBodyParts[2].PartId)
+			AssertEqual(t, 3, len(textBodyParts))
+			AssertEqual(t, "0", *textBodyParts[0].PartId)
+			AssertEqual(t, "1", *textBodyParts[1].PartId)
+			AssertEqual(t, "2", *textBodyParts[2].PartId)
 
 			hasAttachment, merr := jem.HasAttachment()
 			RequireNoError(t, merr)
@@ -897,7 +901,7 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 				t.Logf("unexpected sender. Sender email: %s", sender[0].Email)
 				t.FailNow()
 			}
-			AssertEqualString(t, "Jmap", *sender[0].Name)
+			AssertEqual(t, "Jmap", *sender[0].Name)
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -910,13 +914,13 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 				t.Logf("unexpected sender. Sender email: %s", to[0].Email)
 				t.FailNow()
 			}
-			AssertEqualString(t, "Jmap", *sender[0].Name)
+			AssertEqual(t, "Jmap", *sender[0].Name)
 
 			jPart, mErr := jem.JPart()
 			RequireNoError(t, mErr)
 			charSet := jPart.Charset()
 			if AssertNotNil(t, charSet) {
-				AssertEqualString(t, "utf-8", *charSet)
+				AssertEqual(t, "utf-8", *charSet)
 			}
 
 		})
@@ -955,7 +959,7 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 				t.Logf("unexpected sender. Sender email: %s", sender[0].Email)
 				t.FailNow()
 			}
-			AssertEqualString(t, "Jmap", *sender[0].Name)
+			AssertEqual(t, "Jmap", *sender[0].Name)
 
 			to, mErr := jem.To()
 			RequireNoError(t, mErr)
@@ -968,19 +972,19 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 				t.Logf("unexpected sender. Sender email: %s", to[0].Email)
 				t.FailNow()
 			}
-			AssertEqualString(t, "Jmap", *sender[0].Name)
+			AssertEqual(t, "Jmap", *sender[0].Name)
 
 			jPart, mErr := jem.JPart()
 			RequireNoError(t, mErr)
 
-			AssertEqualInt(t, 2, len(jPart.JParts))
-			AssertEqualString(t, "text/plain", jPart.JParts[1].Type().String())
-			AssertEqualString(t, "inline", *(jPart.JParts[1].Disposition()))
+			AssertEqual(t, 2, len(jPart.JParts))
+			AssertEqual(t, "text/plain", jPart.JParts[1].Type().String())
+			AssertEqual(t, "inline", *(jPart.JParts[1].Disposition()))
 
 			//custom headers for this bodyProperty
 			bespokeProp := "header:Content-Type"
 			bodyPart := jPart.JParts[1].EmailBodyPart([]string{bespokeProp})
-			AssertEqualString(t, `text/plain; charset="us-ascii"`, bodyPart.BespokeProperties[bespokeProp].(string))
+			AssertEqual(t, `text/plain; charset="us-ascii"`, bodyPart.BespokeProperties[bespokeProp].(string))
 
 			bodyPartBytes, err := json.Marshal(bodyPart)
 			RequireNoError(t, err)
@@ -990,15 +994,129 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 			err = json.Unmarshal(bodyPartBytes, &myMap)
 			RequireNoError(t, err)
 
-			AssertEqualString(t, myMap[bespokeProp].(string), `text/plain; charset="us-ascii"`)
+			AssertEqual(t, myMap[bespokeProp].(string), `text/plain; charset="us-ascii"`)
 
 			htmlBody, mErr := jem.HTMLBody(nil)
 			RequireNoError(t, mErr)
 
-			AssertEqualInt(t, 2, len(htmlBody))
+			AssertEqual(t, 2, len(htmlBody))
 		})
 	})
 }
 
 func TestFilter(t *testing.T) {
+}
+
+func TestEmailChanges(t *testing.T) {
+
+	dir, err := os.MkdirTemp("", "testmailchanges")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(dir) // clean upkkk
+
+	db, err := bstore.Open(context.Background(), filepath.Join(dir, "mydb.db"), nil, store.Message{}, store.Mailbox{})
+	RequireNoError(t, err)
+	defer db.Close()
+
+	RequireNoError(t, db.Insert(context.Background(), &store.Mailbox{
+		Name: "mailboxname",
+		ID:   1,
+	}))
+
+	//put some messages in
+	createMsg := func(db *bstore.DB, id, createdSeq, modSeq int64, expunged bool) error {
+		msg := &store.Message{
+			UID:       store.UID(uint32(time.Now().UnixNano())),
+			ID:        id,
+			MailboxID: 1,
+			Expunged:  expunged,
+		}
+
+		if modSeq != 0 {
+			msg.ModSeq = store.ModSeqFromClient(modSeq)
+		}
+		if createdSeq != 0 {
+			msg.CreateSeq = store.ModSeqFromClient(createdSeq)
+		}
+
+		return db.Insert(context.Background(), msg)
+	}
+
+	RequireNoError(t, createMsg(db, 1, 100, 0, false))
+	RequireNoError(t, createMsg(db, 2, 0, 101, false))
+	RequireNoError(t, createMsg(db, 3, 0, 102, true))
+
+	am := NewAccountEmail(&store.Account{DB: db}, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr := am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "99", nil)
+
+	AssertEqual(t, 1, retAccountID.Int64x())
+	AssertEqual(t, "99", oldState)
+	AssertEqual(t, "102", newState)
+	AssertEqual(t, false, hasMore)
+	AssertEqual(t, 1, len(created))
+	AssertEqual(t, 1, created[0].Int64x())
+	AssertEqual(t, 1, len(updated))
+	AssertEqual(t, 2, updated[0].Int64x())
+	AssertEqual(t, 1, len(destroyed))
+	AssertEqual(t, 3, destroyed[0].Int64x())
+	AssertEqual(t, nil, mErr)
+
+	//up to date
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "102", nil)
+
+	AssertEqual(t, 1, retAccountID.Int64x())
+	AssertEqual(t, "102", oldState)
+	AssertEqual(t, "102", newState)
+	AssertEqual(t, false, hasMore)
+	AssertEqual(t, 0, len(created))
+	AssertEqual(t, 0, len(updated))
+	AssertEqual(t, 0, len(destroyed))
+	AssertEqual(t, nil, mErr)
+
+	//return limited changes
+	maxChanges := basetypes.Uint(2)
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "99", &maxChanges)
+
+	AssertEqual(t, 1, retAccountID.Int64x())
+	AssertEqual(t, "99", oldState)
+	AssertEqual(t, "101", newState)
+	AssertEqual(t, true, hasMore)
+	AssertEqual(t, 1, len(created))
+	AssertEqual(t, 1, len(updated))
+	AssertEqual(t, 0, len(destroyed))
+	AssertEqual(t, nil, mErr)
+}
+
+func TestChangeResultBuilder(t *testing.T) {
+
+	t.Run("test1", func(t *testing.T) {
+
+		c := NewChangeResultBuilder()
+		c.AddCreated(1, 100)
+		c.AddDestroyed(2, 101)
+		c.AddUpdated(3, 102)
+
+		created, updated, destroyed, state := c.Final(nil)
+
+		AssertEqual(t, "102", state)
+		AssertEqual(t, 1, len(created))
+		AssertEqual(t, 1, len(destroyed))
+		AssertEqual(t, 1, len(updated))
+
+		maxResults := uint64(10)
+		created, updated, destroyed, state = c.Final(&maxResults)
+
+		AssertEqual(t, "102", state)
+		AssertEqual(t, 1, len(created))
+		AssertEqual(t, 1, len(destroyed))
+		AssertEqual(t, 1, len(updated))
+
+		maxResults = uint64(2)
+		created, updated, destroyed, state = c.Final(&maxResults)
+		AssertEqual(t, 1, len(created))
+		AssertEqual(t, 1, len(destroyed))
+		AssertEqual(t, 0, len(updated))
+		AssertEqual(t, "101", state)
+	})
 }

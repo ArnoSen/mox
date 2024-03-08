@@ -2,7 +2,7 @@ package submission
 
 import (
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 )
 
 type SubmissionCapabilitySettings struct {
@@ -12,13 +12,13 @@ type SubmissionCapabilitySettings struct {
 
 type Submission struct {
 	settings  SubmissionCapabilitySettings
-	datatypes []datatyper.Datatyper
+	datatypes []capabilitier.Datatyper
 }
 
 func NewSubmissionCapability(settings SubmissionCapabilitySettings) *Submission {
 	return &Submission{
 		settings: settings,
-		datatypes: []datatyper.Datatyper{
+		datatypes: []capabilitier.Datatyper{
 			NewIdentities(),
 			NewEmailSubmission(),
 		},
@@ -33,6 +33,6 @@ func (c *Submission) SessionObjectInfo() interface{} {
 	return c.settings
 }
 
-func (c *Submission) Datatypes() []datatyper.Datatyper {
+func (c *Submission) Datatypes() []capabilitier.Datatyper {
 	return c.datatypes
 }

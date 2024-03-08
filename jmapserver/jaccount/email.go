@@ -470,6 +470,8 @@ func (sr StateRepo) State(ctx context.Context) (string, error) {
 	return strconv.FormatInt(ss.LastModSeq.Client(), 10), nil
 }
 
+var _ AccountEmailer = &AccountEmail{}
+
 type AccountEmail struct {
 	mAccount  *store.Account
 	mlog      mlog.Log
@@ -1909,8 +1911,12 @@ func (ja *AccountEmail) Set(ctx context.Context, ifInState *string, create map[b
 }
 
 func (ja *AccountEmail) State(ctx context.Context) (string, *mlevelerrors.MethodLevelError) {
-	//need to get the repo in that contains this information
-	panic("not implemented")
+	state, err := ja.stateRepo.State(ctx)
+	if err != nil {
+		ja.mlog.Logger.Error("error getting state", slog.Any("err", err.Error()))
+		return "", mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+	return state, nil
 }
 
 // DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
@@ -2054,13 +2060,13 @@ func (cr ChangeResultBuilder) Final(maxResults *uint64) (created, updated, destr
 			return 0
 		}
 		if cr1.ModSeq > cr2.ModSeq {
-			return -1
+			return 1
 		}
-		return 1
+		return -1
 	})
 
 	var lastID int64
-	for i := 0; i < int(*maxResults); i++ {
+	for i := 0; (maxResults == nil || i < int(*maxResults)) && i < len(cr.Elements); i++ {
 		id := basetypes.NewIdFromInt64(cr.Elements[i].ID)
 		switch cr.Elements[i].Type {
 		case ChangeTypeCreated:

@@ -56,6 +56,14 @@ func (id Id) Int64() (int64, error) {
 	return strconv.ParseInt(string(id), 10, 64)
 }
 
+func (id Id) Int64x() int64 {
+	result, err := strconv.ParseInt(string(id), 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
 // https://datatracker.ietf.org/doc/html/rfc8620#section-1.3
 type Uint uint64
 

@@ -15,7 +15,7 @@ import (
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/core"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/jmapserver/user"
@@ -346,6 +346,7 @@ type JAccountFactoryFunc func() (jaccount.JAccounter, string, *mlevelerrors.Meth
 
 // APIHandler implements http.Handler
 type APIHandler struct {
+	Core            *core.Core
 	Capabilities    capabilitier.Capabilitiers
 	SessionStater   SessionStater
 	AccountOpener   AccountOpener
@@ -354,9 +355,10 @@ type APIHandler struct {
 	jaccountFactory JAccountFactoryFunc
 }
 
-func NewAPIHandler(capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger mlog.Log) *APIHandler {
+func NewAPIHandler(core *core.Core, capabilties capabilitier.Capabilitiers, sessionStater SessionStater, contextUserKey string, accountOpener AccountOpener, logger mlog.Log) *APIHandler {
 	result := &APIHandler{
-		Capabilities:   capabilties,
+		Core:           core,
+		Capabilities:   append(capabilties, core), //core capability is treated in the same way as other capabilities
 		SessionStater:  sessionStater,
 		contextUserKey: contextUserKey,
 		AccountOpener:  accountOpener,
@@ -377,15 +379,9 @@ func (ah APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//populate the reponse with the CORS headers
 	AddCORSAllowedOriginHeader(w, r)
 
-	coreSettings := ah.Capabilities.CoreSettings()
-	if coreSettings == nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if r.ContentLength > int64(coreSettings.MaxSizeRequest) {
+	if r.ContentLength > int64(ah.Core.Settings.MaxSizeRequest) {
 		//../../rfc/8620:1099
-		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", coreSettings.MaxSizeRequest)), w, ah.logger)
+		writeOutput(http.StatusBadRequest, NewRequestLevelErrorCapabilityLimit(LimitTypeMaxSizeRequest, fmt.Sprintf("max request size is %d bytes", ah.Core.Settings.MaxSizeRequest)), w, ah.logger)
 		return
 	}
 
@@ -522,7 +518,7 @@ loopUsing:
 
 		switch nameParts[1] {
 		case "echo":
-			echoEr, ok := dt.(datatyper.Echoer)
+			echoEr, ok := dt.(capabilitier.Echoer)
 			if !ok {
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
 				continue
@@ -536,7 +532,7 @@ loopUsing:
 			}
 
 		case "get":
-			dtGetter, ok := dt.(datatyper.Getter)
+			dtGetter, ok := dt.(capabilitier.Getter)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
@@ -623,7 +619,7 @@ loopUsing:
 				continue
 			}
 
-			if len(finalIds) > int(coreSettings.MaxObjectsInGet) {
+			if len(finalIds) > int(ah.Core.Settings.MaxObjectsInGet) {
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
@@ -674,7 +670,7 @@ loopUsing:
 			}))
 
 		case "changes":
-			dtChanges, ok := dt.(datatyper.Changeser)
+			dtChanges, ok := dt.(capabilitier.Changeser)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
@@ -772,7 +768,7 @@ loopUsing:
 			}))
 
 		case "set":
-			dtSet, ok := dt.(datatyper.Setter)
+			dtSet, ok := dt.(capabilitier.Setter)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
@@ -807,7 +803,7 @@ loopUsing:
 				continue
 			}
 
-			if len(requestArgs.Create)+len(requestArgs.Update)+len(requestArgs.Destroy) > int(coreSettings.MaxObjectsInSet) {
+			if len(requestArgs.Create)+len(requestArgs.Update)+len(requestArgs.Destroy) > int(ah.Core.Settings.MaxObjectsInSet) {
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorRequestTooLarge()))
 				continue
 			}
@@ -831,7 +827,7 @@ loopUsing:
 			}))
 
 		case "copy":
-			dtCopy, ok := dt.(datatyper.Copier)
+			dtCopy, ok := dt.(capabilitier.Copier)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
@@ -885,7 +881,7 @@ loopUsing:
 
 		case "query":
 
-			dtQuery, ok := dt.(datatyper.Querier)
+			dtQuery, ok := dt.(capabilitier.Querier)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))
@@ -982,7 +978,7 @@ loopUsing:
 
 		case "queryChanges":
 
-			dtQueryChanges, ok := dt.(datatyper.QueryChangeser)
+			dtQueryChanges, ok := dt.(capabilitier.QueryChangeser)
 			if !ok {
 				//datatype does not have this method
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorUnknownMethod()))

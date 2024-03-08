@@ -59,6 +59,11 @@ func (jas AccountEmailStub) State(ctx context.Context) (string, *mlevelerrors.Me
 	panic("not implemented")
 }
 
+// https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
+func (jas AccountEmailStub) Changes(ctx context.Context, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created []basetypes.Id, updated []basetypes.Id, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+	panic("not implemented") // TODO: Implement
+}
+
 type AccountThreadStub struct {
 }
 

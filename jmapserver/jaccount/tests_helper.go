@@ -42,19 +42,10 @@ func AssertTrue(t *testing.T, b bool) bool {
 	return b
 }
 
-func AssertEqualString(t *testing.T, expected, actual string) bool {
+func AssertEqual[V comparable](t *testing.T, expected, actual V) bool {
 	if expected != actual {
 		t.Helper()
-		t.Logf("was expecting %q but got %q", expected, actual)
-		t.Fail()
-	}
-	return true
-}
-
-func AssertEqualInt(t *testing.T, expected, actual int) bool {
-	if expected != actual {
-		t.Helper()
-		t.Logf("was expecting %d but got %d", expected, actual)
+		t.Logf("was expecting %v but got %v", expected, actual)
 		t.Fail()
 	}
 	return true

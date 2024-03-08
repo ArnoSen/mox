@@ -16,6 +16,8 @@ import (
 func TestGetMailboxes(t *testing.T) {
 	t.Run("Only selected mailboxes are returned when ids is not null", func(t *testing.T) {
 
+		//FIXME remove mock from here and just setup a bstore db on a temp path
+
 		mbr := NewMailboxRepoMock()
 
 		mbr.On("List").Return([]store.Mailbox{
@@ -30,7 +32,9 @@ func TestGetMailboxes(t *testing.T) {
 			},
 		}, nil)
 
-		ja := NewJAccount(nil, mbr, mlog.New("test", slog.Default()))
+		ja := NewJAccount(&store.Account{
+			DB: nil,
+		}, mbr, mlog.New("test", slog.Default()))
 
 		result, _, _, mErr := ja.Mailbox().Get(context.Background(), []basetypes.Id{"1", "2"})
 		require.Nil(t, mErr)

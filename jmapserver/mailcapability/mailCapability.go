@@ -2,12 +2,12 @@ package mailcapability
 
 import (
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/mlog"
 )
 
 // verify Mailbox fulfills getter
-var _ datatyper.Getter = NewMailBox()
+var _ capabilitier.Getter = NewMailBox()
 
 const (
 	URN = "urn:ietf:params:jmap:mail"
@@ -37,16 +37,16 @@ func NewDefaultMailCapabilitySettings() MailCapabilitySettings {
 
 type MailCapability struct {
 	settings  MailCapabilitySettings
-	datatypes []datatyper.Datatyper
+	datatypes []capabilitier.Datatyper
 }
 
 func NewMailCapability(settings MailCapabilitySettings, contextUserKey string, logger mlog.Log) *MailCapability {
 	return &MailCapability{
 		settings: settings,
-		datatypes: []datatyper.Datatyper{
+		datatypes: []capabilitier.Datatyper{
 			NewMailBox(),
 			NewThread(),
-			NewEmail(maxEmailQueryLimit, logger),
+			NewEmailDT(maxEmailQueryLimit, logger),
 		},
 	}
 }
@@ -59,6 +59,6 @@ func (c *MailCapability) SessionObjectInfo() interface{} {
 	return c.settings
 }
 
-func (c *MailCapability) Datatypes() []datatyper.Datatyper {
+func (c *MailCapability) Datatypes() []capabilitier.Datatyper {
 	return c.datatypes
 }

@@ -16,7 +16,7 @@ type EmailDT struct {
 	logger        mlog.Log
 }
 
-func NewEmail(maxQueryLimit int, logger mlog.Log) EmailDT {
+func NewEmailDT(maxQueryLimit int, logger mlog.Log) EmailDT {
 	return EmailDT{
 		maxQueryLimit: maxQueryLimit,
 		logger:        logger,

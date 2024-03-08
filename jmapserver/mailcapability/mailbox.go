@@ -43,6 +43,7 @@ func (mb MailboxDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accou
 func (mb MailboxDT) Changes(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created []basetypes.Id, updated []basetypes.Id, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	//TODO need to add modseq for mailboxes
 	//AO: not sure what to send back with regards to oldstate/newstate
+
 	mErr = mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
 	return
 }

@@ -1,4 +1,4 @@
-package datatyper
+package capabilitier
 
 import (
 	"context"

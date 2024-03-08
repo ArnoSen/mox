@@ -1,20 +1,20 @@
 package core
 
 import (
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 )
 
 const URN = "urn:ietf:params:jmap:core"
 
 type Core struct {
 	Settings  CoreCapabilitySettings
-	datatypes []datatyper.Datatyper
+	datatypes []capabilitier.Datatyper
 }
 
 func NewCore(settings CoreCapabilitySettings) *Core {
 	return &Core{
 		Settings: settings,
-		datatypes: []datatyper.Datatyper{
+		datatypes: []capabilitier.Datatyper{
 			NewDatatypeCore(),
 			NewDatatypePushSubscription(),
 			NewDatatypeBlob(),
@@ -30,7 +30,7 @@ func (c *Core) SessionObjectInfo() interface{} {
 	return c.Settings
 }
 
-func (c *Core) Datatypes() []datatyper.Datatyper {
+func (c *Core) Datatypes() []capabilitier.Datatyper {
 	return c.datatypes
 }
 

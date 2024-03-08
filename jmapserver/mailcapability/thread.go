@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/datatyper"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
-var _ datatyper.Getter = &ThreadDT{}
+var _ capabilitier.Getter = &ThreadDT{}
 
 type ThreadDT struct {
 }

@@ -40,20 +40,18 @@ var _ JAccounter = &JAccount{}
 
 type JAccount struct {
 	mAccount       *store.Account
-	mailboxRepo    MailboxRepo
 	mlog           mlog.Log
 	AccountEmail   AccountEmailer
 	AccountMailbox AccountMailboxer
 	AccountThread  AccountThreader
 }
 
-func NewJAccount(mAccount *store.Account, repo MailboxRepo, mlog mlog.Log) *JAccount {
+func NewJAccount(mAccount *store.Account, mlog mlog.Log) *JAccount {
 	return &JAccount{
 		mAccount:       mAccount,
-		mailboxRepo:    repo,
 		mlog:           mlog,
 		AccountEmail:   NewAccountEmail(mAccount, mlog),
-		AccountMailbox: NewAccountMailbox(mAccount, repo, mlog),
+		AccountMailbox: NewAccountMailbox(mAccount, mlog),
 		AccountThread:  NewAccountThread(mAccount, mlog),
 	}
 }
