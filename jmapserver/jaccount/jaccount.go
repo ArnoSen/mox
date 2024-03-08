@@ -3,6 +3,7 @@ package jaccount
 import (
 	"context"
 
+	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
@@ -13,14 +14,10 @@ import (
 // Ideally this package should be removed over time and all logic should be moved to the mox core packages
 // that have knowlegde about what properties are stored in persistent storage and what properties are calculated
 type JAccounter interface {
-	Mailbox() AccountMailboxer
 	Email() AccountEmailer
 	Thread() AccountThreader
 	Close() error
-}
-
-type AccountMailboxer interface {
-	Get(ctx context.Context, ids []basetypes.Id) ([]Mailbox, []basetypes.Id, string, *mlevelerrors.MethodLevelError)
+	DB() *bstore.DB
 }
 
 type AccountEmailer interface {
@@ -39,29 +36,23 @@ type AccountThreader interface {
 var _ JAccounter = &JAccount{}
 
 type JAccount struct {
-	mAccount       *store.Account
-	mlog           mlog.Log
-	AccountEmail   AccountEmailer
-	AccountMailbox AccountMailboxer
-	AccountThread  AccountThreader
+	mAccount      *store.Account
+	mlog          mlog.Log
+	AccountEmail  AccountEmailer
+	AccountThread AccountThreader
 }
 
 func NewJAccount(mAccount *store.Account, mlog mlog.Log) *JAccount {
 	return &JAccount{
-		mAccount:       mAccount,
-		mlog:           mlog,
-		AccountEmail:   NewAccountEmail(mAccount, mlog),
-		AccountMailbox: NewAccountMailbox(mAccount, mlog),
-		AccountThread:  NewAccountThread(mAccount, mlog),
+		mAccount:      mAccount,
+		mlog:          mlog,
+		AccountEmail:  NewAccountEmail(mAccount, mlog),
+		AccountThread: NewAccountThread(mAccount, mlog),
 	}
 }
 
 func (ja *JAccount) Email() AccountEmailer {
 	return ja.AccountEmail
-}
-
-func (ja *JAccount) Mailbox() AccountMailboxer {
-	return ja.AccountMailbox
 }
 
 func (ja *JAccount) Thread() AccountThreader {
@@ -70,6 +61,10 @@ func (ja *JAccount) Thread() AccountThreader {
 
 func (ja JAccount) Close() error {
 	return ja.mAccount.Close()
+}
+
+func (ja JAccount) DB() *bstore.DB {
+	return ja.mAccount.DB
 }
 
 // DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found

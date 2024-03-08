@@ -7,11 +7,9 @@ import (
 
 	"log/slog"
 
-	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
-	"github.com/mjl-/mox/store"
 )
 
 func NewInvalidDownloadURL(format string) JSONProblem {
@@ -96,9 +94,7 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
-
-	found, bytes, err := jaccount.NewJAccount(mAccount, mailboxRepo, dh.logger).DownloadBlob(r.Context(), blobID, name, contentType)
+	found, bytes, err := jaccount.NewJAccount(mAccount, dh.logger).DownloadBlob(r.Context(), blobID, name, contentType)
 	if err != nil {
 		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 		w.WriteHeader(http.StatusInternalServerError)

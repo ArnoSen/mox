@@ -1,15 +1,6 @@
 package jaccount
 
-import (
-	"context"
-	"fmt"
-	"strings"
-
-	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/mlevelerrors"
-	"github.com/mjl-/mox/mlog"
-	"github.com/mjl-/mox/store"
-)
+/*
 
 // ../../rfc/8621:485
 type Mailbox struct {
@@ -53,10 +44,11 @@ func NewAccountMailbox(mAccount *store.Account, mlog mlog.Log) *AccountMailbox {
 
 func (ja *AccountMailbox) Get(ctx context.Context, ids []basetypes.Id) (result []Mailbox, notFound []basetypes.Id, state string, mErr *mlevelerrors.MethodLevelError) {
 
-	//q := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB)
-
-	var mbs []store.Mailbox
-	panic("not implemented")
+	mbs, err := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB).List()
+	if err != nil {
+		ja.mlog.Logger.Error("error querying mailboxes", slog.Any("err", err.Error()))
+		return nil, nil, "", mlevelerrors.NewMethodLevelErrorServerFail()
+	}
 
 	//put in a structure so we can do sorting
 	jmbs := NewJMailboxes(store.MailboxHierarchyDelimiter)
@@ -252,3 +244,4 @@ func (jmbs JMailboxes) ParentID(mb JMailbox) *string {
 	}
 	return nil
 }
+*/

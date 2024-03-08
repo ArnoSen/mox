@@ -12,7 +12,6 @@ import (
 
 	"log/slog"
 
-	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
@@ -460,8 +459,7 @@ loopUsing:
 			return nil, "", mlevelerrors.NewMethodLevelErrorAccountForFound()
 		}
 
-		mailboxRepo := bstore.QueryDB[store.Mailbox](r.Context(), mAccount.DB)
-		return jaccount.NewJAccount(mAccount, mailboxRepo, ah.logger), userObj.Email, nil
+		return jaccount.NewJAccount(mAccount, ah.logger), userObj.Email, nil
 	}
 
 	var (

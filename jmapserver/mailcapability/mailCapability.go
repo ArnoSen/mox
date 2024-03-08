@@ -7,7 +7,7 @@ import (
 )
 
 // verify Mailbox fulfills getter
-var _ capabilitier.Getter = NewMailBox()
+var _ capabilitier.Getter = MailboxDT{}
 
 const (
 	URN = "urn:ietf:params:jmap:mail"
@@ -44,7 +44,7 @@ func NewMailCapability(settings MailCapabilitySettings, contextUserKey string, l
 	return &MailCapability{
 		settings: settings,
 		datatypes: []capabilitier.Datatyper{
-			NewMailBox(),
+			NewMailBox(logger),
 			NewThread(),
 			NewEmailDT(maxEmailQueryLimit, logger),
 		},

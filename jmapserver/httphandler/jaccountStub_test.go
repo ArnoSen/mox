@@ -3,6 +3,7 @@ package httphandler
 import (
 	"context"
 
+	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -19,20 +20,15 @@ func (jas JAccountStub) Email() jaccount.AccountEmailer {
 	return AccountEmailStub{}
 }
 
-func (jas JAccountStub) Mailbox() jaccount.AccountMailboxer {
-	return AccountMailboxStub{}
-}
-
 func (jas JAccountStub) Thread() jaccount.AccountThreader {
 	return AccountThreadStub{}
 }
 
-type AccountMailboxStub struct {
+func (jas JAccountStub) DB() *bstore.DB {
+	panic("not implmented")
 }
 
-// Mailbox
-func (jas AccountMailboxStub) Get(ctx context.Context, ids []basetypes.Id) ([]jaccount.Mailbox, []basetypes.Id, string, *mlevelerrors.MethodLevelError) {
-	panic("not implemented") // TODO: Implement
+type AccountMailboxStub struct {
 }
 
 type AccountEmailStub struct {
