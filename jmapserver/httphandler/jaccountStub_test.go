@@ -1,12 +1,8 @@
 package httphandler
 
 import (
-	"context"
-
 	"github.com/mjl-/bstore"
-	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/jaccount"
-	"github.com/mjl-/mox/jmapserver/mlevelerrors"
+	"github.com/mjl-/mox/store"
 )
 
 type JAccountStub struct {
@@ -16,14 +12,19 @@ func NewJAccountStub() *JAccountStub {
 	return &JAccountStub{}
 }
 
-func (jas JAccountStub) Email() jaccount.AccountEmailer {
-	return AccountEmailStub{}
-}
-
 func (jas JAccountStub) DB() *bstore.DB {
 	panic("not implmented")
 }
 
+func (jas JAccountStub) Account() *store.Account {
+	panic("not implmented")
+}
+
+func (jas JAccountStub) Close() error {
+	return nil
+}
+
+/*
 type AccountMailboxStub struct {
 }
 
@@ -62,3 +63,4 @@ type AccountThreadStub struct {
 func (jas JAccountStub) Close() error {
 	return nil
 }
+*/

@@ -484,13 +484,13 @@ func NewAccountEmail(mAccount *store.Account, mlog mlog.Log) *AccountEmail {
 	}
 }
 
-func (ja AccountEmail) NewEmail(em store.Message) (JEmail, *mlevelerrors.MethodLevelError) {
-	part, err := em.LoadPart(ja.mAccount.MessageReader(em))
+func NewEmail(mAccount *store.Account, em store.Message, mlog mlog.Log) (JEmail, *mlevelerrors.MethodLevelError) {
+	part, err := em.LoadPart(mAccount.MessageReader(em))
 	if err != nil {
-		ja.mlog.Error("error loading part", slog.Any("err", err.Error()))
+		mlog.Error("error loading part", slog.Any("err", err.Error()))
 		return JEmail{}, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
-	return NewJEmail(em, part, ja.mlog), nil
+	return NewJEmail(em, part, mlog), nil
 }
 
 // ../../rfc/8621:2309
@@ -520,7 +520,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
-		jem, merr := ja.NewEmail(em)
+		jem, merr := NewEmail(ja.mAccount, em, ja.mlog)
 		if merr != nil {
 			ja.mlog.Error("error instantiating new JEmail", slog.Any("id", idInt64), slog.Any("error", merr.Error()))
 			return nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
@@ -1908,6 +1908,7 @@ func (ja *AccountEmail) Set(ctx context.Context, ifInState *string, create map[b
 	return
 }
 
+/*
 func (ja *AccountEmail) State(ctx context.Context) (string, *mlevelerrors.MethodLevelError) {
 	state, err := ja.stateRepo.State(ctx)
 	if err != nil {
@@ -1916,8 +1917,10 @@ func (ja *AccountEmail) State(ctx context.Context) (string, *mlevelerrors.Method
 	}
 	return state, nil
 }
+*/
 
 // DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
+/*
 func (ja AccountEmail) DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error) {
 	msgID, partID, ok := strings.Cut(blobID, "-")
 	if !ok {
@@ -2003,6 +2006,7 @@ func (ja AccountEmail) Changes(ctx context.Context, accountId basetypes.Id, sinc
 
 	return accountId, sinceState, newState, hasMoreChanges, created, updated, destroyed, nil
 }
+*/
 
 type ChangeType int
 

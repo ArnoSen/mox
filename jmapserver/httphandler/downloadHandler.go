@@ -7,7 +7,7 @@ import (
 
 	"log/slog"
 
-	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/mailcapability"
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
 )
@@ -94,7 +94,7 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, bytes, err := jaccount.NewJAccount(mAccount, dh.logger).DownloadBlob(r.Context(), blobID, name, contentType)
+	found, bytes, err := mailcapability.NewEmailDT(0, dh.logger).DownloadBlob(r.Context(), mAccount, blobID, name, contentType)
 	if err != nil {
 		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 		w.WriteHeader(http.StatusInternalServerError)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
+	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/testutils"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -1048,8 +1049,9 @@ func TestEmailChanges(t *testing.T) {
 	testutils.RequireNoError(t, createMsg(db, 2, 0, 101, false))
 	testutils.RequireNoError(t, createMsg(db, 3, 0, 102, true))
 
-	am := NewAccountEmail(&store.Account{DB: db}, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
-	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr := am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "99", nil)
+	am := NewEmailDT(0, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
+	ja := jaccount.NewJAccount(&store.Account{DB: db}, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr := am.Changes(context.Background(), ja, basetypes.NewIdFromInt64(1), "99", nil)
 
 	testutils.AssertEqual(t, 1, retAccountID.Int64x())
 	testutils.AssertEqual(t, "99", oldState)
@@ -1064,7 +1066,7 @@ func TestEmailChanges(t *testing.T) {
 	testutils.AssertEqual(t, nil, mErr)
 
 	//up to date
-	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "102", nil)
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), ja, basetypes.NewIdFromInt64(1), "102", nil)
 
 	testutils.AssertEqual(t, 1, retAccountID.Int64x())
 	testutils.AssertEqual(t, "102", oldState)
@@ -1077,7 +1079,7 @@ func TestEmailChanges(t *testing.T) {
 
 	//return limited changes
 	maxChanges := basetypes.Uint(2)
-	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), basetypes.NewIdFromInt64(1), "99", &maxChanges)
+	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr = am.Changes(context.Background(), ja, basetypes.NewIdFromInt64(1), "99", &maxChanges)
 
 	testutils.AssertEqual(t, 1, retAccountID.Int64x())
 	testutils.AssertEqual(t, "99", oldState)
