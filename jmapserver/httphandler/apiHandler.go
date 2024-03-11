@@ -15,7 +15,6 @@ import (
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
-	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/jmapserver/user"
 	"github.com/mjl-/mox/mlog"
@@ -341,7 +340,7 @@ type SessionStater interface {
 type AccountOpener func(log mlog.Log, name string) (*store.Account, error)
 
 // JAccountFactoryFunc allows injecting a factory for creating a MailboxRepo. This is used for testing
-type JAccountFactoryFunc func() (jaccount.JAccounter, string, *mlevelerrors.MethodLevelError)
+type JAccountFactoryFunc func() (capabilitier.JAccounter, string, *mlevelerrors.MethodLevelError)
 
 // APIHandler implements http.Handler
 type APIHandler struct {
@@ -439,7 +438,7 @@ loopUsing:
 	}
 
 	//defaultJAccountFactory instantiates a JAccount
-	defaultJAccountFactory := func() (*jaccount.JAccount, string, *mlevelerrors.MethodLevelError) {
+	defaultJAccountFactory := func() (*capabilitier.JAccount, string, *mlevelerrors.MethodLevelError) {
 		//pass in the jaccount
 		userIface := r.Context().Value(ah.contextUserKey)
 		if userIface == nil {
@@ -459,11 +458,11 @@ loopUsing:
 			return nil, "", mlevelerrors.NewMethodLevelErrorAccountForFound()
 		}
 
-		return jaccount.NewJAccount(mAccount, ah.logger), userObj.Email, nil
+		return capabilitier.NewJAccount(mAccount, ah.logger), userObj.Email, nil
 	}
 
 	var (
-		jAccount       jaccount.JAccounter
+		jAccount       capabilitier.JAccounter
 		email          string
 		accountOpenErr *mlevelerrors.MethodLevelError
 	)

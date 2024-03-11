@@ -8,7 +8,7 @@ import (
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
@@ -32,7 +32,7 @@ func (m EmailDT) Name() string {
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.5
-func (m EmailDT) Query(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit *basetypes.Uint, calculateTotal bool, customParams any) (retAccountId basetypes.Id, queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, retLimit basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
+func (m EmailDT) Query(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit *basetypes.Uint, calculateTotal bool, customParams any) (retAccountId basetypes.Id, queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, retLimit basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
 	var adjustedLimit int = m.maxQueryLimit
 
@@ -246,13 +246,13 @@ func (m EmailDT) CustomGetRequestParams() any {
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.1
-func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []any, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (m EmailDT) Get(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customParams any) (retAccountId basetypes.Id, state string, list []any, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 
 	cust := customParams.(*CustomGetRequestParams)
 
 	//property filtering is done at the handler level. It is included here so we can check if some fields are needed in the result
 	/*
-		result, notFound, mErr := jaccount.Email().Get(ctx, ids, properties, cust.BodyProperties, cust.FetchTextBodyValues, cust.FetchHTMLBodyValues, cust.FetchAllBodyValues, cust.MaxBodyValueBytes)
+		result, notFound, mErr := capabilitier.Email().Get(ctx, ids, properties, cust.BodyProperties, cust.FetchTextBodyValues, cust.FetchHTMLBodyValues, cust.FetchAllBodyValues, cust.MaxBodyValueBytes)
 	*/
 
 	m.mlog.Debug("custom get params", slog.Any("bodyProperties", strings.Join(cust.BodyProperties, ",")), slog.Any("FetchTextBodyValues", cust.FetchTextBodyValues), slog.Any("FetchHTMLBodyValues", cust.FetchHTMLBodyValues), slog.Any("FetchAllBodyValues", cust.FetchAllBodyValues), slog.Any("MaxBodyValueBytes", cust.MaxBodyValueBytes))
@@ -543,7 +543,7 @@ func (m EmailDT) Get(ctx context.Context, jaccount jaccount.JAccounter, accountI
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
-func (m EmailDT) Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
+func (m EmailDT) Set(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 
 	retAccountId = accountId
 
@@ -558,13 +558,13 @@ func (m EmailDT) Set(ctx context.Context, jaccount jaccount.JAccounter, accountI
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
-func (m EmailDT) Changes(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (m EmailDT) Changes(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	//AO: I am starting to question the goal of splitting the implementation between the datatype/capability layer and the jaccount layer
 	//the reason to start with JAccount is not directly hack into the store package and be protected from a lot of changes there
 	//however, that is main relevant for the Email/get method
 	//also one other goal is to make this testable especially when it comes to mocking bstore. But why not just do an in memory bestore with bogus data? I want to abstract the store in jmap
 	//but why not wait till the application is ready for that?
-	//return jaccount.Email().Changes(ctx, accountId, sinceState, maxChanges)
+	//return capabilitier.Email().Changes(ctx, accountId, sinceState, maxChanges)
 
 	sinceStateInt64, err := strconv.ParseInt(sinceState, 10, 64)
 	if err != nil {

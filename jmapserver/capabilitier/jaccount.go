@@ -1,4 +1,4 @@
-package jaccount
+package capabilitier
 
 import (
 	"github.com/mjl-/bstore"
