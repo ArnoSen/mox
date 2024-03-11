@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/testutils"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
@@ -33,7 +33,7 @@ func TestGetMailboxes(t *testing.T) {
 				ID:   3,
 			}))
 
-			ja := jaccount.NewJAccount(&store.Account{
+			ja := capabilitier.NewJAccount(&store.Account{
 				DB: testDB.DB,
 			}, mlog.New("test", slog.Default()))
 

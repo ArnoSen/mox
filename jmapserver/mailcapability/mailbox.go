@@ -2,9 +2,8 @@ package mailcapability
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
+	"strconv"
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
@@ -34,7 +33,7 @@ func (mb MailboxDT) Get(ctx context.Context, jaccount capabilitier.JAccounter, a
 
 	mbs, err := bstore.QueryDB[store.Mailbox](ctx, jaccount.DB()).List()
 	if err != nil {
-		mb.mlog.Logger.Error("error querying mailboxes", slog.Any("err", err.Error()))
+		mb.mlog.Error("error querying mailboxes", slog.Any("err", err.Error()))
 		return accountId, "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
 	}
 
@@ -103,20 +102,90 @@ loopmailboxes:
 		notFound = []basetypes.Id{}
 	}
 
-	return accountId, "state", result, notFound, nil
+	mbState, err := mb.state(ctx, jaccount.DB())
+	if err != nil {
+		mb.mlog.Error("error getting mailbox state", slog.Any("err", err.Error()))
+		return accountId, "", nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+
+	return accountId, mbState, result, notFound, nil
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
-func (mb MailboxDT) Changes(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created []basetypes.Id, updated []basetypes.Id, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
-	//TODO need to add modseq for mailboxes
-	//AO: not sure what to send back with regards to oldstate/newstate
+func (mb MailboxDT) Changes(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+	//TODO need to add modseq and createseq for mailboxes
+	//Without changing the data model, I can only report on updated mailboxes
 
-	mErr = mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
-	return
+	sinceStateInt64, err := strconv.ParseInt(sinceState, 10, 64)
+	if err != nil {
+		mb.mlog.Error("invalid sinceState: not an int64", slog.Any("err", err.Error()))
+		return accountId, sinceState, "", false, nil, nil, nil, mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
+	}
+
+	currentState, err := mb.state(ctx, jaccount.DB())
+	if err != nil {
+		mb.mlog.Error("error getting mailbox state", slog.Any("err", err.Error()))
+		return accountId, sinceState, "", false, nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+
+	//Get the mailboxes
+	mbs, err := bstore.QueryDB[store.Mailbox](ctx, jaccount.DB()).List()
+	if err != nil {
+		mb.mlog.Error("error querying mailboxes", slog.Any("err", err.Error()))
+		return accountId, sinceState, currentState, true, nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+	}
+
+	for _, mailbox := range mbs {
+
+		var highestModSeqInMB int64
+
+		//get the message with the highest modseq per mailbox
+		queryHighestModSeq := bstore.QueryDB[store.Message](ctx, jaccount.DB())
+		queryHighestModSeq.FilterGreater("ModSeq", sinceStateInt64)
+		queryHighestModSeq.SortDesc("ModSeq")
+		queryHighestModSeq.Limit(1)
+		queryHighestModSeq.FilterEqual("MailboxID", mailbox.ID)
+
+		msg, err := queryHighestModSeq.Get()
+		if err != nil && err != bstore.ErrAbsent {
+			mb.mlog.Error("error querying messages", slog.Any("err", err.Error()))
+			return accountId, sinceState, currentState, true, nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+		}
+		if err == nil {
+			highestModSeqInMB = msg.ModSeq.Client()
+		}
+
+		//get highest create seq
+		queryHighestCreateSeq := bstore.QueryDB[store.Message](ctx, jaccount.DB())
+		queryHighestCreateSeq.FilterGreater("CreateSeq", sinceStateInt64)
+		queryHighestCreateSeq.Limit(1)
+		queryHighestCreateSeq.SortDesc("CreateSeq")
+		queryHighestCreateSeq.FilterEqual("MailboxID", mailbox.ID)
+
+		msg, err = queryHighestCreateSeq.Get()
+		if err != nil && err != bstore.ErrAbsent {
+			mb.mlog.Error("error querying messages", slog.Any("err", err.Error()))
+			return accountId, sinceState, currentState, true, nil, nil, nil, mlevelerrors.NewMethodLevelErrorServerFail()
+
+		}
+		if err == nil {
+			if msg.CreateSeq.Client() > sinceStateInt64 || highestModSeqInMB > sinceStateInt64 {
+				//FIXME need to take into account maxChanges
+				updated = append(updated, basetypes.NewIdFromInt64(mailbox.ID))
+			}
+		}
+	}
+
+	return accountId, sinceState, currentState, false, nil, updated, nil, nil
 }
 
 func (m MailboxDT) CustomGetRequestParams() any {
 	return nil
+}
+
+func (_ MailboxDT) state(ctx context.Context, db *bstore.DB) (string, error) {
+	//mail box state is the same as email state for now
+	return EmailDT{}.state(ctx, db)
 }
 
 // ../../rfc/8621:485
@@ -145,219 +214,4 @@ type MailboxRights struct {
 	MayRename      bool `json:"mayRename"`
 	MayDelete      bool `json:"mayDelete"`
 	MaySubmit      bool `json:"maySubmit"`
-}
-
-type AccountMailbox struct {
-	mAccount *store.Account
-	mlog     mlog.Log
-}
-
-func NewAccountMailbox(mAccount *store.Account, mlog mlog.Log) *AccountMailbox {
-	return &AccountMailbox{
-		mAccount: mAccount,
-		mlog:     mlog,
-	}
-}
-
-func (ja *AccountMailbox) Get(ctx context.Context, ids []basetypes.Id) (result []Mailbox, notFound []basetypes.Id, state string, mErr *mlevelerrors.MethodLevelError) {
-
-	mbs, err := bstore.QueryDB[store.Mailbox](ctx, ja.mAccount.DB).List()
-	if err != nil {
-		ja.mlog.Logger.Error("error querying mailboxes", slog.Any("err", err.Error()))
-		return nil, nil, "", mlevelerrors.NewMethodLevelErrorServerFail()
-	}
-
-	//put in a structure so we can do sorting
-	jmbs := NewJMailboxes(store.MailboxHierarchyDelimiter)
-
-	for _, mb := range mbs {
-		jmbs.AddMailbox(NewJMailbox(mb))
-	}
-
-loopmailboxes:
-	for i, jmb := range jmbs.Mbs {
-
-		if len(ids) > 0 {
-			//we only need selected mailboxes
-			var mustBeIncluded = false
-			for _, id := range ids {
-				if string(id) == jmb.ID() {
-					mustBeIncluded = true
-					break
-				}
-			}
-			if !mustBeIncluded {
-				continue loopmailboxes
-			}
-		}
-
-		resultItem := Mailbox{
-			Id:   basetypes.Id(jmb.ID()),
-			Name: jmb.Name(),
-			//FIXME this should be persistent and come from db
-			SortOrder:     basetypes.Uint(uint(i + 1)),
-			TotalThreads:  0, //FIXME
-			UnreadThreads: 0, //FIXME
-			Role:          jmb.Role(),
-			MyRights: MailboxRights{
-				MayReadItems:   jmb.MayReadItems(),
-				MayAddItems:    jmb.MayAddItems(),
-				MayRemoveItems: jmb.MayRemoveItems(),
-				MaySetSeen:     jmb.MaySetSeen(),
-				MaySetKeywords: jmb.MaySetKeywords(),
-				MayCreateChild: jmb.MayCreateChild(),
-				MayRename:      jmb.MayRename(),
-				MayDelete:      jmb.MayDelete(),
-				MaySubmit:      jmb.MaySubmit(),
-			},
-			//Check with MJL
-			IsSubscribed: jmb.Subscribed(),
-		}
-		if jmb.Mb.HaveCounts {
-			resultItem.TotalEmails = basetypes.Uint(jmb.TotalEmails())
-			resultItem.UnreadEmails = basetypes.Uint(jmb.UnreadEmails())
-		}
-
-		if pID := jmbs.ParentID(jmb); pID != nil {
-			resultItem.Id = basetypes.Id(*pID)
-		}
-
-		result = append(result, resultItem)
-	}
-	return result, notFound, "stubState", nil
-}
-
-// JMailbox is a mailbox that contains all the info that JMAP needs for a Mailbox
-type JMailbox struct {
-	Mb store.Mailbox
-}
-
-func NewJMailbox(mb store.Mailbox) JMailbox {
-	return JMailbox{
-		Mb: mb,
-	}
-}
-
-func (mb JMailbox) ID() string {
-	return fmt.Sprintf("%d", mb.Mb.ID)
-}
-
-func (mb JMailbox) Name() string {
-	return mb.Mb.Name
-}
-
-func (mb JMailbox) MayReadItems() bool {
-	return true
-}
-
-func (mb JMailbox) MayAddItems() bool {
-	return true
-}
-
-func (mb JMailbox) MayRemoveItems() bool {
-	return true
-}
-
-func (mb JMailbox) MaySetSeen() bool {
-	return true
-}
-
-func (mb JMailbox) MaySetKeywords() bool {
-	return false
-}
-
-func (mb JMailbox) MayCreateChild() bool {
-	return true
-}
-
-func (mb JMailbox) MayRename() bool {
-	return true
-}
-
-func (mb JMailbox) MayDelete() bool {
-	//do not allow deletion of special mailboxes
-	return mb.Role() == nil
-}
-
-func (mb JMailbox) MaySubmit() bool {
-	return true
-}
-
-func (mb JMailbox) Subscribed() bool {
-	return true
-}
-
-func (mb JMailbox) Role() *string {
-	var result string
-
-	switch {
-	//see https://www.iana.org/assignments/imap-mailbox-name-attributes/imap-mailbox-name-attributes.xhtml
-	// ../../rfc/8621:518
-
-	//FIXME need to confirm from documentation that inbox is always called inbox
-	case strings.ToLower(mb.Mb.Name) == "inbox":
-		//Inbox is a JMAP only role
-		// ../../rfc/8621:518
-		result = "Inbox"
-	case mb.Mb.SpecialUse.Archive:
-		result = "Archive"
-	case mb.Mb.SpecialUse.Draft:
-		result = "Draft"
-	case mb.Mb.SpecialUse.Junk:
-		result = "Junk"
-	case mb.Mb.SpecialUse.Sent:
-		result = "Sent"
-	case mb.Mb.SpecialUse.Trash:
-		result = "Trash"
-	default:
-		return nil
-	}
-	return &result
-}
-
-func (mb JMailbox) TotalEmails() uint {
-	return uint(mb.Mb.MailboxCounts.Total)
-}
-
-func (mb JMailbox) UnreadEmails() uint {
-	return uint(mb.Mb.MailboxCounts.Unread)
-}
-
-type JMailboxes struct {
-	Mbs                []JMailbox
-	HierarchyDelimiter string
-}
-
-func NewJMailboxes(hierarchyDelimiter string, mbs ...JMailbox) JMailboxes {
-	return JMailboxes{
-		Mbs: mbs,
-		//AO: I cannot find a constant in the code describing the hierarchy. I got this from a comment
-		HierarchyDelimiter: hierarchyDelimiter,
-	}
-}
-
-func (jmbs *JMailboxes) AddMailbox(mb JMailbox) {
-	jmbs.Mbs = append(jmbs.Mbs, mb)
-}
-
-// Parent returns the ID of the parent mailbox
-func (jmbs JMailboxes) ParentID(mb JMailbox) *string {
-	//mailboxes have names like Inbox|Keep|2022
-
-	parts := strings.Split(mb.Mb.Name, jmbs.HierarchyDelimiter)
-	if len(parts) == 1 {
-		//no seperator so we are at the top level
-		return nil
-	}
-
-	//remove the last element to get the parent name
-	parentName := strings.Join(parts[:len(parts)-1], jmbs.HierarchyDelimiter)
-
-	for _, mb := range jmbs.Mbs {
-		if mb.Mb.Name == parentName {
-			pID := fmt.Sprintf("%d", mb.Mb.ID)
-			return &pID
-		}
-	}
-	return nil
 }

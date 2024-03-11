@@ -2,6 +2,8 @@ package mlevelerrors
 
 import "fmt"
 
+var _ error = MethodLevelError{}
+
 type MethodLevelError struct {
 	Type        string `json:"type"`
 	Description string `json:"description,omitempty"`

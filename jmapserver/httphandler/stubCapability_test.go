@@ -6,7 +6,6 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/capabilitier"
-	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 )
 
@@ -70,13 +69,13 @@ func (sdt StubDatatype) Echo(ctx context.Context, content json.RawMessage) (map[
 	return resp, nil
 }
 
-func (sdt StubDatatype) Get(ctx context.Context, jac jaccount.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customProps any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
+func (sdt StubDatatype) Get(ctx context.Context, jac capabilitier.JAccounter, accountId basetypes.Id, ids []basetypes.Id, properties []string, customProps any) (retAccountId basetypes.Id, state string, list []interface{}, notFound []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
 	//just return empty values
 	retAccountId = accountId
 	return
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.3
-func (sdt StubDatatype) Set(ctx context.Context, jaccount jaccount.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
+func (sdt StubDatatype) Set(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (retAccountId basetypes.Id, oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 	return
 }

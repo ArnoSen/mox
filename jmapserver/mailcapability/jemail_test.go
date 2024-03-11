@@ -15,7 +15,7 @@ import (
 
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
-	"github.com/mjl-/mox/jmapserver/jaccount"
+	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/testutils"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -465,8 +465,18 @@ Content-Transfer-Encoding: 7bit
 					}
 			*/
 
+			jPart, mErr := jem.JPart()
+			testutils.RequireNoError(t, mErr)
+
+			//we have a multipart so we do not set an id
+			testutils.AssertEqual(t, "", jPart.ID())
+			testutils.AssertEqual(t, 2, len(jPart.JParts))
+			testutils.AssertEqual(t, "0", jPart.JParts[0].ID())
+			testutils.AssertEqual(t, "1", jPart.JParts[1].ID())
+
 			bvHTML, mErr := jem.BodyValues(false, true, false, nil)
 			testutils.RequireNoError(t, mErr)
+
 			testutils.AssertEqual(t, 1, len(bvHTML))
 
 			if textValue, ok := bvHTML["1"]; !ok {
@@ -476,14 +486,6 @@ Content-Transfer-Encoding: 7bit
 				testutils.AssertEqual(t, "<html></html>\r\n", textValue.Value)
 			}
 
-			jPart, mErr := jem.JPart()
-			testutils.RequireNoError(t, mErr)
-
-			//we have a multipart so we do not set an id
-			testutils.AssertEqual(t, "", jPart.ID())
-			testutils.AssertEqual(t, 2, len(jPart.JParts))
-			testutils.AssertEqual(t, "0", jPart.JParts[0].ID())
-			testutils.AssertEqual(t, "1", jPart.JParts[1].ID())
 		})
 
 		t.Run("Mail to JEmail. Inline picture", func(t *testing.T) {
@@ -926,7 +928,7 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 			}
 
 		})
-		t.Run("Mail to JEmail.  html body part with mixed", func(t *testing.T) {
+		t.Run("Mail to JEmail. html body part with mixed", func(t *testing.T) {
 
 			testMail, err := os.ReadFile("./testmail75.eml")
 			if err != nil {
@@ -1003,6 +1005,76 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 
 			testutils.AssertEqual(t, 2, len(htmlBody))
 		})
+		t.Run("Mail to JEmail. attachement in mixed", func(t *testing.T) {
+
+			testMail, err := os.ReadFile("./testmail176.eml")
+			if err != nil {
+				panic(err)
+			}
+			mail := string(testMail)
+			//mReader := strings.NewReader(strings.ReplaceAll(mail, "\n", "\r\n"))
+			mReader := strings.NewReader(mail)
+
+			sLog := slog.Default()
+
+			part, err := message.Parse(sLog, true, mReader)
+			testutils.RequireNoError(t, err)
+
+			testutils.RequireNoError(t, part.Walk(sLog, nil))
+
+			msg := store.Message{
+				ID:       25,
+				Received: time.Date(2023, time.July, 18, 17, 59, 53, 0, time.FixedZone("", 2)),
+			}
+
+			jem := NewJEmail(msg, part, mlog.New("test", sLog))
+
+			to, mErr := jem.To()
+			testutils.RequireNoError(t, mErr)
+
+			if len(to) != 1 {
+				t.Logf("was expecting one to address but got %d", len(to))
+				t.FailNow()
+			}
+			testutils.AssertEqual(t, "jmap@km42.nl", to[0].Email)
+
+			jPart, mErr := jem.JPart()
+			testutils.RequireNoError(t, mErr)
+
+			testutils.AssertEqual(t, 2, len(jPart.JParts))
+			testutils.AssertEqual(t, "application/pdf", jPart.JParts[1].Type().String())
+			testutils.AssertEqual(t, "attachment", *(jPart.JParts[1].Disposition()))
+
+			tb, mErr := jem.TextBody([]string{"partId"})
+			testutils.RequireNoError(t, mErr)
+			testutils.AssertEqual(t, 1, len(tb))
+			testutils.AssertEqual(t, "0", *tb[0].PartId)
+
+			hb, mErr := jem.HTMLBody([]string{"partId"})
+			testutils.RequireNoError(t, mErr)
+			testutils.AssertEqual(t, 1, len(hb))
+			testutils.AssertEqual(t, "0", *hb[0].PartId)
+
+			testutils.AssertEqual(t, 1, len(tb))
+
+			bv, mErr := jem.BodyValues(true, true, false, nil)
+			testutils.RequireNoError(t, mErr)
+			testutils.AssertEqual(t, 1, len(bv))
+			testutils.AssertEqual(t, EmailBodyValue{
+				Value:             "",
+				IsEncodingProblem: false,
+				IsTruncated:       false,
+			}, bv["176-0"])
+
+			testutils.AssertEqual(t, jPart.ID(), "")
+			testutils.AssertEqual(t, 2, len(jPart.JParts))
+			testutils.AssertEqual(t, "0", jPart.JParts[0].ID())
+			testutils.AssertEqual(t, "1", jPart.JParts[1].ID())
+
+			jp, err := jem.GetJPart("1")
+			testutils.AssertNotNil(t, jp)
+
+		})
 	})
 }
 
@@ -1050,7 +1122,7 @@ func TestEmailChanges(t *testing.T) {
 	testutils.RequireNoError(t, createMsg(db, 3, 0, 102, true))
 
 	am := NewEmailDT(0, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
-	ja := jaccount.NewJAccount(&store.Account{DB: db}, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
+	ja := capabilitier.NewJAccount(&store.Account{DB: db}, mlog.New("test", slog.New(slog.NewTextHandler(os.Stderr, nil))))
 	retAccountID, oldState, newState, hasMore, created, updated, destroyed, mErr := am.Changes(context.Background(), ja, basetypes.NewIdFromInt64(1), "99", nil)
 
 	testutils.AssertEqual(t, 1, retAccountID.Int64x())

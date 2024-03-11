@@ -14,6 +14,7 @@ import (
 
 	"log/slog"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mjl-/bstore"
 	"github.com/mjl-/mox/jmapserver/basetypes"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
@@ -1240,43 +1241,32 @@ func recurseBodyStructure(properties []string, p []JPart, result *EmailBodyPart)
 	}
 }
 
-func (jem JEmail) GetPartBody(partIDToLookFor string) (string, *mlevelerrors.MethodLevelError) {
-	//this can later be reused to get a particular BlobId
-	//since BlobIds have a Global Scope, we need to add a prefix
-
-	//FIXME I would need the structure so I can parse at least the content type
-
-	nextNum := 0
-	return searchPartRecursive(partIDToLookFor, jem.part, &nextNum)
-
-}
-
 // GetRawPart returns a raw part in response to a JMAP dowload uri request
-func (jem JEmail) GetRawPart(partIDToLookFor string) (bool, []byte, error) {
+func (jem JEmail) GetJPart(partIDToLookFor string) (*JPart, error) {
 	jPart, mErr := jem.JPart()
 	if mErr != nil {
-		return false, nil, mErr
+		return nil, mErr
 	}
 
 	if jPart.ID() == partIDToLookFor {
-		bytes, err := jPart.Raw()
-		return true, bytes, err
+		return jPart, nil
 	}
 
-	return getRawPartRecursive(partIDToLookFor, jPart.JParts)
+	return getRawPartRecursive(partIDToLookFor, jPart.JParts, jem.logger)
 }
 
-func getRawPartRecursive(needle string, jparts []JPart) (bool, []byte, error) {
+func getRawPartRecursive(needle string, jparts []JPart, logger mlog.Log) (*JPart, error) {
 	for _, jpart := range jparts {
+
 		if jpart.ID() == needle {
-			bytes, err := jpart.Raw()
-			return true, bytes, err
+			return &jpart, nil
 		}
-		return getRawPartRecursive(needle, jpart.JParts)
+		if len(jpart.JParts) > 0 {
+			return getRawPartRecursive(needle, jpart.JParts, logger)
+		}
 	}
 
-	return false, nil, nil
-
+	return nil, nil
 }
 
 func searchPartRecursive(partID string, part message.Part, nextNum *int) (string, *mlevelerrors.MethodLevelError) {
@@ -1334,23 +1324,40 @@ func (jem JEmail) BodyValues(fetchTextBodyValues, fetchHTMLBodyValues, fetchAllB
 		}
 	}
 
+	spew.Dump(uniquePartsToGet)
+
 	for partId := range uniquePartsToGet {
-		bodyVal, mErr := jem.GetPartBody(partId)
-		if mErr != nil {
-			return nil, mErr
+		jPart, err := jem.GetJPart(partId)
+		if err != nil {
+			if mErr, ok := err.(*mlevelerrors.MethodLevelError); ok {
+				return nil, mErr
+			}
+
+			jem.logger.Error("error getting raw partid", slog.Any("err", err.Error()))
+			return nil, mlevelerrors.NewMethodLevelErrorServerFail()
+		}
+		if jPart == nil {
+			jem.logger.Error("cannot find part which should be there", slog.Any("partId", partId))
+			return nil, mlevelerrors.NewMethodLevelErrorServerFail()
+		}
+
+		bodyVal, err := jPart.Raw()
+		if err != nil {
+			jem.logger.Error("error reading jpart body", slog.Any("partId", partId), slog.Any("err", err.Error()))
+			return nil, mlevelerrors.NewMethodLevelErrorServerFail()
 		}
 
 		//FIXME make sure not to cut in a HREF link
 		var truncated bool
 		if maxBodyValueBytes != nil {
 			if len(bodyVal) > int(*maxBodyValueBytes) {
-				bodyVal = string(bodyVal[:*maxBodyValueBytes])
+				bodyVal = bodyVal[:*maxBodyValueBytes]
 				truncated = true
 			}
 		}
 
 		result[partId] = EmailBodyValue{
-			Value:       bodyVal,
+			Value:       string(bodyVal),
 			IsTruncated: truncated,
 		}
 	}
@@ -1467,10 +1474,11 @@ func parseBodyPartsRecursive(parts []JPart, multipartType string, inAlternative 
 				switch {
 				case part.Type().IsTextPlain():
 					//push to textbody
+					fmt.Printf("pushing part ID %s to textBody\n", part.ID())
 					*textBody = append(*textBody, part)
 				case part.Type().IsTextHTML():
 					//push to textbody
-					//fmt.Printf("pushing part ID %s to htmlBody\n", part.ID())
+					fmt.Printf("pushing part ID %s to htmlBody\n", part.ID())
 					*htmlBody = append(*htmlBody, part)
 				default:
 					//push to attachments
@@ -1634,6 +1642,7 @@ func newJPart(p message.Part, messageID int64, nextID *int, mlog mlog.Log) (*JPa
 	//this is weird: the constructor kind of depends on it self
 	//../../rfc/8621:1923
 	if t := result.Type(); t != nil && !t.IsMultipart() {
+		//fmt.Printf("assigning %d to part\n", *nextID)
 		result.id = fmt.Sprintf("%d", *nextID)
 		//if used then increment
 		*nextID += 1
@@ -1896,6 +1905,10 @@ func (jp JPart) Raw() ([]byte, error) {
 	return io.ReadAll(jp.p.Reader())
 }
 
+func (jp JPart) Reader() io.Reader {
+	return jp.p.Reader()
+}
+
 func (ja *AccountEmail) Set(ctx context.Context, ifInState *string, create map[basetypes.Id]interface{}, update map[basetypes.Id]basetypes.PatchObject, destroy []basetypes.Id) (oldState *string, newState string, created map[basetypes.Id]interface{}, updated map[basetypes.Id]interface{}, destroyed map[basetypes.Id]interface{}, notCreated map[basetypes.Id]mlevelerrors.SetError, notUpdated map[basetypes.Id]mlevelerrors.SetError, notDestroyed map[basetypes.Id]mlevelerrors.SetError, mErr *mlevelerrors.MethodLevelError) {
 
 	ja.mlog.Error("SetEmail has not been implemented yet. we just pretend updating went fine")
@@ -1907,106 +1920,6 @@ func (ja *AccountEmail) Set(ctx context.Context, ifInState *string, create map[b
 	}
 	return
 }
-
-/*
-func (ja *AccountEmail) State(ctx context.Context) (string, *mlevelerrors.MethodLevelError) {
-	state, err := ja.stateRepo.State(ctx)
-	if err != nil {
-		ja.mlog.Logger.Error("error getting state", slog.Any("err", err.Error()))
-		return "", mlevelerrors.NewMethodLevelErrorServerFail()
-	}
-	return state, nil
-}
-*/
-
-// DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
-/*
-func (ja AccountEmail) DownloadBlob(ctx context.Context, blobID, name, Type string) (bool, []byte, error) {
-	msgID, partID, ok := strings.Cut(blobID, "-")
-	if !ok {
-		return false, nil, MalformedBlodID
-	}
-
-	msgIDint, err := strconv.ParseInt(msgID, 10, 64)
-	if err != nil {
-		return false, nil, MalformedBlodID
-	}
-
-	em := store.Message{
-		ID: msgIDint,
-	}
-
-	if err := ja.mAccount.DB.Get(ctx, &em); err != nil {
-		if err == bstore.ErrAbsent {
-			return false, nil, nil
-		}
-		return false, nil, err
-	}
-
-	jem, merr := ja.NewEmail(em)
-	if merr != nil {
-		ja.mlog.Error("error instantiating new JEmail", slog.Any("id", msgIDint), slog.Any("error", merr.Error()))
-		return false, nil, merr
-	}
-
-	return jem.GetRawPart(partID)
-}
-
-func (ja AccountEmail) Changes(ctx context.Context, accountId basetypes.Id, sinceState string, maxChanges *basetypes.Uint) (retAccountId basetypes.Id, oldState string, newState string, hasMoreChanges bool, created, updated, destroyed []basetypes.Id, mErr *mlevelerrors.MethodLevelError) {
-
-	sinceStateInt64, err := strconv.ParseInt(sinceState, 10, 64)
-	if err != nil {
-		ja.mlog.Error("invalid sinceState: not an int64", slog.Any("err", err.Error()))
-		return accountId, sinceState, "", false, nil, nil, nil, mlevelerrors.NewMethodLevelErrorCannotCalculateChanges()
-	}
-
-	updatedOrDeletedQ := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
-	defer updatedOrDeletedQ.Close()
-	updatedOrDeletedQ.FilterGreater("ModSeq", store.ModSeqFromClient(sinceStateInt64))
-	updatedOrDeletedQ.SortAsc("ModSeq")
-
-	changeBuilder := NewChangeResultBuilder()
-
-	for {
-		msg, err := updatedOrDeletedQ.Next()
-		if err == bstore.ErrAbsent || (maxChanges != nil && (len(destroyed)+len(updated) > int(*maxChanges.ToPUint()))) {
-			//do not get more changes then we need
-			break
-		}
-
-		if msg.Expunged {
-			changeBuilder.AddDestroyed(msg.ID, msg.ModSeq.Client())
-		} else {
-			changeBuilder.AddUpdated(msg.ID, msg.ModSeq.Client())
-		}
-	}
-
-	newQ := bstore.QueryDB[store.Message](ctx, ja.mAccount.DB)
-	defer newQ.Close()
-	newQ.FilterGreater("CreateSeq", store.ModSeqFromClient(sinceStateInt64))
-	for {
-		msg, err := newQ.Next()
-		if err == bstore.ErrAbsent || (maxChanges != nil && (len(created) > int(*maxChanges.ToPUint()))) {
-			//do not get more changes then we need
-			break
-		}
-		changeBuilder.AddCreated(msg.ID, msg.ModSeq.Client())
-
-	}
-
-	if len(changeBuilder.Elements) == 0 {
-		//no changes so newState = oldState
-		return accountId, sinceState, sinceState, false, nil, nil, nil, nil
-	}
-
-	hasMoreChanges = maxChanges != nil && len(changeBuilder.Elements) > int(*maxChanges.ToPUint())
-
-	//newState can be the 'final' state or an intermediate state
-	created, updated, destroyed, newState = changeBuilder.Final(maxChanges.ToPUint())
-
-	return accountId, sinceState, newState, hasMoreChanges, created, updated, destroyed, nil
-}
-*/
 
 type ChangeType int
 

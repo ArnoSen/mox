@@ -84,6 +84,7 @@ func NewHandler(hostname, path string, port int, openEmailAuthFunc OpenEmailAuth
 	})
 
 	capability := []capabilitier.Capabilitier{
+		coreCap,
 		mailcapability.NewMailCapability(mailcapability.NewDefaultMailCapabilitySettings(), defaultContextUserKey, logger),
 	}
 

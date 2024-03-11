@@ -2,6 +2,7 @@ package mailcapability
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -619,7 +620,7 @@ func (m EmailDT) Changes(ctx context.Context, jaccount capabilitier.JAccounter, 
 	return accountId, sinceState, newState, hasMoreChanges, created, updated, destroyed, nil
 }
 
-func (m EmailDT) state(ctx context.Context, db *bstore.DB) (string, error) {
+func (_ EmailDT) state(ctx context.Context, db *bstore.DB) (string, error) {
 	ss := store.SyncState{
 		ID: 1,
 	}
@@ -635,7 +636,7 @@ func (m EmailDT) state(ctx context.Context, db *bstore.DB) (string, error) {
 }
 
 // DownloadBlob returns the raw contents of a blobid. The first param in the reponse indicates if the blob was found
-func (m EmailDT) DownloadBlob(ctx context.Context, mAccount *store.Account, blobID, name, Type string) (bool, []byte, error) {
+func (m EmailDT) DownloadBlob(ctx context.Context, mAccount *store.Account, blobID, name, Type string) (bool, io.Reader, error) {
 	msgID, partID, ok := strings.Cut(blobID, "-")
 	if !ok {
 		return false, nil, MalformedBlodID
@@ -663,5 +664,14 @@ func (m EmailDT) DownloadBlob(ctx context.Context, mAccount *store.Account, blob
 		return false, nil, merr
 	}
 
-	return jem.GetRawPart(partID)
+	jPart, err := jem.GetJPart(partID)
+	if err != nil {
+		return false, nil, err
+	}
+	if jPart == nil {
+		return false, nil, nil
+	}
+
+	return true, jPart.Reader(), nil
+
 }

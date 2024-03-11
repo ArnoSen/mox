@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -94,8 +95,9 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, bytes, err := mailcapability.NewEmailDT(0, dh.logger).DownloadBlob(r.Context(), mAccount, blobID, name, contentType)
+	found, blogBytes, err := mailcapability.NewEmailDT(0, dh.logger).DownloadBlob(r.Context(), mAccount, blobID, name, contentType)
 	if err != nil {
+		dh.logger.Error(fmt.Sprintf("err type %T", err))
 		dh.logger.Error("error opening account", slog.Any("err", err.Error()), slog.Any("accountname", userObj.Email))
 		w.WriteHeader(http.StatusInternalServerError)
 
@@ -114,25 +116,9 @@ func (dh DownloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	//FIXME need to make this streaming to prevent large memory allocations
 
-	dh.logger.Info("writing bytes", slog.Any("size", len(bytes)))
-	w.Write(bytes)
-
-	dh.logger.Debug("download response", slog.Any("bytes", string(bytes)))
+	_, err = io.Copy(w, blogBytes)
+	if err != nil {
+		dh.logger.Error("err writing to out buffer", slog.Any("err", err.Error()))
+		return
+	}
 }
-
-/*
-	var escapeCommon = func(s string) string {
-		result := strings.ReplaceAll(s, "?", "\\?")
-		return result
-	}
-
-	//replace the placeholders with a none empty wildcard
-	downloadPathREStr := strings.ReplaceAll(downloadPath, datatyper.UrlTemplateAccountID, "(\\d+)")
-	downloadPathREStr = strings.ReplaceAll(downloadPathREStr, datatyper.UrlTemplateBlodId, "(\\S+)")
-	downloadPathREStr = strings.ReplaceAll(downloadPathREStr, datatyper.UrlTemplateName, "(\\S+)")
-	downloadPathREStr = strings.ReplaceAll(downloadPathREStr, datatyper.UrlTemplateType, "(\\S+)")
-	downloadPathREStr = escapeCommon(downloadPathREStr)
-	if downloadPathRE, err := regexp.Compile(downloadPathREStr); err == nil && downloadPathRE.MatchString(p) {
-		return handlerTypeDownload
-	}
-*/

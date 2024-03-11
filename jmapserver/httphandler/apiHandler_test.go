@@ -12,7 +12,6 @@ import (
 
 	"github.com/mjl-/mox/jmapserver/capabilitier"
 	"github.com/mjl-/mox/jmapserver/core"
-	"github.com/mjl-/mox/jmapserver/jaccount"
 	"github.com/mjl-/mox/jmapserver/mlevelerrors"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/store"
@@ -257,7 +256,7 @@ func TestAPIHandler(t *testing.T) {
 		}
 	})
 
-	stubJaccounter := func() (jaccount.JAccounter, string, *mlevelerrors.MethodLevelError) {
+	stubJaccounter := func() (capabilitier.JAccounter, string, *mlevelerrors.MethodLevelError) {
 		return NewJAccountStub(), "email", nil
 	}
 

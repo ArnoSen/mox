@@ -65,7 +65,7 @@ func (tDT ThreadDT) Get(ctx context.Context, jaccount capabilitier.JAccounter, a
 		notFound = []basetypes.Id{}
 	}
 
-	return accountId, state, list, notFound, mErr
+	return accountId, state, result, notFound, mErr
 }
 
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.2
