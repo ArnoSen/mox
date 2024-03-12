@@ -379,15 +379,15 @@ func (m EmailDT) Get(ctx context.Context, jaccount capabilitier.JAccounter, acco
 		}
 
 		resultElement.InReplyTo, mErrLocal = jem.InReplyTo()
-		if mErr != nil {
-			m.mlog.Error("error getting inReplyTo", slog.Any("id", idInt64), slog.Any("error", err.Error()))
+		if mErrLocal != nil {
+			m.mlog.Error("error getting inReplyTo", slog.Any("id", idInt64), slog.Any("error", mErrLocal.Error()))
 			mErr = mlevelerrors.NewMethodLevelErrorServerFail()
 			return
 		}
 
 		resultElement.Preview, mErrLocal = jem.Preview()
-		if mErr != nil {
-			m.mlog.Error("error getting preview", slog.Any("id", idInt64), slog.Any("error", err.Error()))
+		if mErrLocal != nil {
+			m.mlog.Error("error getting preview", slog.Any("id", idInt64), slog.Any("error", mErrLocal.Error()))
 			mErr = mlevelerrors.NewMethodLevelErrorServerFail()
 			return
 		}

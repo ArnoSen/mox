@@ -23,8 +23,6 @@ import (
 	"github.com/mjl-/mox/store"
 )
 
-const previewNotAvailableText = "<preview not available>"
-
 var MalformedBlodID = fmt.Errorf("malformed blob id")
 
 // ../../rfc/8621:2527
@@ -768,7 +766,7 @@ func HasAny(haystack []string, needle ...string) bool {
 func HasAnyCaseInsensitive(haystack []string, needle ...string) bool {
 	for _, h := range haystack {
 		for _, n := range needle {
-			if strings.ToLower(h) == strings.ToLower(n) {
+			if strings.EqualFold(h, n) {
 				return true
 			}
 		}
@@ -1148,7 +1146,7 @@ func HeaderAs(orderedHeaders message.HeaderInOrder, mlog mlog.Log, headerName st
 		//../../rfc/8621:1691
 		//The header field is parsed as a list of msg-id values, as specified in [@!RFC5322], Section 3.6.4, into the String[] type. Comments and/or folding white space (CFWS) and surrounding angle brackets (<>) are removed. If parsing fails, the value is null.
 		if HasAnyCaseInsensitive([]string{"message-id", "in-reply-to", "references", "resent-message-id"}, headerName) || !HasAnyCaseInsensitive(headerFieldsDefinedInRFC5322RFC2369, headerName) {
-			submatches := regexp.MustCompile("<(\\S+)>").FindStringSubmatch(orderedHeaders.Last(headerName))
+			submatches := regexp.MustCompile(`<(\S+)>`).FindStringSubmatch(orderedHeaders.Last(headerName))
 
 			if len(submatches) == 2 {
 				return submatches[1:], nil
@@ -1173,11 +1171,11 @@ func HeaderAs(orderedHeaders message.HeaderInOrder, mlog mlog.Log, headerName st
 			var result []string
 			for _, headerVal := range orderedHeaders.Values(headerName) {
 				if headerVal != "" {
-					result = append(result, regexp.MustCompile("<(\\S+>)").FindAllString(headerVal, -1)...)
+					result = append(result, regexp.MustCompile(`<(\S+>)`).FindAllString(headerVal, -1)...)
 				}
-				return result, nil
 			}
 			//FIXME: need to implement retAll
+			return result, nil
 		}
 	default:
 		return nil, nil
@@ -1267,27 +1265,6 @@ func getRawPartRecursive(needle string, jparts []JPart, logger mlog.Log) (*JPart
 	}
 
 	return nil, nil
-}
-
-func searchPartRecursive(partID string, part message.Part, nextNum *int) (string, *mlevelerrors.MethodLevelError) {
-	//FIXME need an error to indicate the part was not found
-	if part.MediaType != "MULTIPART" {
-		if partID == fmt.Sprintf("%d", *nextNum) {
-			fullBody, err := io.ReadAll(part.Reader())
-			if err != nil {
-				return "", mlevelerrors.NewMethodLevelErrorServerFail()
-			}
-			return string(fullBody), nil
-		}
-		*nextNum++
-	}
-	for _, subPart := range part.Parts {
-		body, err := searchPartRecursive(partID, subPart, nextNum)
-		if err == nil && body != "" {
-			return body, err
-		}
-	}
-	return "", nil
 }
 
 // ../../rfc/8621:2033
@@ -1573,14 +1550,6 @@ func (jem JEmail) Headers() ([]EmailHeader, *mlevelerrors.MethodLevelError) {
 func (jem JEmail) Download(blobID, name, Type string) ([]byte, error) {
 	panic("not implemented")
 }
-
-// includeFunc is called in flattenPartToEmailBodyPart to instruct to include/exclude a particular part from in the result
-type flattenType int
-
-const (
-	flattenTypeText flattenType = iota
-	flattenTypeHTML
-)
 
 // JPart is a helper to get the BodyPart properties we need
 type JPart struct {

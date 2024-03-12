@@ -252,7 +252,7 @@ func resolveJSONPointer(msg json.RawMessage, pointer string) (json.RawMessage, *
 
 					if i != len(pointerElements)-2 {
 						//there must only one level remaining
-						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference(fmt.Sprintf("can only have one extra subelement after using '*'"))
+						return nil, mlevelerrors.NewMethodLevelErrorInvalidResultReference("can only have one extra subelement after using '*'")
 					}
 
 					//get the property that we need
@@ -276,9 +276,7 @@ func resolveJSONPointer(msg json.RawMessage, pointer string) (json.RawMessage, *
 
 						if valArr, ok := val.([]interface{}); ok {
 							//the value that is reference by prop is an array it self. We must flattened values in the result
-							for _, flattenedArrVal := range valArr {
-								resultArray = append(resultArray, flattenedArrVal)
-							}
+							resultArray = append(resultArray, valArr...)
 						} else {
 							resultArray = append(resultArray, val)
 						}
@@ -651,7 +649,7 @@ loopUsing:
 			//id should be always returned even if it is not requested
 			//AAA
 			// ../../rfc/8620:1608
-			propertyFilteredList, err := filterProperties(list, append(finalProperties), []string{"id"})
+			propertyFilteredList, err := filterProperties(list, finalProperties, []string{"id"})
 			if err != nil {
 				ah.logger.Error("applying filtering failed ", slog.Any("err", err.Error()))
 				response.addMethodResponse(invocationResponse.withArgError(mlevelerrors.NewMethodLevelErrorServerFail()))
@@ -1066,7 +1064,7 @@ func writeOutput(statusCode int, body interface{}, w http.ResponseWriter, logger
 }
 
 func isContentTypeJSON(ct string) bool {
-	if strings.ToLower(ct) == strings.ToLower(HeaderContentTypeJSON) || strings.ToLower(ct) == strings.ToLower(HeaderContentTypeJSONUTF8) {
+	if strings.EqualFold(ct, HeaderContentTypeJSON) || strings.EqualFold(ct, HeaderContentTypeJSONUTF8) {
 		return true
 	}
 	return false

@@ -1072,6 +1072,7 @@ YWlsbWFuL2xpc3RpbmZvL2ptYXAK
 			testutils.AssertEqual(t, "1", jPart.JParts[1].ID())
 
 			jp, err := jem.GetJPart("1")
+			testutils.RequireNoError(t, err)
 			testutils.AssertNotNil(t, jp)
 
 		})

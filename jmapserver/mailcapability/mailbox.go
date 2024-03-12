@@ -183,7 +183,7 @@ func (m MailboxDT) CustomGetRequestParams() any {
 	return nil
 }
 
-func (_ MailboxDT) state(ctx context.Context, db *bstore.DB) (string, error) {
+func (MailboxDT) state(ctx context.Context, db *bstore.DB) (string, error) {
 	//mail box state is the same as email state for now
 	return EmailDT{}.state(ctx, db)
 }

@@ -125,7 +125,7 @@ func ParseIds(idStrs []string) (result []Id, failedId string, mErr *mlevelerrors
 // FIXME this should return a method level error because that is their only scope
 func ParseUint(i int64) (Uint, *mlevelerrors.MethodLevelError) {
 	if i < 0 || float64(i) > (math.Pow(2, 53)-1) {
-		return Uint(0), mlevelerrors.NewMethodLevelErrorInvalidArguments(fmt.Sprintf("uint out of range"))
+		return Uint(0), mlevelerrors.NewMethodLevelErrorInvalidArguments("uint out of range")
 	}
 	return Uint(uint64(i)), nil
 
