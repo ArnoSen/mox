@@ -35,7 +35,7 @@ func (m EmailDT) Name() string {
 // https://datatracker.ietf.org/doc/html/rfc8620#section-5.5
 func (m EmailDT) Query(ctx context.Context, jaccount capabilitier.JAccounter, accountId basetypes.Id, filter *basetypes.Filter, sort []basetypes.Comparator, position basetypes.Int, anchor *basetypes.Id, anchorOffset basetypes.Int, limit *basetypes.Uint, calculateTotal bool, customParams any) (retAccountId basetypes.Id, queryState string, canCalculateChanges bool, retPosition basetypes.Int, ids []basetypes.Id, total basetypes.Uint, retLimit basetypes.Uint, mErr *mlevelerrors.MethodLevelError) {
 
-	var adjustedLimit int = m.maxQueryLimit
+	var adjustedLimit = m.maxQueryLimit
 
 	if limit != nil && int(*limit) < adjustedLimit {
 		adjustedLimit = int(*limit)
@@ -620,7 +620,7 @@ func (m EmailDT) Changes(ctx context.Context, jaccount capabilitier.JAccounter, 
 	return accountId, sinceState, newState, hasMoreChanges, created, updated, destroyed, nil
 }
 
-func (_ EmailDT) state(ctx context.Context, db *bstore.DB) (string, error) {
+func (EmailDT) state(ctx context.Context, db *bstore.DB) (string, error) {
 	ss := store.SyncState{
 		ID: 1,
 	}

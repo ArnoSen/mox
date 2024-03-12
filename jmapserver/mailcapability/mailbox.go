@@ -24,7 +24,7 @@ func NewMailBox(mlog mlog.Log) MailboxDT {
 	}
 }
 
-func (m MailboxDT) Name() string {
+func (mb MailboxDT) Name() string {
 	return "Mailbox"
 }
 

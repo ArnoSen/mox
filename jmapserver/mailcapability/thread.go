@@ -24,7 +24,7 @@ func NewThread(mlog mlog.Log) ThreadDT {
 	}
 }
 
-func (t ThreadDT) Name() string {
+func (tDT ThreadDT) Name() string {
 	return "Thread"
 }
 

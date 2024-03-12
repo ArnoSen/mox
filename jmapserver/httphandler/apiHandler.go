@@ -123,18 +123,18 @@ func newInvocationResponse(methodCallID string) InvocationResponse {
 }
 
 // withArgError adds an error to a invocation response
-func (inv InvocationResponse) withArgError(mErr *mlevelerrors.MethodLevelError) InvocationResponse {
-	inv.Arguments = map[string]interface{}{
+func (invResp InvocationResponse) withArgError(mErr *mlevelerrors.MethodLevelError) InvocationResponse {
+	invResp.Arguments = map[string]interface{}{
 		"error": mErr,
 	}
-	return inv
+	return invResp
 }
 
 // withArgError adds a method output to a invocation reponse
-func (inv InvocationResponse) withArgOK(methodCall string, args map[string]interface{}) InvocationResponse {
-	inv.Arguments = args
-	inv.Name = methodCall
-	return inv
+func (invResp InvocationResponse) withArgOK(methodCall string, args map[string]interface{}) InvocationResponse {
+	invResp.Arguments = args
+	invResp.Name = methodCall
+	return invResp
 }
 
 // Response is the top level response that is sent by the API handler
@@ -483,7 +483,7 @@ loopUsing:
 	//all request level checks are done now so start with the processing of the invocations
 	for _, invocation := range request.MethodCalls {
 
-		var invocationResponse InvocationResponse = newInvocationResponse(invocation.MethodCallID)
+		var invocationResponse = newInvocationResponse(invocation.MethodCallID)
 
 		//TODO there are more methods than these. Maybe methods should be registered?
 		methodCallRegexp := regexp.MustCompile("^[a-zA-Z]+/(echo|get|changes|set|copy|query|queryChanges)$")

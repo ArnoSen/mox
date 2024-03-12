@@ -28,7 +28,7 @@ const previewNotAvailableText = "<preview not available>"
 var MalformedBlodID = fmt.Errorf("malformed blob id")
 
 // ../../rfc/8621:2527
-var validEmailFilters []string = []string{
+var validEmailFilters = []string{
 	"inMailbox", "inMailboxOtherThan", "before", "after", "minSize",
 	"maxSize", "allInThreadHaveKeyword", "someInThreadHaveKeyword", "noneInThreadHaveKeyword",
 	"hasKeyword", "notKeyword", "hasAttachment", "text",
@@ -36,7 +36,7 @@ var validEmailFilters []string = []string{
 	"subject", "body", "header",
 }
 
-var validSortProperties []string = []string{
+var validSortProperties = []string{
 	"receivedAt", "size", "from", "to",
 	"subject", "sentAt", "hasKeyword", "allInThreadHaveKeyword",
 	"someInThreadHaveKeyword",
@@ -364,7 +364,7 @@ func (ja *AccountEmail) Query(ctx context.Context, filter *basetypes.Filter, sor
 	var (
 		//FIXME position can also be negative. In that case results need to come from the other end of the list.
 		currentPos int64
-		threadMap  map[int64]interface{} = make(map[int64]interface{})
+		threadMap  = make(map[int64]interface{})
 	)
 
 search:
@@ -631,7 +631,7 @@ func (ja *AccountEmail) Get(ctx context.Context, ids []basetypes.Id, properties 
 				hParts := strings.Split(prop, ":")
 
 				var headerName string
-				var headerFormat string = "raw"
+				var headerFormat = "raw"
 				var returnAll bool
 
 				//if there are only 2 parts, then we use the fallback format which is raw
@@ -1645,7 +1645,7 @@ func newJPart(p message.Part, messageID int64, nextID *int, mlog mlog.Log) (*JPa
 		//fmt.Printf("assigning %d to part\n", *nextID)
 		result.id = fmt.Sprintf("%d", *nextID)
 		//if used then increment
-		*nextID += 1
+		*nextID++
 	}
 
 	return result, nil
@@ -1806,10 +1806,9 @@ func (jp JPart) Charset() *string {
 				if strings.HasPrefix(mediaType, "text/") {
 					if charset, ok := params["charset"]; ok {
 						return &charset
-					} else {
-						fallbackCharSet := "us-ascii"
-						return &fallbackCharSet
 					}
+					fallbackCharSet := "us-ascii"
+					return &fallbackCharSet
 				}
 			}
 		}
